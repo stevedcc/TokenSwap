@@ -18,11 +18,9 @@ public class BrokerOwnUidTests : IAsyncLifetime
     // IAsyncLifetime, not IAsyncDisposable: xUnit 2 only awaits the former, so the harness's temp folder is removed.
     public async Task DisposeAsync() => await _h.DisposeAsync();
 
-    [Fact]
+    [UnixFact("the broker is Unix only")]
     public async Task APeerWithTheBrokersOwnUid_IsClosedUnanswered_AndLogged_EvenWhenListed()
     {
-        if (OperatingSystem.IsWindows())
-            return; // the broker is Unix only
         await _h.StartAsync(allowOwnUid: false); // lane1 lists this uid
 
         var response = await _h.SendRawAsync("lane1", "GET /echo/a HTTP/1.1\r\nHost: broker\r\n\r\n");
@@ -33,11 +31,9 @@ public class BrokerOwnUidTests : IAsyncLifetime
         Assert.Contains($"refused-connection socket=lane1 uid={BrokerHarness.MyUid} pid={Environment.ProcessId} reason=own-uid", _h.LogText.ToString());
     }
 
-    [Fact]
+    [UnixFact("the broker is Unix only")]
     public async Task WithTheTestSeam_TheSameRequestIsAnswered()
     {
-        if (OperatingSystem.IsWindows())
-            return; // the broker is Unix only
         await _h.StartAsync(allowOwnUid: true);
 
         var response = await _h.GetAsync("lane1", "/echo/a");

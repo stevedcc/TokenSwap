@@ -32,7 +32,10 @@ tswap <command>
 
 Tests live in `TswapTests/`. On Linux/macOS use
 `./runtests.sh` (`--unit` for in-process tests, ~5 s; `--e2e` for the end-to-end smoke
-tests that spawn the built binary; no flag runs both). Or run directly:
+tests that spawn the built binary; no flag runs both). `--perf` runs `Category=Perf`, the wall-clock
+budgets (the Argon2 KDFs; the redaction throughput also needs `TSWAP_PERF=1`), which every default
+and CI run leaves out (#300): run it on the owner's machines before a release and after any change
+to `VaultPasswordParams` or the KDFs. Or run directly:
 ```shell
 # Linux/macOS:
 TSWAP_TEST_KEY=$(openssl rand -hex 32) dotnet test ./TswapTests/TswapTests.csproj
@@ -88,7 +91,7 @@ Commands are split by whether they require sudo (the user-facing table, subcomma
 - **No sudo, joining a shared vault folder**: `init --vault-dir <folder>` writes this machine's own config only. `slot accept <file>` on a record-store machine, and `slot accept <file> --vault-dir <folder>`, also write the new slot into the **shared keyring** (a union with the file) without sudo: the human gate for that slot is the earlier `sudo tswap slot approve` on an enrolled machine, which produced the approve file.
 - **No sudo, the broker** ([docs/BROKER.md](docs/BROKER.md)): `broker serve` runs as the vault's own user (it refuses root), and `broker forward` and `broker call` run inside a container (they need no vault). `broker unlock|lock|status` (brief T17: a broker whose slot has the vault password starts locked) run as the vault user and refuse sudo. `broker route add|remove`, `broker socket add|bind|remove` and `broker template add|remove` require sudo. On the help screen `broker` is listed without `[sudo]` because its main subcommands never need it.
 - **No sudo, the vault-password agent** (brief T17): `agent start [--timeout <d>]`, `agent serve [--foreground]`, `agent stop`, `agent status`. `agent start|serve` refuse root; `agent stop|status` work under sudo too (they report `(as root, for <name>'s agent)`). The agent holds the stretched vault password and returns the vault key over a socket to the vault user's own commands (and root); no command prints a secret value from it. `TSWAP_AGENT_SOCK` overrides the socket path (Unix only), for clients and for `agent start|serve`; sudo drops it, and root's client then finds the owner's agent through the vault folder's owner. `agent start` and `broker unlock` read the password at a terminal: an AI agent asks the user to run them.
-- **Requires sudo**: `add <name>`, `get <name>`, `list`, `delete <name>`, `export <path>`, `import <path>`, `slot approve <request-file> <approve-file>`, `slot add --yubikey|--fido2`, `slot merge <file>`, `recover --yubikey|--tpm|--secure-enclave`, `migrate --to-records [--vault-dir <dir>]`, `vault merge <other-vault-dir>`, `vault reindex`, `restore <name>`, `apply <file>` — exposes secret values or changes what the vault holds
+- **Requires sudo**: `add <name>`, `get <name>`, `list`, `delete <name>`, `export <path>`, `import <path>`, `slot approve <request-file> <approve-file>`, `slot add --yubikey|--fido2|--tpm|--secure-enclave`, `slot merge <file>`, `recover --yubikey|--tpm|--secure-enclave`, `migrate --to-records [--vault-dir <dir>]`, `vault merge <other-vault-dir>`, `vault reindex`, `restore <name>`, `apply <file>` — exposes secret values or changes what the vault holds
 
 **Classic vaults are migration-only (v0.2, brief T16-S1):** on a classic single-file vault every
 command that opens the store refuses (`ICliCommand.WorksOnClassicVault`, checked once when
@@ -105,8 +108,8 @@ vault yet (mirroring `init`) and never touch an existing vault's secrets. Becaus
 `ICliCommand.RequiresSudo` is a single per-command flag and this codebase has no "sometimes
 sudo" precedent, the `slot` command as a whole is bucketed under `[sudo]` on the `--help`
 screen and in this list; the runtime `RequireSudo` check itself only actually fires inside
-`slot approve`, `slot add --yubikey` (which unlocks this machine's vault and adds a plugged-in
-YubiKey to its keyring as a new slot, a new way to decrypt it) and `slot merge` (which unlocks
+`slot approve`, `slot add` (every backend: it unlocks this machine's vault and adds a plugged-in
+YubiKey or security key, or this machine's TPM or Secure Enclave, to its keyring as a new slot, a new way to decrypt it) and `slot merge` (which unlocks
 this machine's vault and adds the slots of a slot receipt, each a new way to decrypt it; another
 copy of a record vault is folded in with `vault merge <its vault folder>` instead, #247). `recover` (its own command, `RequiresSudo`) opens the vault with the
 recovery private key, read from stdin only, and enrolls this machine's hardware as a new slot.

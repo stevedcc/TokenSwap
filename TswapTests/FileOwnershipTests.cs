@@ -134,11 +134,10 @@ public class FileOwnershipTests : IDisposable
         fake.RootOnly.Add(_rootsFile);
     }
 
-    [Fact]
+    [UnixFact("no identity switch on Windows")]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void Privileged_IntoAnotherUsersFolder_ConfigSecretsAndBackupAreWrittenAsTheFoldersOwner_Mode0600()
     {
-        if (OperatingSystem.IsWindows())
-            return; // no identity switch on Windows
         var fake = AsRoot();
         // Brief T7 item 6: a write now narrows a wider config folder first (one more switch); this
         // test is about the writes, so its folder is 0700, as tswap creates it since T5.
@@ -162,11 +161,10 @@ public class FileOwnershipTests : IDisposable
     // <home>/Library/Application Support/tswap. The T5 mechanism (DirectoryOwnerMatcher acts as the
     // owner of the nearest existing folder) is path-agnostic: a privileged init-style write there,
     // with the tswap folder not created yet, runs entirely as the home's owner, files 0600.
-    [Fact]
+    [UnixFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void Privileged_AtTheMacOSPath_WritesAsTheHomesOwner()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var home = Path.Combine(_dir, "Users", "alice");
         Directory.CreateDirectory(Path.Combine(home, "Library", "Application Support"));
         var configDir = CliEnvironment.ResolveConfigDir(
@@ -190,11 +188,10 @@ public class FileOwnershipTests : IDisposable
     }
 
     // Brief T7 item 6: under sudo, a wider config folder and file are narrowed as the folder's owner.
-    [Fact]
+    [UnixFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void Privileged_AWideClassicVault_IsNarrowedAsTheFoldersOwner_BeforeTheWrite()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var fake = AsRoot();
         var warnings = new StringWriter();
         File.WriteAllText(P("config.json"), "{}");
@@ -234,11 +231,9 @@ public class FileOwnershipTests : IDisposable
         Assert.Empty(fake.Switches);
     }
 
-    [Fact]
+    [UnixFact("no identity switch on Windows")]
     public void SudoCommands_SlotMergeAndApprove_WriteConfigBackupAndTheirFilesAsTheFoldersOwner()
     {
-        if (OperatingSystem.IsWindows())
-            return; // no identity switch on Windows
         // The hardware test's bug: 'sudo tswap slot merge' left config.json and its backup root-owned.
         var keys = SimulatedYubiKeyService.WithKeys(11111111);
         keys.PluggedIn = [];
@@ -265,13 +260,12 @@ public class FileOwnershipTests : IDisposable
         Assert.All(fake.Switches, s => Assert.Equal((UserUid, UserGid), (s.Uid, s.Gid)));
     }
 
-    [Fact]
+    [UnixFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void Privileged_WriteToASymlink_ReplacesTheLink_AndNeverTouchesItsTarget()
     {
         // MiMo review: 'sudo tswap export ~/x.json' with ~/x.json a link to /etc/shadow must not
         // write through the link.
-        if (OperatingSystem.IsWindows())
-            return;
         File.WriteAllText(_rootsFile, "root's file");
         var link = P("export.json");
         File.CreateSymbolicLink(link, _rootsFile);
@@ -287,13 +281,12 @@ public class FileOwnershipTests : IDisposable
         Assert.Equal(OwnerOnly, File.GetUnixFileMode(link));
     }
 
-    [Fact]
+    [UnixFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void Privileged_BackupOfAConfigJsonLinkedToARootFile_IsReadAsTheUser_AndFails()
     {
         // GLM review: the backup read config.json through a planted symlink as root and handed the
         // copy to the folder's owner.
-        if (OperatingSystem.IsWindows())
-            return;
         var fake = AsRoot();
         PlantRootsFile(fake);
         File.CreateSymbolicLink(P("config.json"), _rootsFile);
@@ -305,11 +298,10 @@ public class FileOwnershipTests : IDisposable
         Assert.DoesNotContain("chown", ex.Message); // never advise chowning through a link
     }
 
-    [Fact]
+    [UnixFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void Privileged_LoadingAConfigJsonLinkedToARootFile_IsReadAsTheUser_AndFails()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var fake = AsRoot();
         PlantRootsFile(fake);
         File.CreateSymbolicLink(P("config.json"), _rootsFile);
@@ -321,13 +313,11 @@ public class FileOwnershipTests : IDisposable
         Assert.DoesNotContain("chown", ex.Message);
     }
 
-    [Fact]
+    [UnixFact]
     public void Privileged_AConfigJsonLeftRootOwnedByAnEarlierSudoRun_SaysHowToFixIt()
     {
         // GLM re-review: a vault file an earlier release wrote as root (0600) is unreadable as the
         // folder's owner; the user must get the fix, not a bare "access denied".
-        if (OperatingSystem.IsWindows())
-            return;
         var fake = AsRoot();
         new Storage(_dir, new DirectoryOwnerMatcher(new FakeOwnership(privileged: false, euid: UserUid))).SaveConfig(SampleConfig());
         fake.RootOnly.Add(P("config.json"));
@@ -363,12 +353,11 @@ public class FileOwnershipTests : IDisposable
         Assert.Empty(Directory.GetFiles(_dir));
     }
 
-    [Fact]
+    [UnixFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void Privileged_TheFoldersOwnerCannotBeRead_RefusesBeforeWriting()
     {
         // MiMo review: a failed statx used to fall back silently to a root-owned file.
-        if (OperatingSystem.IsWindows())
-            return;
         var fake = AsRoot();
         fake.OwnerUnreadable = true;
         // Brief T7 item 6: a 0700 folder (as tswap creates it since T5), so the write itself refuses,
@@ -382,11 +371,9 @@ public class FileOwnershipTests : IDisposable
         Assert.Empty(Directory.GetFiles(_dir));
     }
 
-    [Fact]
+    [UnixFact]
     public void Privileged_TheSwitchFails_TheOldFileIsKept_AndNothingIsWritten()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var storage = new Storage(_dir, new DirectoryOwnerMatcher(new FakeOwnership(privileged: false, euid: UserUid)));
         storage.SaveConfig(SampleConfig());
         var before = File.ReadAllText(P("config.json"));
@@ -404,11 +391,10 @@ public class FileOwnershipTests : IDisposable
     [DllImport("libc", EntryPoint = "umask")]
     private static extern uint SetUmask(uint mask);
 
-    [Fact]
+    [UnixFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void NewFilesAndFolders_AreOwnerOnly_EvenUnderUmask0()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var old = SetUmask(0);
         try
         {
@@ -430,12 +416,9 @@ public class FileOwnershipTests : IDisposable
         }
     }
 
-    [Fact]
+    [UnixFact]
     public void TheRealUnixCalls_ReadTheOwnerOfAFolderAndOfALinkItself()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var real = new UnixOwnership();
         var owner = real.GetOwner(_dir);
 

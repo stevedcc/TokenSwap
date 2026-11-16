@@ -142,7 +142,20 @@ Rules for fields:
   names the word (or, after `{{name}}` values are substituted, the token); rename the file, or pass a single secret with a plain `{{name}}` token instead
 - Alternatively, scan for `# tswap:` comments and construct `%CMD% run` commands
   with `--set` flags using `{{token}}` substitution
-- This allows agents to freely read config files without seeing secret values";
+- This allows agents to freely read config files without seeing secret values
+
+## Passing secrets to commands:
+Keep secret values out of a command's arguments where you can. In order of preference:
+1. When the tool takes a config file that can carry the secret on a `# tswap:` line (YAML, INI, TOML, JSONC;
+   not strict JSON), such as Helm values: give it the file with `{{@file}}`. Only the private copy's path is in
+   the command's arguments
+2. When the tool reads its secret from an environment variable: `--env VAR={{name}}`, e.g.
+   `%CMD% run --env PGPASSWORD={{db-pw}} -- psql -h db -U app`. The value is exactly one `{{name}}` token: a literal is
+   refused, so set non-secret variables in the shell before `%CMD% run`
+3. Only when the tool offers neither: a `{{name}}` in an argument
+`run` can't feed a secret on stdin, and a `{{@file}}` copy is the filled file, never the bare secret.
+Why: on a shared machine a running command's arguments are readable by every local user; its environment
+only by the same user and root";
 
     public static string GetText(string prefix)
     {

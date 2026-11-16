@@ -69,10 +69,11 @@ public class SecureEnclavePasswordRoundTripTests(ITestOutputHelper output)
         }
     }
 
-    [Fact]
+    [MacFact]
+    [System.Runtime.Versioning.SupportedOSPlatform("macos")]
     public void RealEnclave_PasswordSlot_RoundTrips()
     {
-        if (!CanRun() || !OperatingSystem.IsMacOS())
+        if (!CanRun())
             return;
         RoundTrip();
     }
@@ -92,10 +93,11 @@ public class SecureEnclavePasswordRoundTripTests(ITestOutputHelper output)
         Assert.Equal(kek, recovered);
     }
 
-    [Fact]
+    [MacFact]
+    [System.Runtime.Versioning.SupportedOSPlatform("macos")]
     public void RealEnclave_WrongPassword_Refused()
     {
-        if (!CanRun() || !OperatingSystem.IsMacOS())
+        if (!CanRun())
             return;
         WrongPasswords();
     }
@@ -120,11 +122,12 @@ public class SecureEnclavePasswordRoundTripTests(ITestOutputHelper output)
         Assert.Equal(key, Bounded("unwrap_v2 with the right password", () => AppleSecureEnclaveInterop.UnwrapWithPassword(package, password)));
     }
 
-    [Fact]
+    [MacFact]
+    [System.Runtime.Versioning.SupportedOSPlatform("macos")]
     public void RealEnclave_NoCredential_RefusedWithoutDialog()
     {
         // The new unwrap refuses a credential that is not 32 bytes with -6, before touching the Enclave.
-        if (!CanRun() || !OperatingSystem.IsMacOS())
+        if (!CanRun())
             return;
         NoCredential();
     }
@@ -143,7 +146,8 @@ public class SecureEnclavePasswordRoundTripTests(ITestOutputHelper output)
     /// <summary>What "at once" means for a refusal that must not wait for a dialog: well under <see cref="CallTimeout"/>.</summary>
     private static readonly TimeSpan PromptRefusal = TimeSpan.FromSeconds(5);
 
-    [Fact]
+    [MacFact]
+    [System.Runtime.Versioning.SupportedOSPlatform("macos")]
     public void RealEnclave_StrippedHeader_Refused()
     {
         // Ruling 3 with the controller's rulings for the Secure Enclave: without its TSSE header the slot looks
@@ -151,7 +155,7 @@ public class SecureEnclavePasswordRoundTripTests(ITestOutputHelper output)
         // the key waited for an application-password dialog until the 30 s bound. The slot is recorded as made
         // without presence (config.json's RequiresTouch false, as init --no-touch writes it), so the unwrap allows
         // no interaction (tswap_se_unwrap_no_interaction) and must refuse at once.
-        if (!CanRun() || !OperatingSystem.IsMacOS())
+        if (!CanRun())
             return;
         StrippedHeader();
     }

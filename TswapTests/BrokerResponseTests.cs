@@ -46,11 +46,9 @@ public class BrokerResponseTests : IAsyncLifetime
 
     // ------------------------------------------------------------------ redaction
 
-    [Fact]
+    [UnixFact]
     public async Task EveryForm_EchoedInAHeader_TheBody_AndSplitAcrossTwoChunks_NeverReachesTheClient()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         foreach (var form in AllForms())
         {
             _up.Respond = async (http, _) =>
@@ -79,11 +77,9 @@ public class BrokerResponseTests : IAsyncLifetime
         }
     }
 
-    [Fact]
+    [UnixFact]
     public async Task FormsInATrailer_AreNeverForwarded()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         foreach (var form in AllForms().Take(6))
         {
             var raw = Encoding.Latin1.GetBytes(
@@ -104,11 +100,9 @@ public class BrokerResponseTests : IAsyncLifetime
         }
     }
 
-    [Fact]
+    [UnixFact]
     public async Task ContentLengthBody_WhoseRedactionChangesItsLength_ArrivesIntactAndChunked()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var bodyText = "abc" + Secret + "def";
         _up.Respond = async (http, _) =>
         {
@@ -126,14 +120,12 @@ public class BrokerResponseTests : IAsyncLifetime
         Assert.EndsWith("0\r\n\r\n", response);
     }
 
-    [Theory]
+    [UnixTheory]
     [InlineData("gzip")]
     [InlineData("br")]
     [InlineData("deflate")]
     public async Task CompressedBody_Fails502_NothingForwarded(string encoding)
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var compressed = new MemoryStream();
         Stream zip = encoding switch
         {
@@ -160,11 +152,9 @@ public class BrokerResponseTests : IAsyncLifetime
         Assert.Equal("identity", Assert.Single(_up.Hits).Header("Accept-Encoding"));
     }
 
-    [Fact]
+    [UnixFact]
     public async Task IdentityContentEncoding_Passes()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _up.Respond = async (http, _) =>
         {
             http.Response.Headers.ContentEncoding = "identity";
@@ -179,11 +169,9 @@ public class BrokerResponseTests : IAsyncLifetime
 
     // ------------------------------------------------------------------ framing
 
-    [Fact]
+    [UnixFact]
     public async Task Head_KeepsItsEmptyBody_AndTheUpstreamsLength()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _up.Respond = (http, _) =>
         {
             http.Response.ContentLength = 1234;
@@ -198,13 +186,11 @@ public class BrokerResponseTests : IAsyncLifetime
         Assert.Equal("HEAD", Assert.Single(_up.Hits).Method);
     }
 
-    [Theory]
+    [UnixTheory]
     [InlineData(204)]
     [InlineData(304)]
     public async Task NoContentAndNotModified_PassWithEmptyBodies(int status)
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _up.Respond = (http, _) =>
         {
             http.Response.StatusCode = status;
@@ -242,11 +228,9 @@ public class BrokerResponseTests : IAsyncLifetime
         return total;
     }
 
-    [Fact]
+    [UnixFact]
     public async Task FiftyMegabytes_Stream_FirstByteArrivesBeforeTheUpstreamFinishes_MemoryStaysBounded()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         const int chunk = 64 * 1024;
         const int chunks = 800; // 50 MB
         var firstByteSeen = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -308,11 +292,9 @@ public class BrokerResponseTests : IAsyncLifetime
         Assert.True(upstreamFinished);
     }
 
-    [Fact]
+    [UnixFact]
     public async Task Bidirectional_ALargeRequestBodyWhileTheResponseStarts_Completes()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         const int size = 8 * 1024 * 1024;
         _up.ReadBodyFirst = false;
         _up.Respond = async (http, _) =>
@@ -348,11 +330,9 @@ public class BrokerResponseTests : IAsyncLifetime
         Assert.Equal($"started;received={size}", BrokerHarness.BodyOf(text));
     }
 
-    [Fact]
+    [UnixFact]
     public async Task IdleUpstream_IsCutAfterTheRoutesIdleTimeout_OnTheInjectedClock()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var stalled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _up.Respond = async (http, _) =>
@@ -387,11 +367,9 @@ public class BrokerResponseTests : IAsyncLifetime
         await _h.WaitForLogAsync("reason=idle-timeout"); // logged once the handler returns
     }
 
-    [Fact]
+    [UnixFact]
     public void TimeoutsAndSizes_HaveTheirSetValues()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var kestrel = _h.Server!.KestrelOptions;
         Assert.Null(kestrel.Limits.MaxRequestBodySize);
         Assert.Equal(TimeSpan.FromSeconds(10), kestrel.Limits.RequestHeadersTimeout);
@@ -407,11 +385,9 @@ public class BrokerResponseTests : IAsyncLifetime
 
     // ------------------------------------------------------------------ unlocks
 
-    [Fact]
+    [UnixFact]
     public async Task EveryRequestUnlocksAfresh_AlsoUnderEightConcurrentRequests()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         for (var i = 0; i < 3; i++)
             Assert.Equal(200, BrokerHarness.StatusOf(await _h.GetAsync("lane1", "/bearer/seq")));
         Assert.Equal(3, _h.Secrets.Unlocks);

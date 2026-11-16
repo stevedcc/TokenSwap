@@ -142,7 +142,9 @@ tswap run rclone sync --password {{storj-pass}} /data remote:backup
 tswap names
 ```
 
-An AI agent works the same way. A longer agent workflow, a backup script, config files and Helm:
+An AI agent works the same way, and keeps values out of the command line where it can: a config file through
+`{{@file}}`, or `tswap run --env PGPASSWORD={{db-pw}} -- psql …` for a tool that reads its secret from the
+environment ([`run --env`](docs/commands.md#run---env)). A longer agent workflow, a backup script, config files and Helm:
 [Examples](docs/examples.md). If a value is ever seen in cleartext, burn it and rotate it:
 [Rotating and burning secrets](docs/rotating-and-burning.md).
 

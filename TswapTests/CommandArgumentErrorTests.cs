@@ -27,7 +27,7 @@ public sealed class CommandArgumentErrorTests : IDisposable
     [InlineData("Usage: sudo tswap export <file>", "export")]
     [InlineData("Usage: tswap get <name>", "get")]
     [InlineData("Usage: tswap redact <file>", "redact")]
-    [InlineData("Usage: tswap run <command> [args...]", "run")]
+    [InlineData("Usage: tswap run [--env NAME={{name}}]... [--] <cmd> [args...]", "run")]
     [InlineData("Usage: tswap tocomment <file> [--dry-run]", "tocomment")]
     [InlineData("Usage: <source> | tswap ingest [--rotate] <name>", "ingest")]
     [InlineData("Usage: <source> | tswap ingest [--rotate] <name>", "ingest", "--rotate")]
@@ -119,7 +119,7 @@ public sealed class CommandArgumentErrorTests : IDisposable
         Assert.Equal(ErrorLine("Unknown command: --helpme"), stderr);
     }
 
-    [Theory]
+    [UnixTheory("'tswap broker' refuses Windows before it reads any argument")]
     [InlineData("broker")]
     [InlineData("broker", "serve", "extra")]
     [InlineData("broker", "route")]
@@ -134,8 +134,6 @@ public sealed class CommandArgumentErrorTests : IDisposable
     [InlineData("broker", "template", "add")]
     public void Broker_AMissingOrUnknownSubcommandOrArgument_GivesTheBrokerUsage(params string[] args)
     {
-        if (OperatingSystem.IsWindows())
-            return; // 'tswap broker' refuses Windows before it reads any argument
         _m.Sudo = true; // route|socket|template add|remove check sudo first (see the next test)
 
         var (exit, stdout, stderr) = _m.Run("", args);
@@ -145,10 +143,10 @@ public sealed class CommandArgumentErrorTests : IDisposable
         Assert.StartsWith("\n❌ Error: Usage:\n  tswap broker serve\n", stderr);
     }
 
-    [Fact]
+    [UnixFact]
     public void BrokerRouteRemove_ChecksSudo_BeforeItsArguments()
     {
-        if (OperatingSystem.IsWindows() || Environment.IsPrivilegedProcess)
+        if (Environment.IsPrivilegedProcess)
             return; // no refusal is possible when already privileged
 
         var (exit, stdout, stderr) = _m.Run("", "broker", "route", "remove");

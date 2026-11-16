@@ -88,11 +88,9 @@ public class BrokerTemplateConfigTests : IDisposable
           "rate": 3
         """);
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
     public void ValidTemplate_RoundTrips_AndCompiles()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         var policy = Parse(WithTemplate(FullTemplate));
         var again = Parse(BrokerPolicy.Serialize(policy.Source));
 
@@ -116,11 +114,9 @@ public class BrokerTemplateConfigTests : IDisposable
         Assert.Equal("/usr/bin/bwrap", again.BwrapPath);
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
     public void Template_Defaults()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         var t = Parse(WithTemplate(Template(binds: "[]", cwd: "null"))).Templates["deploy"];
 
         Assert.Equal(BrokerTemplateNetwork.None, t.Network);
@@ -132,11 +128,9 @@ public class BrokerTemplateConfigTests : IDisposable
         Assert.Empty(t.SecretNames);
     }
 
-    [Fact]
+    [UnixFact("the broker is Unix only")]
     public void ValidSshKeys_RoundTrip_AndASocketListsThem()
     {
-        if (OperatingSystem.IsWindows())
-            return; // the broker is Unix only
         const string json = """
             {
               "version": 1,
@@ -160,11 +154,9 @@ public class BrokerTemplateConfigTests : IDisposable
         Assert.Empty(again.Sockets["lane1"].Templates);
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
     public void ASocketWithoutTemplatesOrSshKeys_AllowsNone()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         var policy = Parse(WithTemplate(Template()).Replace(", \"templates\": [\"deploy\"]", ""));
 
         Assert.Single(policy.Templates);
@@ -174,74 +166,58 @@ public class BrokerTemplateConfigTests : IDisposable
 
     // ------------------------------------------------------------------ refusals: secrets and placeholders
 
-    [Theory]
+    [LinuxTheory("templates are Linux only (bwrap)")]
     [InlineData("""["/usr/bin/curl", "-H", "Authorization: {{api-key}}"]""")]
     [InlineData("""["/usr/bin/curl", "{{api-key}}"]""")]
     public void ASecretInArgv_IsRefused(string argv)
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         Refused(WithTemplate(Template(argv: argv, args: "{}")), "{{secret}}");
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
     public void ASecretInCwd_IsRefused()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         Refused(WithTemplate(Template(cwd: J(Work + "/{{db-pw}}"))), "{{secret}}");
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
     public void ASecretInABind_IsRefused()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         Refused(WithTemplate(Template(binds: $$"""[ { "path": {{J(Work + "/{{db-pw}}")}} } ]""", cwd: "null")), "{{secret}}");
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
     public void ASecretInAFilesPath_IsRefused()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         Refused(WithTemplate(Template(extra: """, "files": [ { "path": "/run/secrets/{{k}}", "secret": "k" } ]""")), "{{secret}}");
     }
 
-    [Theory]
+    [LinuxTheory("templates are Linux only (bwrap)")]
     [InlineData("""["{prog}", "x"]""", """{ "prog": { "pattern": "/usr/bin/[a-z]+" } }""")]
     [InlineData("""["/usr/bin/{prog}"]""", """{ "prog": { "pattern": "[a-z]+" } }""")]
     [InlineData("""["{{tool}}"]""", "{}")]
     [InlineData("""["/usr/bin/{{tool}}"]""", "{}")]
     public void APlaceholderOrSecretInArgv0_IsRefused(string argv, string args)
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         Refused(WithTemplate(Template(argv: argv, args: args)), "argv[0]");
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
     public void AnUndeclaredPlaceholder_IsRefused()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         Refused(WithTemplate(Template(argv: """["/usr/bin/git", "push", "{remote}", "{branch}"]""")), "'remote' is not declared");
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
     public void AnUnusedDeclaredArgument_IsRefused()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         Refused(WithTemplate(Template(args: """{ "branch": { "pattern": "x" }, "extra": { "pattern": "y" } }""")), "'extra' is declared but not used");
     }
 
     /// <summary>Row 1b's pins: templates and their arguments are looked up ordinally (a caller's "DEPLOY" or "Branch" is not "deploy" or "branch").</summary>
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
     public void TemplateAndArgumentLookups_AreCaseSensitive()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         var policy = Parse(WithTemplate(Template()));
 
         Assert.True(policy.Templates.ContainsKey("deploy"));
@@ -252,7 +228,7 @@ public class BrokerTemplateConfigTests : IDisposable
             BrokerRequestHandler.CheckTemplateArgs(template, new Dictionary<string, string> { ["Branch"] = "brief/x" }));
     }
 
-    [Theory]
+    [LinuxTheory("templates are Linux only (bwrap)")]
     [InlineData("""["git", "push"]""")]
     [InlineData("""["usr/bin/git", "push"]""")]
     [InlineData("""["./git", "push"]""")]
@@ -260,38 +236,30 @@ public class BrokerTemplateConfigTests : IDisposable
     [InlineData("""["/home/someone/git", "push"]""")]
     public void ARelativeOrOutsideTheSandboxArgv0_IsRefused(string argv)
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         Refused(WithTemplate(Template(argv: argv, args: "{}")), "argv[0]");
     }
 
-    [Theory]
+    [LinuxTheory("templates are Linux only (bwrap)")]
     [InlineData("""["/usr/bin/sh", "-c", "git push origin {branch}"]""")]
     [InlineData("""["/usr/bin/python3", "-c", "print('{branch}')"]""")]
     [InlineData("""["/usr/bin/env", "git", "{branch}"]""")]
     [InlineData("""["/usr/bin/xargs", "{branch}"]""")]
     public void AnInlineCodeArgv_IsRefused(string argv)
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         Refused(WithTemplate(Template(argv: argv)), "inline");
     }
 
-    [Theory]
+    [LinuxTheory("templates are Linux only (bwrap)")]
     [InlineData("(?i)brief/.*")]
     [InlineData("brief/(?s:.*)")]
     public void AnInlineOptionGroupInAPattern_IsRefused(string pattern)
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         Refused(WithTemplate(Template(args: $$"""{ "branch": { "pattern": {{J(pattern)}} } }""")), "inline option");
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
     public void APattern_IsAnchoredAtBothEnds_InvariantWithATimeout()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         var arg = Parse(WithTemplate(Template(args: """{ "branch": { "pattern": "a|b" } }"""))).Templates["deploy"].Args["branch"];
 
         Assert.Matches(arg.Pattern, "a");
@@ -302,7 +270,7 @@ public class BrokerTemplateConfigTests : IDisposable
         Assert.Equal(TimeSpan.FromMilliseconds(100), arg.Pattern.MatchTimeout);
     }
 
-    [Theory]
+    [LinuxTheory("templates are Linux only (bwrap)")]
     [InlineData("""{ "X": "a\u0000b" }""", "control")]
     [InlineData("""{ "X": "a\nb" }""", "control")]
     [InlineData("""{ "PATH": "/x" }""", "PATH")]
@@ -311,46 +279,38 @@ public class BrokerTemplateConfigTests : IDisposable
     [InlineData("""{ "X": "pre-{{k}}" }""", "{{secret}}")]
     public void ABadEnvEntry_IsRefused(string env, string expected)
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         Refused(WithTemplate(Template(extra: $", \"env\": {env}")), expected);
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
     public void AControlCharacterInAnArgvLiteral_IsRefused()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         Refused(WithTemplate(Template(argv: """["/usr/bin/git", "pu\u0000sh", "{branch}"]""")), "control");
     }
 
     // ------------------------------------------------------------------ refusals: binds and cwd
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void AGroupWritableBind_IsRefused()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         Parse(WithTemplate(Template())); // the positive: 0755 passes
         File.SetUnixFileMode(Work, (UnixFileMode)0b111_111_101);
 
         Refused(WithTemplate(Template()), "writable by group or others");
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
     public void ABindOwnedByAnotherUser_IsRefused()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         Parse(WithTemplate(Template()), Host(BrokerHarness.MyUid)); // the positive: the vault user's own
         Refused(WithTemplate(Template()), "owned by uid", Host(BrokerHarness.MyUid + 1));
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void ABindBelowAGroupWritableFolder_IsRefused()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         var inner = Path.Combine(Work, "inner");
         Directory.CreateDirectory(inner);
         File.SetUnixFileMode(inner, (UnixFileMode)0b111_101_101);
@@ -361,11 +321,10 @@ public class BrokerTemplateConfigTests : IDisposable
         Refused(WithTemplate(Template(binds: binds, cwd: J(inner))), "writable by group or others");
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void ASymlinkedBind_IsCheckedAtItsTarget()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         var target = Path.Combine(Work, "target");
         Directory.CreateDirectory(target);
         File.SetUnixFileMode(target, (UnixFileMode)0b111_101_101);
@@ -379,11 +338,9 @@ public class BrokerTemplateConfigTests : IDisposable
         Refused(WithTemplate(Template(binds: binds, cwd: "null")), "writable by group or others");
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
     public void ACwdOutsideTheBinds_IsRefused()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         Directory.CreateDirectory(Path.Combine(Work, "sub"));
         Parse(WithTemplate(Template(cwd: J(Path.Combine(Work, "sub"))))); // inside: fine
 
@@ -392,7 +349,7 @@ public class BrokerTemplateConfigTests : IDisposable
         Refused(WithTemplate(Template(cwd: "\"/etc\"")), "cwd");
     }
 
-    [Theory]
+    [LinuxTheory("templates are Linux only (bwrap)")]
     [InlineData("/dev")]
     [InlineData("/dev/null")]
     [InlineData("/dev/shm")]
@@ -403,29 +360,23 @@ public class BrokerTemplateConfigTests : IDisposable
     [InlineData("/run")]
     public void ABindAtOrUnderDevProcSysOrRun_IsRefused(string path)
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         if (!Path.Exists(path))
             return; // not on this host
         Refused(WithTemplate(Template(binds: $$"""[ { "path": {{J(path)}} } ]""", cwd: "null")), "may not");
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
     public void ADeviceNodeReachedThroughASymlink_IsRefused()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         var link = Path.Combine(Work, "null");
         File.CreateSymbolicLink(link, "/dev/null");
 
         Refused(WithTemplate(Template(binds: $$"""[ { "path": {{J(link)}} } ]""", cwd: "null")), "may not");
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
     public void AFifoOrSocketBind_IsRefused()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         var socketPath = Path.Combine(Work, "s.sock");
         using var socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
         socket.Bind(new UnixDomainSocketEndPoint(socketPath));
@@ -433,27 +384,22 @@ public class BrokerTemplateConfigTests : IDisposable
         Refused(WithTemplate(Template(binds: $$"""[ { "path": {{J(socketPath)}} } ]""", cwd: "null")), "regular file or a folder");
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
     public void AMissingBind_IsRefused()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         Refused(WithTemplate(Template(binds: $$"""[ { "path": {{J(Path.Combine(Work, "nope"))}} } ]""", cwd: "null")), "does not exist");
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
     public void ARelativeBind_IsRefused()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         Refused(WithTemplate(Template(binds: """[ { "path": "work" } ]""", cwd: "null")), "absolute");
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void AProtectedFolder_ItsParentsAndItsContents_AreRefused_ByDeviceAndInode()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         var vault = Path.Combine(Work, "vault");
         var inside = Path.Combine(vault, "records");
         Directory.CreateDirectory(inside);
@@ -475,11 +421,10 @@ public class BrokerTemplateConfigTests : IDisposable
         Refused(Bind(alias), "vault", host);   // another name for it
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void AHardLinkToAProtectedFile_IsRefused()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         var config = Path.Combine(Work, "cfg");
         Directory.CreateDirectory(config);
         File.SetUnixFileMode(config, (UnixFileMode)0b111_101_101);
@@ -501,11 +446,10 @@ public class BrokerTemplateConfigTests : IDisposable
         Refused(Bind(hardLink), "vault", host);
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void TheSocketDir_IsProtected()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         var sockets = Path.Combine(Work, "sockets");
         Directory.CreateDirectory(sockets);
         File.SetUnixFileMode(sockets, (UnixFileMode)0b111_001_001);
@@ -515,21 +459,18 @@ public class BrokerTemplateConfigTests : IDisposable
         Refused(json, "vault");
     }
 
-    [Theory]
+    [LinuxTheory("templates are Linux only (bwrap)")]
     [InlineData("/etc")]
     [InlineData("/")]
     public void SudoConfigurationAndTheRoot_AreRefused(string path)
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         Refused(WithTemplate(Template(binds: $$"""[ { "path": {{J(path)}} } ]""", cwd: "null")), "vault");
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void TheVaultUsersHome_IsRefused_ButAFolderInsideItIsNot()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         var host = new BrokerHostContext(BrokerHarness.MyUid, [], [Work], []); // Work plays the home folder
         var inside = Path.Combine(Work, "deploy");
         Directory.CreateDirectory(inside);
@@ -542,7 +483,7 @@ public class BrokerTemplateConfigTests : IDisposable
 
     // ------------------------------------------------------------------ refusals: files, ranges, names
 
-    [Theory]
+    [LinuxTheory("templates are Linux only (bwrap)")]
     [InlineData("/tmp/key")]
     [InlineData("/run/secrets")]
     [InlineData("/run/secrets/")]
@@ -551,12 +492,10 @@ public class BrokerTemplateConfigTests : IDisposable
     [InlineData("run/secrets/key")]
     public void AFilesPathOutsideRunSecrets_IsRefused(string path)
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         Refused(WithTemplate(Template(extra: $$""", "files": [ { "path": {{J(path)}}, "secret": "k" } ]""")), "/run/secrets/");
     }
 
-    [Theory]
+    [LinuxTheory("templates are Linux only (bwrap)")]
     [InlineData("\"timeout_sec\": 0", "timeout_sec")]
     [InlineData("\"timeout_sec\": 3601", "timeout_sec")]
     [InlineData("\"max_output_bytes\": 0", "max_output_bytes")]
@@ -571,12 +510,10 @@ public class BrokerTemplateConfigTests : IDisposable
     [InlineData("\"network\": \"bridge\"", "network")]
     public void OutOfRangeSettings_AreRefused(string member, string expected)
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         Refused(WithTemplate(Template(extra: ", " + member)), expected);
     }
 
-    [Theory]
+    [LinuxTheory("templates are Linux only (bwrap)")]
     [InlineData("\"timeout_sec\": 1")]
     [InlineData("\"timeout_sec\": 3600")]
     [InlineData("\"max_output_bytes\": 1")]
@@ -585,48 +522,38 @@ public class BrokerTemplateConfigTests : IDisposable
     [InlineData("\"limits\": { \"nproc\": 64, \"as_mib\": 2048, \"nofile\": 256, \"fsize_mib\": 256 }")]
     public void SettingsAtTheEdgesOfTheirRange_AreAccepted(string member)
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         Parse(WithTemplate(Template(extra: ", " + member)));
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
     public void ADuplicateTemplateName_IsRefused()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         var t = Template();
         Refused(WithTemplate(t + ", " + t), "defined twice");
     }
 
-    [Theory]
+    [LinuxTheory("templates are Linux only (bwrap)")]
     [InlineData("_hidden", "reserved")]
     [InlineData("Deploy", "invalid")]
     public void ATemplateNameBreakingTheNamingRules_IsRefused(string name, string expected)
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         Refused(WithTemplate(Template().Replace("\"deploy\"", J(name)), J(name)), expected);
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
     public void ASocketListingAnUnknownTemplateOrSshKey_IsRefused()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         Refused(WithTemplate(Template(), "\"deploy\", \"nope\""), "'nope'");
         Refused(WithTemplate(Template()).Replace("\"templates\": [\"deploy\"]", "\"ssh_keys\": [\"nokey\"], \"templates\": [\"deploy\"]"), "'nokey'");
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
     public void UnknownTemplateFields_AreRefused()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         Refused(WithTemplate(Template(extra: ", \"shell\": true")), "can't be read");
     }
 
-    [Theory]
+    [UnixTheory("the broker is Unix only")]
     [InlineData("\"sha256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU\"")]   // the prefix is case-sensitive
     [InlineData("\"SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU=\"")]  // padded
     [InlineData("\"SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOq\"")]   // too short
@@ -636,8 +563,6 @@ public class BrokerTemplateConfigTests : IDisposable
     [InlineData("\"\"")]
     public void ABadSshKeyFingerprint_IsRefused(string fingerprint)
     {
-        if (OperatingSystem.IsWindows())
-            return; // the broker is Unix only
         var json = $$"""
             { "version": 1, "sockets": [], "routes": [],
               "ssh_keys": [ { "name": "k", "secret": "key", "allowed_host_keys": [{{fingerprint}}] } ] }
@@ -646,44 +571,36 @@ public class BrokerTemplateConfigTests : IDisposable
         Assert.Contains("SHA256:", ex.Message);
     }
 
-    [Theory]
+    [UnixTheory("the broker is Unix only")]
     [InlineData("""{ "name": "k", "secret": "key", "allowed_host_keys": [] }""", "allowed_host_keys")]
     [InlineData("""{ "name": "k", "secret": "{{key}}", "allowed_host_keys": ["SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU"] }""", "secret")]
     [InlineData("""{ "name": "_k", "secret": "key", "allowed_host_keys": ["SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU"] }""", "reserved")]
     public void OtherBadSshKeys_AreRefused(string key, string expected)
     {
-        if (OperatingSystem.IsWindows())
-            return; // the broker is Unix only
         var ex = Assert.Throws<BrokerConfigException>(() => BrokerPolicy.Parse($$"""{ "version": 1, "sockets": [], "routes": [], "ssh_keys": [ {{key}} ] }"""));
         Assert.Contains(expected, ex.Message);
     }
 
-    [Fact]
+    [UnixFact("the broker is Unix only")]
     public void ADuplicateSshKeyName_IsRefused()
     {
-        if (OperatingSystem.IsWindows())
-            return; // the broker is Unix only
         const string key = """{ "name": "k", "secret": "key", "allowed_host_keys": ["SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU"] }""";
         var ex = Assert.Throws<BrokerConfigException>(() => BrokerPolicy.Parse($$"""{ "version": 1, "sockets": [], "routes": [], "ssh_keys": [ {{key}}, {{key}} ] }"""));
         Assert.Contains("defined twice", ex.Message);
     }
 
-    [Fact]
+    [UnixFact("the broker is Unix only")]
     public void ABwrapPathThatIsNotAbsolute_IsRefused()
     {
-        if (OperatingSystem.IsWindows())
-            return; // the broker is Unix only
         var ex = Assert.Throws<BrokerConfigException>(() => BrokerPolicy.Parse("""{ "version": 1, "bwrap_path": "bwrap", "sockets": [], "routes": [] }"""));
         Assert.Contains("bwrap_path", ex.Message);
     }
 
     // ------------------------------------------------------------------ the CLI (decision 9)
 
-    [Fact]
+    [UnixFact("the broker is Unix only")]
     public void WithoutSudo_TemplateChangesAreRefused_AndNothingIsWritten()
     {
-        if (OperatingSystem.IsWindows())
-            return; // the broker is Unix only
         if (Environment.IsPrivilegedProcess)
             return; // only meaningful when this process is unprivileged
         using var m = new FleetMachine("tplcfg");
@@ -700,11 +617,9 @@ public class BrokerTemplateConfigTests : IDisposable
         Assert.False(File.Exists(BrokerConfigFile.PathIn(m.Dir)));
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
     public void Sudo_TemplateAdd_AndASocketAllowingIt_LoadAsWritten_AndRemoveRefusesWhileInUse()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         using var m = new FleetMachine("tplcfg");
         var file = Path.Combine(_root, "deploy.json");
         File.WriteAllText(file, Template());
@@ -729,11 +644,9 @@ public class BrokerTemplateConfigTests : IDisposable
         Assert.Empty(BrokerConfigFile.Load(DirectoryOwnerMatcher.Default, m.Dir).Templates);
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
     public void Sudo_AnInvalidTemplate_IsRefused_AndNothingIsWritten()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         using var m = new FleetMachine("tplcfg");
         var file = Path.Combine(_root, "deploy.json");
         File.WriteAllText(file, Template(argv: """["/usr/bin/curl", "{{api-key}}"]""", args: "{}"));
@@ -745,11 +658,10 @@ public class BrokerTemplateConfigTests : IDisposable
         Assert.False(File.Exists(BrokerConfigFile.PathIn(m.Dir)));
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void TheVaultFolderOfTheMachine_IsProtected_WhenAddingATemplate()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         using var m = new FleetMachine("tplcfg");
         var dir = BrokerNative.RealPath(m.Dir)!;
         File.SetUnixFileMode(dir, (UnixFileMode)0b111_101_101);

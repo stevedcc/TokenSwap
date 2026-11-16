@@ -77,23 +77,21 @@ public class BrokerTemplateProgramAndEnvTests : IDisposable
 
     // ------------------------------------------------------------------ H3: the program
 
-    [Theory]
+    [LinuxTheory("templates are Linux only (bwrap)")]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     [InlineData(true)]
     [InlineData(false)]
     public void AProgramInsideABind_IsRefused_RwOrReadOnly(bool rw)
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         var tool = Tool();
 
         Assert.Equal(InsideBind(tool, Work), Refused(Config(tool, Work, rw)));
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void AProgramReachedThroughASymlinkIntoABind_IsRefused()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         var tool = Tool();
         var link = Path.Combine(_root, "tool-link"); // not in the bind by name; resolves into it
         File.CreateSymbolicLink(link, tool);
@@ -102,11 +100,9 @@ public class BrokerTemplateProgramAndEnvTests : IDisposable
             Refused(Config(link, Work)));
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
     public void AMissingProgramOutsideTheBinds_Loads()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         // Controller ruling: a tool that isn't installed is not a load error (it would take every
         // socket and route offline); the call fails at run time, as before.
         const string missing = "/usr/bin/tswap-test-no-such-program";
@@ -117,11 +113,9 @@ public class BrokerTemplateProgramAndEnvTests : IDisposable
         Assert.Equal(missing, t.Program);
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
     public async Task AMissingProgramOutsideTheBinds_PassesServesValidation()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         const string missing = "/usr/bin/tswap-test-no-such-program";
         await using var h = new BrokerHarness();
         var config = Config(missing, Work).Replace("\"/run/tswap-broker\"", J(h.SocketDir))
@@ -133,21 +127,17 @@ public class BrokerTemplateProgramAndEnvTests : IDisposable
         await h.WaitForLogAsync("started: ");
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
     public void AMissingProgramInsideABind_IsRefused()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         var missing = Path.Combine(Work, "not-yet", "tool");
 
         Assert.Equal(InsideBind(missing, Work), Refused(Config(missing, Work)));
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
     public void AMissingProgramBelowASymlinkIntoABind_IsRefused()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         var link = Path.Combine(_root, "link");
         File.CreateSymbolicLink(link, Work);
         var missing = Path.Combine(link, "tool"); // its nearest existing ancestor resolves into the bind
@@ -156,31 +146,25 @@ public class BrokerTemplateProgramAndEnvTests : IDisposable
             Refused(Config(missing, Work)));
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
     public void ASystemProgramOutsideTheBinds_IsAccepted()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         var t = BrokerPolicy.Parse(Config("/usr/bin/true", Work, rw: true), Host()).Templates["t"];
 
         Assert.Equal("/usr/bin/true", t.Program);
         Assert.Equal(Work, Assert.Single(t.Binds).Path);
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
     public void ABindOverUsr_WithTheProgramInIt_AsksForANarrowerFolder()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         Assert.Equal(InsideBind("/usr/bin/true", "/usr") + "; bind /usr covers system programs; bind a narrower folder",
             Refused(Config("/usr/bin/true", "/usr")));
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
     public void ABindOverOpt_WithTheProgramInIt_AsksForANarrowerFolder()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         if (BrokerNative.Identify("/opt", follow: false) is not { Uid: 0 } opt
             || (opt.Mode & (UnixFileMode.GroupWrite | UnixFileMode.OtherWrite)) != 0)
         {
@@ -194,31 +178,26 @@ public class BrokerTemplateProgramAndEnvTests : IDisposable
 
     // ------------------------------------------------------------------ H3: bwrap_path
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void ABwrapPathInsideATemplatesBind_IsRefused()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         var bwrap = Tool();
 
         Assert.Equal($"bwrap_path {bwrap} is inside template t's bind {Work}", Refused(Config("/usr/bin/true", Work, bwrapPath: bwrap)));
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
     public void AMissingBwrapPathInsideATemplatesBind_IsRefused()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         var bwrap = Path.Combine(Work, "not-yet", "bwrap");
 
         Assert.Equal($"bwrap_path {bwrap} is inside template t's bind {Work}", Refused(Config("/usr/bin/true", Work, bwrapPath: bwrap)));
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
     public void ABwrapPathReachedThroughASymlinkIntoABind_IsRefused()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         var link = Path.Combine(_root, "link");
         File.CreateSymbolicLink(link, Work);
         var bwrap = Path.Combine(link, "bwrap"); // missing; its nearest existing ancestor resolves into the bind
@@ -226,11 +205,9 @@ public class BrokerTemplateProgramAndEnvTests : IDisposable
         Assert.Equal($"bwrap_path {bwrap} is inside template t's bind {Work}", Refused(Config("/usr/bin/true", Work, bwrapPath: bwrap)));
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
     public void ABwrapPathOutsideTheBinds_Loads_AlsoWhenMissing()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         var byDefault = BrokerPolicy.Parse(Config("/usr/bin/true", Work), Host());
         Assert.Equal(BrokerPolicy.DefaultBwrapPath, byDefault.BwrapPath);
 
@@ -255,32 +232,28 @@ public class BrokerTemplateProgramAndEnvTests : IDisposable
         return link;
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void AProgramBelowADanglingSymlinkIntoABind_IsRefused()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         var program = Path.Combine(DanglingLinkIntoTheBind(), "deploy");
 
         Assert.StartsWith($"template t: program {program} (resolves to {Path.Combine(Work, "v2", "deploy")}) is inside bind {Work}; a program may no longer live in a bind",
             Refused(Config(program, Work, rw: true)));
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void ABwrapPathBelowADanglingSymlinkIntoABind_IsRefused()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         var bwrap = Path.Combine(DanglingLinkIntoTheBind(), "bwrap");
 
         Assert.Equal($"bwrap_path {bwrap} is inside template t's bind {Work}", Refused(Config("/usr/bin/true", Work, rw: true, bwrapPath: bwrap)));
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
     public void ARelativeDanglingSymlinkIntoABind_IsRefused()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         var link = Path.Combine(_root, "rel-link");
         File.CreateSymbolicLink(link, "work/v2"); // relative: against the link's own folder
         var bwrap = Path.Combine(link, "bwrap");
@@ -288,11 +261,9 @@ public class BrokerTemplateProgramAndEnvTests : IDisposable
         Assert.Equal($"bwrap_path {bwrap} is inside template t's bind {Work}", Refused(Config("/usr/bin/true", Work, rw: true, bwrapPath: bwrap)));
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
     public void ADanglingSymlinkOutsideEveryBind_StillLoads()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         var link = Path.Combine(_root, "elsewhere-link");
         File.CreateSymbolicLink(link, Path.Combine(_root, "elsewhere", "v2")); // dangling, and not into a bind
         var bwrap = Path.Combine(link, "bwrap");
@@ -305,11 +276,9 @@ public class BrokerTemplateProgramAndEnvTests : IDisposable
             Refused(Config(Path.Combine(link, "deploy"), Work, rw: true)));
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
     public void ASymlinkLoopOnTheProgramPath_IsRefused()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         var a = Path.Combine(_root, "loop-a");
         var b = Path.Combine(_root, "loop-b");
         File.CreateSymbolicLink(a, b);
@@ -323,11 +292,9 @@ public class BrokerTemplateProgramAndEnvTests : IDisposable
             Refused(Config("/usr/bin/true", Work, rw: true, bwrapPath: bwrap)));
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
     public void AProgramThatStartsResolvingIntoABindAfterLoad_IsRefusedBeforeTheNextRun()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         // Validate never produces a program outside the system roots, and a test can't plant a link
         // under /usr, so the template is built directly: a program below a link that resolves outside
         // the binds now and into one later (the per-run re-check is the same check as at load).
@@ -348,11 +315,9 @@ public class BrokerTemplateProgramAndEnvTests : IDisposable
         Assert.StartsWith($"template t: program {program} (resolves to {Path.Combine(Work, "v2", "deploy")}) is inside bind {Work}", problem);
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
     public void ABwrapPathThatStartsResolvingIntoABindAfterLoad_IsRefusedBeforeTheNextRun()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         var elsewhere = Path.Combine(_root, "elsewhere");
         Directory.CreateDirectory(elsewhere);
         var link = Path.Combine(_root, "bwrap-link");
@@ -371,33 +336,28 @@ public class BrokerTemplateProgramAndEnvTests : IDisposable
 
     // ------------------------------------------------------------------ H3: ".." through a link (I224 round 2, G1)
 
-    [Theory]
+    [LinuxTheory("templates are Linux only (bwrap)")]
     [InlineData("/usr/bin/../bin/true")]
     [InlineData("/usr/bin/./true")]
     public void AProgramWithADotSegment_IsRefusedWithTheMessage(string program)
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         Assert.Equal($"template t: program {program} has a \".\" or \"..\" segment; give the literal absolute path (argv[0])",
             Refused(Config(program, Work)));
     }
 
-    [Theory]
+    [LinuxTheory("templates are Linux only (bwrap)")]
     [InlineData("/usr/bin/../bin/bwrap")]
     [InlineData("/usr/./bin/bwrap")]
     public void ABwrapPathWithADotSegment_IsRefusedWithTheMessage(string bwrap)
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         Assert.Equal($"bwrap_path {bwrap} has a \".\" or \"..\" segment; give the literal absolute path",
             Refused(Config("/usr/bin/true", Work, bwrapPath: bwrap)));
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void TheDotDotThroughADanglingLinkLayout_IsRefusedAtLoad()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         // The reviewer's layout: tool-link -> Work/v2 (missing), so the kernel takes tool-link/.. as Work.
         var link = DanglingLinkIntoTheBind();
         var program = link + "/../deploy";
@@ -408,11 +368,10 @@ public class BrokerTemplateProgramAndEnvTests : IDisposable
         Assert.Matches("has a \".\" or \"..\" segment|is inside template t's bind", Refused(Config("/usr/bin/true", Work, rw: true, bwrapPath: bwrap)));
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void TheDotDotThroughADanglingLinkLayout_IsRefusedBeforeEveryRun()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         // Validate refuses ".." in argv[0] and bwrap_path, so the template is built directly: the per-run
         // re-check must take tool-link/.. as the kernel does (Work), not lexically (_root).
         var link = DanglingLinkIntoTheBind();
@@ -435,7 +394,7 @@ public class BrokerTemplateProgramAndEnvTests : IDisposable
 
     private static string Env(string name, string value) => $"{{ {J(name)}: {J(value)} }}";
 
-    [Theory]
+    [LinuxTheory("templates are Linux only (bwrap)")]
     [InlineData("KUBECONFIG", true)]
     [InlineData("AWS_CONFIG_FILE", true)]
     [InlineData("AWS_SHARED_CREDENTIALS_FILE", true)]
@@ -448,12 +407,10 @@ public class BrokerTemplateProgramAndEnvTests : IDisposable
     [InlineData("GRADLE_USER_HOME", false)]
     public void AConfigPointerInsideABind_IsRefused_RwOrReadOnly(string name, bool rw)
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         Assert.Equal(PointsInside(name, Work), Refused(Config("/usr/bin/true", Work, rw, env: Env(name, Path.Combine(Work, "cfg")))));
     }
 
-    [Theory]
+    [LinuxTheory("templates are Linux only (bwrap)")]
     [InlineData("KUBECONFIG")]
     [InlineData("AWS_CONFIG_FILE")]
     [InlineData("AWS_SHARED_CREDENTIALS_FILE")]
@@ -461,8 +418,6 @@ public class BrokerTemplateProgramAndEnvTests : IDisposable
     [InlineData("GRADLE_USER_HOME")]
     public void AConfigPointerUnderRunSecretsOrOutsideTheBinds_OrASecret_IsAccepted(string name)
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         foreach (var value in new[] { "/run/secrets/x", Path.Combine(_root, "elsewhere", "cfg"), "{{kube}}" })
         {
             var t = BrokerPolicy.Parse(Config("/usr/bin/true", Work, rw: true, env: Env(name, value)), Host()).Templates["t"];
@@ -470,11 +425,10 @@ public class BrokerTemplateProgramAndEnvTests : IDisposable
         }
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void AConfigPointerReachedThroughASymlink_ARelativeOne_OrOneKubeconfigListEntry_IsRefused()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         var link = DanglingLinkIntoTheBind();
         Assert.Equal(PointsInside("GNUPGHOME", Work), Refused(Config("/usr/bin/true", Work, rw: true, env: Env("GNUPGHOME", link + "/gnupg"))));
         Assert.Equal(PointsInside("KUBECONFIG", Work),
@@ -485,11 +439,9 @@ public class BrokerTemplateProgramAndEnvTests : IDisposable
         Assert.Equal(PointsInside("AWS_CONFIG_FILE", Work), Refused(json));
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
     public void AConfigPointerThatStartsResolvingIntoABindAfterLoad_IsRefusedBeforeTheNextRun()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         var elsewhere = Path.Combine(_root, "elsewhere");
         Directory.CreateDirectory(elsewhere);
         var link = Path.Combine(_root, "kube-link");
@@ -506,7 +458,7 @@ public class BrokerTemplateProgramAndEnvTests : IDisposable
 
     // ------------------------------------------------------------------ H4: the env denylist
 
-    [Theory]
+    [LinuxTheory("templates are Linux only (bwrap)")]
     [InlineData("GCONV_PATH")]
     [InlineData("LOCPATH")]
     [InlineData("NLSPATH")]
@@ -548,19 +500,15 @@ public class BrokerTemplateProgramAndEnvTests : IDisposable
     [InlineData("CURL_CA_BUNDLE")]
     public void ANewlyDeniedEnvName_IsRefused(string name)
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         Assert.StartsWith($"Template 't': env may not set {name}: ", Refused(Config("/usr/bin/true", env: $"{{ {J(name)}: \"x\" }}")));
     }
 
-    [Theory]
+    [LinuxTheory("templates are Linux only (bwrap)")]
     [InlineData("LANG", "C.UTF-8")]
     [InlineData("TZ", "UTC")]
     [InlineData("PGPASSWORD", "{{db-pw}}")]
     public void OrdinaryEnvNames_AreStillAccepted(string name, string value)
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         var t = BrokerPolicy.Parse(Config("/usr/bin/true", env: $"{{ {J(name)}: {J(value)} }}"), Host()).Templates["t"];
 
         Assert.Equal(name, Assert.Single(t.Env).Name);

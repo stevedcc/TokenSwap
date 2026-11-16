@@ -32,8 +32,44 @@ public sealed class BrokerManualClock : TimeProvider
     /// </summary>
     public List<Action> CreatedCallbacks { get; } = [];
 
+    private static readonly TimeSpan UnlockTimeout = new BrokerLimits().UnlockTimeout;
+    private int _unlockTimersArmed;
+
+    /// <summary>
+    /// How many timers were created with the unlock timeout as due time (#288): the broker arms one per unlock
+    /// that is still running when it reaches <c>WaitAsync</c>, after the read has started. Counted once the timer's
+    /// due time is set, so an <see cref="Advance"/> after the count rose always reaches it.
+    /// </summary>
+    public int UnlockTimersArmed
+    {
+        get
+        {
+            lock (_gate)
+                return _unlockTimersArmed;
+        }
+    }
+
+    /// <summary>Raised (outside the lock) each time <see cref="UnlockTimersArmed"/> rises.</summary>
+    public event Action? UnlockTimerArmed;
+
+    /// <summary>
+    /// When set, creating a timer with the unlock timeout as due time waits for this first, outside the lock (so the
+    /// test's own <see cref="Advance"/> can run meanwhile): a test-controlled hang between the read starting and
+    /// the timeout being armed.
+    /// </summary>
+    public TaskCompletionSource? HoldUnlockTimerCreation { get; set; }
+
+    /// <summary>Raised when a creation enters <see cref="HoldUnlockTimerCreation"/>.</summary>
+    public event Action? UnlockTimerCreationHeld;
+
     public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
     {
+        var unlockTimeout = dueTime == UnlockTimeout;
+        if (unlockTimeout && HoldUnlockTimerCreation is { } hold)
+        {
+            UnlockTimerCreationHeld?.Invoke();
+            hold.Task.GetAwaiter().GetResult();
+        }
         var timer = new ManualTimer(this, callback, state);
         lock (_gate)
         {
@@ -41,6 +77,12 @@ public sealed class BrokerManualClock : TimeProvider
             CreatedCallbacks.Add(() => callback(state));
         }
         timer.Change(dueTime, period);
+        if (unlockTimeout)
+        {
+            lock (_gate)
+                _unlockTimersArmed++;
+            UnlockTimerArmed?.Invoke();
+        }
         return timer;
     }
 

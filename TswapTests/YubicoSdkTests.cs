@@ -60,11 +60,9 @@ public sealed class YubicoSdkTests
     /// line 20), the -devel package's link; the resolver must answer that name, and the bare "libudev" it also accepts,
     /// with the runtime library. Needs libudev.so.1 on the machine (every systemd Linux, and GitHub's Ubuntu runners).
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public void LibudevResolver_AnswersTheSdksImportName()
     {
-        if (!OperatingSystem.IsLinux())
-            return;
         var sdk = typeof(Yubico.Core.Devices.Hid.HidDevice).Assembly;
 
         var handle = YubicoSdk.ResolveLibudev("libudev.so", sdk, null);

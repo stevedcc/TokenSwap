@@ -207,11 +207,9 @@ public class AgentProtocolTests : IDisposable
         Assert.Equal("agent-0011223344556677.sock", AgentSocketPath.SocketName(VaultId));
     }
 
-    [Fact]
+    [UnixFact]
     public void Linux_RunUserFolder_WhenItExistsAndIsTheOwners()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var runUser = Path.Combine(_root.FullName, "run-user");
         Directory.CreateDirectory(Path.Combine(runUser, MyUid.ToString()));
 
@@ -220,11 +218,9 @@ public class AgentProtocolTests : IDisposable
         Assert.Equal(Path.Combine(runUser, MyUid.ToString(), "tswap", "agent-0011223344556677.sock"), path);
     }
 
-    [Fact]
+    [UnixFact]
     public void Linux_NoRunUserFolder_OrNotTheOwners_UsesTheHomeCache()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var home = Path.Combine(_root.FullName, "home");
         var expected = Path.Combine(home, ".cache", "tswap", "run", "agent-0011223344556677.sock");
 
@@ -235,34 +231,28 @@ public class AgentProtocolTests : IDisposable
         Assert.Equal(expected, AgentSocketPath.For(4242, VaultId, _ => null, Inputs()));
     }
 
-    [Fact]
+    [UnixFact]
     public void MacOs_UsesLibraryCaches()
     {
         // The Unix layout only: on Windows the agent is a named pipe (CI run 41619549912 built this path from
         // Windows' long temp folder and hit the socket limit).
-        if (OperatingSystem.IsWindows())
-            return;
         var home = Path.Combine(_root.FullName, "home");
         Assert.Equal(Path.Combine(home, "Library", "Caches", "tswap", "run", "agent-0011223344556677.sock"),
             AgentSocketPath.For(MyUid, VaultId, _ => null, Inputs(macOs: true)));
     }
 
-    [Fact]
+    [UnixFact]
     public void Variable_OverridesThePath()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var custom = Path.Combine(_root.FullName, "custom.sock");
         Assert.Equal(custom, AgentSocketPath.For(MyUid, VaultId,
             name => name == AgentSocketPath.Variable ? custom : null, Inputs()));
         Assert.Equal("TSWAP_AGENT_SOCK", AgentSocketPath.Variable);
     }
 
-    [Fact]
+    [UnixFact]
     public void SocketPath_TooLong_ByUtf8Bytes_RefusedNamingTheVariable()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         // 60 characters, but 3 bytes each in UTF-8: 180 bytes, over the 103-byte sun_path limit.
         var dir = "/" + new string('€', 59);
         var path = dir + "/a";
@@ -284,24 +274,20 @@ public class AgentProtocolTests : IDisposable
         Assert.Equal(exact, AgentSocketPath.For(MyUid, VaultId, name => name == AgentSocketPath.Variable ? exact : null, Inputs()));
     }
 
-    [Fact]
+    [UnixFact]
     public void BrokerControlFor_IsASubfolderOfTheAgentFolder()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var home = Path.Combine(_root.FullName, "home");
         // TSWAP_AGENT_SOCK moves only the agent's socket, never the broker's control socket.
         Assert.Equal(Path.Combine(home, ".cache", "tswap", "run", "broker-0011223344556677", "control.sock"),
             AgentSocketPath.BrokerControlFor(MyUid, VaultId, Inputs()));
     }
 
-    [Fact]
+    [UnixFact]
     public void BrokerControlFor_TooLongOrNoHome_NeverAdvisesTheAgentsVariable()
     {
         // Review T17 p2 GLM M-5 / MiMo minor 3: TSWAP_AGENT_SOCK doesn't move the control socket, so its
         // refusals must not recommend it.
-        if (OperatingSystem.IsWindows())
-            return;
         var deepHome = "/" + new string('ä', 60);
         var tooLong = Assert.Throws<TswapException>(() => AgentSocketPath.BrokerControlFor(MyUid, VaultId, Inputs(home: deepHome)));
         Assert.DoesNotContain(AgentSocketPath.Variable, tooLong.Message);
@@ -321,11 +307,9 @@ public class AgentProtocolTests : IDisposable
 
     // ------------------------------------------------------------------ folder checks (ruling 6)
 
-    [Fact]
+    [UnixFact]
     public void EnsureFolder_CreatesAMissingFolder0700_OwnedByThisUid()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var dir = Path.Combine(_root.FullName, "a", "b", "run");
 
         var real = AgentSocketPath.EnsureFolder(dir, MyUid, new UnixOwnership());
@@ -339,11 +323,10 @@ public class AgentProtocolTests : IDisposable
         Assert.Equal((UnixFileMode)0b111_000_000, BrokerNative.LStat(Path.Combine(_root.FullName, "a"))!.Value.Mode);
     }
 
-    [Fact]
+    [UnixFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void SocketFolder_NotOwned_Or0755_OrSymlink_OrWritableParent_Refused()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var ownership = new UnixOwnership();
         var good = Path.Combine(_root.FullName, "good");
         Directory.CreateDirectory(good);
@@ -383,11 +366,10 @@ public class AgentProtocolTests : IDisposable
             AgentSocketPath.CheckFolder(Path.Combine(_root.FullName, "missing"), MyUid, ownership)).Message);
     }
 
-    [Fact]
+    [UnixFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void EnsureFolder_NeverRepairsAnExistingFolder()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var open = Path.Combine(_root.FullName, "open");
         Directory.CreateDirectory(open);
         File.SetUnixFileMode(open, (UnixFileMode)0b111_101_101);
@@ -397,12 +379,11 @@ public class AgentProtocolTests : IDisposable
     }
 
     /// <summary>Real ownership, except one path reports another owner.</summary>
-    [Fact]
+    [UnixFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void SocketFolder_StickyParent_OnlyRootsIsExempt_AndASymlinkedParentIsCheckedAtItsRealPath()
     {
         // Review T17 p5 MiMo I5: where ruling 6's parent walk draws its line (as BrokerServer's socket_dir does).
-        if (OperatingSystem.IsWindows())
-            return;
         var ownership = new UnixOwnership();
         var sticky = Path.Combine(_root.FullName, "sticky");
         var child = Path.Combine(sticky, "run");

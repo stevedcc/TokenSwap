@@ -26,7 +26,7 @@ This table lists each of their subcommands. "sudo" means it refuses to run witho
 | `slot approve` | sudo | Unlocks this vault and writes a file that lets whoever holds the request's private key open it: the same risk as `export` |
 | `slot accept` | no | Finishes enrolment on the new machine. On a record-store vault, or with `--vault-dir`, it also writes the new slot into the vault folder's keyring; the human check for that slot was the earlier `sudo tswap slot approve` |
 | `slot merge` | sudo | Adds the slots of a receipt: each one is a new way to open the vault |
-| `slot add` | sudo | Adds a plugged-in YubiKey (its OTP challenge-response, or a FIDO2 credential) or another brand's security key (a FIDO2 credential) as a new slot: a new way to open the vault |
+| `slot add` | sudo | Adds a plugged-in YubiKey (its OTP challenge-response, or a FIDO2 credential) or another brand's security key (a FIDO2 credential), or this machine's TPM or Secure Enclave, as a new slot: a new way to open the vault |
 | `broker serve` | no | Runs as the vault's own user; it refuses root |
 | `broker unlock` | no | Runs as the vault user; it refuses sudo |
 | `broker lock` | no | Runs as the vault user; it refuses sudo |
@@ -251,10 +251,10 @@ Create a record vault (one file per secret, shareable by sync tools) in \<config
 ### slot
 
 ```
-sudo tswap slot request [--tpm|--secure-enclave --with-touch|--no-touch] [--password|--no-password] [--vault-dir <folder>] <file> | slot approve <request-file> <approve-file> | slot accept <file> [--receipt <file>] [--vault-dir <shared folder>] | slot merge <receipt> [--yes] | slot add --fido2 [--serial <n>] | slot add --yubikey (approve, merge and add take --recovery-key-stdin)
+sudo tswap slot request [--tpm|--secure-enclave --with-touch|--no-touch] [--password|--no-password] [--vault-dir <folder>] <file> | slot approve <request-file> <approve-file> | slot accept <file> [--receipt <file>] [--vault-dir <shared folder>] | slot merge <receipt> [--yes] | slot add --tpm [--password|--no-password] | slot add --secure-enclave --with-touch|--no-touch [--password|--no-password] | slot add --fido2 [--serial <n>] | slot add --yubikey (approve, merge and add take --recovery-key-stdin)
 ```
 
-Enroll another machine into a keyring vault via hand-carried files (request, approve, accept, merge), or add a plugged-in YubiKey or other security key to this machine's keyring as its own slot (--yubikey: a YubiKey's OTP challenge-response; --fido2: a FIDO2 credential on a key of any brand, its PIN and a touch on every unlock, read at the terminal; --serial picks a YubiKey by its serial on Linux and macOS); slot request --secure-enclave needs --with-touch (Touch ID or password on every unlock) or --no-touch (no prompt; read its warning)
+Enroll another machine into a keyring vault via hand-carried files (request, approve, accept, merge), or add this machine's TPM or Secure Enclave (--tpm, --secure-enclave with --with-touch or --no-touch; it then opens the vault on this machine) or a plugged-in YubiKey or other security key to this machine's keyring as its own slot (--yubikey: a YubiKey's OTP challenge-response; --fido2: a FIDO2 credential on a key of any brand, its PIN and a touch on every unlock, read at the terminal; --serial picks a YubiKey by its serial on Linux and macOS); slot request --secure-enclave and slot add --secure-enclave need --with-touch (Touch ID or password on every unlock) or --no-touch (no prompt; read its warning)
 
 ### migrate
 
@@ -323,10 +323,10 @@ Hold the vault password in memory so commands need no prompt, like ssh-agent (ru
 ### run
 
 ```
-tswap run <cmd> [args...]
+tswap run [--env NAME={{name}}]... [--] <cmd> [args...]
 ```
 
-Execute with {{token}} and {{@file}} substitution
+Execute with {{token}} and {{@file}} substitution; --env sets a secret in the command's environment instead of its arguments
 
 ### check
 
@@ -505,6 +505,28 @@ tswap version
 Print tswap's version (also: --version)
 
 <!-- END GENERATED: commands -->
+
+## `run --env`
+
+`tswap run --env PGPASSWORD={{db-pw}} -- psql -h db -U app` sets `PGPASSWORD` in the command's environment only
+(not tswap's, not the calling shell's), so the value is not in its arguments; it is masked in the output like a
+`{{name}}` in an argument. Give `--env NAME={{name}}` (or `--env=NAME={{name}}`) once per variable, at most 64, before
+the command; an optional `--` ends them, and an `--env` after the command is the command's own argument. The value
+is exactly one `{{name}}` or `{{name:previous}}` token: a literal is refused (it isn't a secret, so set it in your
+shell, where the command inherits it), and so is a `{{@file}}` (put that in the command). Refused names, compared
+ignoring case: `PATH`, `PATHEXT`, `LC_ALL`, `PWD`, `LD_*`, `DYLD_*`, `ComSpec`, `PSModulePath`, and the names and
+prefixes the broker's command templates refuse because they can make a program run code or load files they name
+(`BASH_ENV`, `GIT_SSH_COMMAND`, `PAGER`, `HOME`, `PYTHON*`, `NODE_*`, `JAVA*`, `XDG_*`, …;
+[BROKER.md](BROKER.md#secrets-reach-the-child-through-env-or-a-read-only-file-only)). That knowingly includes
+harmless ones such as `NODE_ENV`, `JAVA_HOME` or the `XDG_*` folders: set those in your shell too.
+
+What it protects against: other local users and command-line logging. On Linux every local user can read a
+running process's arguments in `/proc/<pid>/cmdline` unless `/proc` is mounted with `hidepid`; its environment only
+the same user and root ([who can read what](security-model.md#who-can-read-a-secret-run-hands-to-a-command)). It
+gains nothing against the agent itself, which runs as the same user as the command. On a machine with several users,
+mount `/proc` with `hidepid=invisible,gid=<group>`, which hides one user's processes from the others (also for tools
+that take a secret only as an argument); the broker's vault user needs that group
+([broker threat model](broker-threat-model.md#limits-of-the-identity-check)).
 
 ## Environment variables
 

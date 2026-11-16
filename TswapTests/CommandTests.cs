@@ -932,12 +932,9 @@ public class CommandTests : IDisposable
         Assert.False(File.Exists(marker), "a refused command must not run");
     }
 
-    [Fact]
+    [UnixFact("POSIX sh only")]
     public void Run_ShellWithAScriptFile_RunsIt()
     {
-        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
-            return; // POSIX sh only (until #181: reported as Passed on Windows)
-
         RunTswap("init", "--yubikey");
         RunTswap("create", "script-test");
         var script = Path.Combine(_tempDir, "script.sh");
@@ -951,15 +948,12 @@ public class CommandTests : IDisposable
     // Brief T7 item 2 (#182): -v after the command name belongs to the command. `grep -v -x -e
     // <value> file` over a file holding only the value matches nothing inverted (exit 1); with
     // its -v stripped it would match the line (exit 0).
-    [Theory]
+    [UnixTheory("POSIX grep only")]
     [InlineData("-v")]
     [InlineData("--verbose")]
     [InlineData(null)]
     public void Run_ChildsOwnVerboseFlag_ReachesTheChild(string? globalFlag)
     {
-        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
-            return; // POSIX grep only (until #181: reported as Passed on Windows)
-
         RunTswap("init", "--yubikey");
         RunTswapWithStdin("grep-pattern-value", "ingest", "grep-pat");
         var file = Path.Combine(_tempDir, "lines.txt");

@@ -401,14 +401,9 @@ public sealed class RunFileTokenTests : IDisposable
 
     // ------------------------------------------------------------------ the private folder
 
-    [Fact]
+    [UnixFact("Unix modes and owners; Windows has RunFileToken_WindowsFolderAclIsCurrentUserOnly")]
     public void RunFileToken_FolderIsPrivate()
     {
-        if (OperatingSystem.IsWindows())
-        {
-            _output.WriteLine("SKIPPED: Unix modes and owners; Windows has RunFileToken_WindowsFolderAclIsCurrentUserOnly.");
-            return;
-        }
         WriteFile("values.yaml", ValuesYaml);
         var euid = new UnixOwnership().EffectiveUid;
         (BrokerNative.EntryType, UnixFileMode, uint)? folder = null, sub = null, file = null;
@@ -432,15 +427,10 @@ public sealed class RunFileTokenTests : IDisposable
         Assert.Matches("^tswap-run-[0-9a-f]{16}$", Path.GetFileName(RunFolderOf(copy!)));
     }
 
-    [Fact]
-    [System.Runtime.Versioning.SupportedOSPlatform("windows")] // the ACL calls; elsewhere it returns at once
+    [WindowsFact("Windows ACLs; Unix has RunFileToken_FolderIsPrivate (it runs on CI's windows-latest leg)")]
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")] // the ACL calls; elsewhere it is skipped
     public void RunFileToken_WindowsFolderAclIsCurrentUserOnly()
     {
-        if (!OperatingSystem.IsWindows())
-        {
-            _output.WriteLine("SKIPPED: Windows ACLs; Unix has RunFileToken_FolderIsPrivate (it runs on CI's windows-latest leg).");
-            return;
-        }
         WriteFile("values.yaml", ValuesYaml);
         bool? isProtected = null;
         List<(string Sid, AccessControlType Type)> rules = [];
@@ -916,10 +906,11 @@ public sealed class RunFileTokenTests : IDisposable
         Assert.Empty(RunFolders());
     }
 
-    [Fact]
+    [UnixFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void RunFileToken_UnreadableSourceRefused()
     {
-        if (OperatingSystem.IsWindows() || new UnixOwnership().EffectiveUid == 0)
+        if (new UnixOwnership().EffectiveUid == 0)
         {
             _output.WriteLine("SKIPPED: needs Unix permissions that bind (not root).");
             return;
@@ -1003,14 +994,9 @@ public sealed class RunFileTokenTests : IDisposable
         Assert.Empty(RunFolders());
     }
 
-    [Fact]
+    [UnixFact("an elevated Windows tswap is allowed (the per-user temp folder and the ACL keep it private)")]
     public void RunFileToken_AsRootRefused()
     {
-        if (OperatingSystem.IsWindows())
-        {
-            _output.WriteLine("SKIPPED: an elevated Windows tswap is allowed (the per-user temp folder and the ACL keep it private).");
-            return;
-        }
         WriteFile("values.yaml", ValuesYaml);
         _env = _env with { EffectiveUid = () => 0 };
 
@@ -1171,14 +1157,9 @@ public sealed class RunFileTokenTests : IDisposable
         Assert.Empty(RunFolders());
     }
 
-    [Fact]
+    [UnixFact("the stat seam is Unix-only")]
     public void RunFileToken_SignalBeforeTheChildStarts_NoChildAndFolderRemoved()
     {
-        if (OperatingSystem.IsWindows())
-        {
-            _output.WriteLine("SKIPPED: the stat seam is Unix-only.");
-            return;
-        }
         WriteFile("values.yaml", ValuesYaml);
         // A signal that arrives once the folder exists but before the child starts: the stat seam
         // runs on the copy's subfolder, after the run folder was made.
@@ -1269,14 +1250,10 @@ public sealed class RunFileTokenTests : IDisposable
 
     // The sweep only touches a stale folder that is the user's own 0700 one, and it
     // never zeroes through a hard link (it only unlinks it).
-    [Fact]
+    [UnixFact("Unix modes and hard links")]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void RunFileToken_SweepSkipsFolderOthersCanReadAndNeverZeroesThroughHardLinks()
     {
-        if (OperatingSystem.IsWindows())
-        {
-            _output.WriteLine("SKIPPED: Unix modes and hard links.");
-            return;
-        }
         var open = Path.Combine(_tmpRoot, "tswap-run-3333333333333333");
         var linked = Path.Combine(_tmpRoot, "tswap-run-4444444444444444");
         foreach (var dir in new[] { open, linked })
@@ -1361,7 +1338,7 @@ public sealed class RunFileTokenChildSelectionTests
 /// holds the filled copy, forwards it, waits for the child and removes the folder.
 /// </summary>
 [Trait("Category", "E2E")]
-public sealed class RunFileTokenEndToEndTests(TswapBinaryFixture binary, ITestOutputHelper output)
+public sealed class RunFileTokenEndToEndTests(TswapBinaryFixture binary)
     : IClassFixture<TswapBinaryFixture>, IDisposable
 {
     private readonly string _tempDir = Path.Combine(Path.GetTempPath(), "tswap-runfile-e2e-" + Guid.NewGuid().ToString("N")[..8]);
@@ -1414,14 +1391,10 @@ public sealed class RunFileTokenEndToEndTests(TswapBinaryFixture binary, ITestOu
         return pgrep.ExitCode == 0;
     }
 
-    [Fact]
+    [UnixFact("POSIX signals (Windows has Ctrl+C / Ctrl+Break, not SIGINT from another process)")]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public async Task RunFileToken_RealSigint_RemovesFolder()
     {
-        if (OperatingSystem.IsWindows())
-        {
-            output.WriteLine("SKIPPED: POSIX signals (Windows has Ctrl+C / Ctrl+Break, not SIGINT from another process).");
-            return;
-        }
         var config = Path.Combine(_tempDir, "config");
         var xdg = Path.Combine(_tempDir, "xdg");
         Directory.CreateDirectory(config);

@@ -49,11 +49,10 @@ public class StorageTests : IDisposable
         Assert.Throws<TswapException>(() => _storage.LoadConfig());
     }
 
-    [Fact]
+    [UnixFact("Unix file modes only")]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void Secrets_Resave_PreservesTightenedUnixFileMode()
     {
-        if (OperatingSystem.IsWindows()) return; // Unix file modes only
-
         var db = new SecretsDb(new Dictionary<string, Secret>());
         _storage.SaveSecrets(db, _key);
 

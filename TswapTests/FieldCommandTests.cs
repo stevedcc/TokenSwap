@@ -662,11 +662,12 @@ public sealed class FieldCommandTests : IDisposable
         Assert.Contains(dir, error.Message);
     }
 
-    [Fact]
+    [UnixFact("file modes are Unix only")]
     public void Parse_UnreadableFile_RefusedNamingIt()
     {
+        // The attribute skips Windows; the OS check keeps CA1416 satisfied. Root reads any file.
         if (OperatingSystem.IsWindows() || Environment.IsPrivilegedProcess)
-            return; // file modes are Unix only, and root reads any file
+            return;
         var file = _m.PathOf("locked.json");
         File.WriteAllText(file, """{"url": "x"}""");
         File.SetUnixFileMode(file, UnixFileMode.None);

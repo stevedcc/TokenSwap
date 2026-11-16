@@ -7,16 +7,49 @@ namespace TswapCli.Commands;
 public sealed class RunCommand : ICliCommand
 {
     public string Name => "run";
-    public string HelpUsage => "run <cmd> [args...]";
-    public string Description => "Execute with {{token}} and {{@file}} substitution";
+    public string HelpUsage => Usage;
+    public string Description => "Execute with {{token}} and {{@file}} substitution; --env sets a secret in the command's environment instead of its arguments";
     public bool RequiresSudo => false;
+
+    /// <summary>
+    /// The usage: the help's, and the bare-<c>run</c> error's, also when the <c>--env</c> options are followed
+    /// by no command (brief T26 round 2: one usage, so the error matches the option just typed).
+    /// </summary>
+    private const string Usage = "run [--env NAME={{name}}]... [--] <cmd> [args...]";
+
+    /// <summary>The broker's cap on a template's env entries, also <c>run</c>'s on <c>--env</c> pairs.</summary>
+    private const int MaxEnvPairs = 64;
+
+    /// <summary>
+    /// Brief T26: the arguments the registry's <c>--help</c> and <c>-v</c> scans look at: the value after a
+    /// separate <c>--env</c> is skipped (there the <c>--env</c> shape refusal wins), and <c>--</c> ends them.
+    /// </summary>
+    public static string[] LeadingOptions(string[] args)
+    {
+        List<string> leading = [];
+        for (var i = 0; i < args.Length; i++)
+        {
+            if (args[i] == "--")
+                break;
+            if (args[i] == "--env")
+            {
+                i++;
+                continue;
+            }
+            leading.Add(args[i]);
+        }
+        return [.. leading];
+    }
+
+    /// <summary>One <c>--env NAME={{token}}</c> pair: the variable's name and its one token.</summary>
+    private sealed record EnvPair(string Name, string Token);
 
     public int Execute(CommandContext ctx, string[] args)
     {
-        if (args is [])
-            throw new UsageException($"{ctx.Prefix} run <command> [args...]");
+        var (envPairs, commandArgs) = ParseOptions(args);
+        if (commandArgs is [])
+            throw new UsageException($"{ctx.Prefix} {Usage}");
 
-        var commandArgs = args;
         // Join for scanning only — NOT used for execution. Executing via shell would require
         // re-quoting and would destroy the argument structure the caller's shell already
         // parsed correctly (issue #75).
@@ -34,7 +67,11 @@ public sealed class RunCommand : ICliCommand
         var tokens = Validation.ExtractTokens(commandJoined);
         var fileTokens = commandArgs.SelectMany(Validation.ExtractFileTokens).Distinct(StringComparer.Ordinal).ToList();
 
-        if (tokens.Count == 0 && fileTokens.Count == 0)
+        // Brief T26: the tokens of the --env values count as run's tokens; each is resolved once, with the others.
+        var envTokens = envPairs.Select(p => p.Token).Distinct(StringComparer.Ordinal).ToList();
+        var allTokens = tokens.Union(envTokens, StringComparer.Ordinal).ToList();
+
+        if (allTokens.Count == 0 && fileTokens.Count == 0)
             throw new TswapException("No {{tokens}} or {{@file}} tokens found in command");
 
         // Block obvious attempts to exfiltrate secrets via run: the blocklist, and shells or
@@ -64,9 +101,12 @@ public sealed class RunCommand : ICliCommand
 
         if (ctx.Verbose)
         {
-            ctx.Console.Out.WriteLine($"Found tokens: {string.Join(", ", tokens)}");
+            ctx.Console.Out.WriteLine($"Found tokens: {string.Join(", ", allTokens)}");
             if (fileTokens.Count > 0)
                 ctx.Console.Out.WriteLine($"Found files: {string.Join(", ", fileTokens)}");
+            // The names only, never the values.
+            if (envPairs.Count > 0)
+                ctx.Console.Out.WriteLine($"Environment: {string.Join(", ", envPairs.Select(p => p.Name))}");
         }
 
         // Unlock. Brief T16-S3: only the value versions run substitutes are decrypted (its tokens and
@@ -87,16 +127,31 @@ public sealed class RunCommand : ICliCommand
             // Resolve every token first: a missing secret, a missing previous value or an unreadable record
             // (named by its hashed file) refuses before anything is written or started.
             // A token is a name or 'name:previous'.
-            Dictionary<string, string> secretValues = [];
-            foreach (var token in tokens)
+            Dictionary<string, string> resolved = [];
+            foreach (var token in allTokens)
             {
-                secretValues[token] = view.ResolveToken(token);
+                resolved[token] = view.ResolveToken(token);
                 // Warn about a burned value (current or previous), as apply does.
                 if (view.IsBurnedToken(token))
                     ctx.Console.Error.WriteLine($"Warning: '{token}' is a burned value — using it anyway; rotate it after use.");
             }
 
-            // Redact every form of every value: raw, and its base64/base64url (and \r\n) variants.
+            // Brief T26: the child's environment, kept apart from the argv tokens' values: an env value is
+            // never in argv, so it never goes to the substitution, the word checks after it or NameCulprit.
+            Dictionary<string, string> environment = new(StringComparer.Ordinal);
+            foreach (var (name, token) in envPairs)
+            {
+                var value = resolved[token];
+                if (value is null || value.Contains('\0'))
+                    throw new TswapException(
+                        $"Secret '{token}' has a null or NUL-containing value, which can't be set in a process's environment ('--env {name}'). " +
+                        "Re-ingest the secret with a valid value.");
+                environment[name] = value;
+            }
+            var secretValues = tokens.ToDictionary(token => token, token => resolved[token]);
+
+            // Redact every form of every value: raw, and its base64/base64url (and \r\n) variants. An --env
+            // value is masked exactly like a {{name}} in argv.
             Dictionary<string, string> redactions = new(StringComparer.Ordinal);
             void Redact(string name, string raw, IEnumerable<string> written)
             {
@@ -104,7 +159,7 @@ public sealed class RunCommand : ICliCommand
                     foreach (var variant in Redaction.Variants(form))
                         redactions.TryAdd(variant, $"[REDACTED: {name}]");
             }
-            foreach (var (token, value) in secretValues)
+            foreach (var (token, value) in resolved)
                 Redact(token, value, []);
 
             // Issue #251: every file is resolved and filled in memory before anything is written; a
@@ -205,6 +260,8 @@ public sealed class RunCommand : ICliCommand
                 {
                     Matchers = [matcher = FingerprintStreamMatcher.For(metadata, fingerprintKeys)],
                     ReleaseWhenAwaitingInput = true,
+                    // Brief T26: set for the child only, never in its argv; tswap's own environment is unchanged.
+                    Environment = environment.Count > 0 ? environment : null,
                 };
                 var runner = ctx.PtyRunner();
                 childStarted = true;
@@ -229,6 +286,101 @@ public sealed class RunCommand : ICliCommand
         {
             FingerprintTexts.WarnFormatTwo(ctx.Console.Error, ctx.Prefix, view.FormatTwoDecoded, FormatTwoUse.Substitute);
         }
+    }
+
+    /// <summary>
+    /// Brief T26: the leading <c>--env NAME={{token}}</c> pairs (also <c>--env=NAME={{token}}</c>, split at the
+    /// first <c>=</c>), up to an optional <c>--</c>; the first other argument starts the command. Every refusal
+    /// here comes before the vault is opened.
+    /// </summary>
+    private static (List<EnvPair> Pairs, string[] Command) ParseOptions(string[] args)
+    {
+        List<EnvPair> pairs = [];
+        HashSet<string> names = new(StringComparer.OrdinalIgnoreCase);
+        var i = 0;
+        for (; i < args.Length; i++)
+        {
+            string pair;
+            if (args[i] == "--")
+            {
+                i++;
+                break;
+            }
+            if (args[i] == "--env")
+            {
+                if (++i == args.Length)
+                    throw NoPair();
+                pair = args[i];
+            }
+            else if (args[i].StartsWith("--env=", StringComparison.Ordinal))
+                pair = args[i]["--env=".Length..];
+            else
+                break;
+
+            var equals = pair.IndexOf('=');
+            if (equals < 0)
+                throw NoPair();
+            var (name, value) = (pair[..equals], pair[(equals + 1)..]);
+            ThrowIfRefusedName(name);
+            var token = EnvToken(name, value);
+            if (!names.Add(name))
+                throw new TswapException($"'--env' sets {name} twice (names are compared ignoring case).");
+            if (names.Count > MaxEnvPairs)
+                throw new TswapException($"At most {MaxEnvPairs} '--env' variables.");
+            pairs.Add(new EnvPair(name, token));
+        }
+        return (pairs, args[i..]);
+    }
+
+    private static TswapException NoPair() =>
+        new("'--env' needs NAME={{name}} after it: the variable's name, '=' and one {{name}} token.");
+
+    /// <summary>
+    /// The broker's name rules (<see cref="ChildEnvironmentRules"/>), ignoring case, plus run's own: the macOS
+    /// loader's <c>DYLD_*</c> and Windows' <c>PATHEXT</c>, <c>ComSpec</c> and <c>PSModulePath</c>.
+    /// </summary>
+    private static void ThrowIfRefusedName(string name)
+    {
+        var kind = ChildEnvironmentRules.Classify(name, StringComparison.OrdinalIgnoreCase);
+        if (kind == ChildEnvironmentName.Allowed)
+            kind = name.StartsWith("DYLD_", StringComparison.OrdinalIgnoreCase) ? ChildEnvironmentName.Loader
+                : name.Equals("PATHEXT", StringComparison.OrdinalIgnoreCase) ? ChildEnvironmentName.Baseline
+                : name.Equals("ComSpec", StringComparison.OrdinalIgnoreCase) || name.Equals("PSModulePath", StringComparison.OrdinalIgnoreCase)
+                    ? ChildEnvironmentName.Code
+                : ChildEnvironmentName.Allowed;
+        switch (kind)
+        {
+            case ChildEnvironmentName.BadShape:
+                throw new TswapException(
+                    $"'--env': '{TswapCore.Broker.BrokerPolicy.Printable(name)}' is not a valid environment variable name " +
+                    "(a letter or '_', then letters, digits and '_', at most 64 characters).");
+            case ChildEnvironmentName.Baseline:
+                throw new TswapException(
+                    $"'--env' may not set {name}: it decides which program runs, or where and how it runs. Set it in your shell if you need it.");
+            case ChildEnvironmentName.Loader:
+                throw new TswapException(
+                    $"'--env' may not set {name}: {(name.StartsWith("DYLD_", StringComparison.OrdinalIgnoreCase) ? "DYLD_" : "LD_")}* changes how every program loads.");
+            case ChildEnvironmentName.Code:
+                throw new TswapException(
+                    $"'--env' may not set {name}: it can make a shell, interpreter, library or tool run extra code, or load, trust or " +
+                    "write files it names. Set it in your shell if it isn't a secret.");
+        }
+    }
+
+    /// <summary>An --env value: exactly one <c>{{name}}</c> or <c>{{name:previous}}</c>, nothing else.</summary>
+    private static string EnvToken(string name, string value)
+    {
+        const string exactly = "the value must be exactly one {{name}} or {{name:previous}} token";
+        if (value.Contains("{{@", StringComparison.Ordinal))
+            throw new TswapException(
+                $"'--env {name}': a {{{{@file}}}} token can't be an --env value (a file path isn't a secret): put it in the command.");
+        Validation.ThrowIfUnknownTokenSuffix(value);
+        if (Validation.TokenRegex.Match(value) is { Success: true } whole && whole.Length == value.Length)
+            return whole.Groups[1].Value;
+        if (!value.Contains("{{", StringComparison.Ordinal))
+            throw new TswapException(
+                $"'--env {name}': {exactly}, not a literal. A literal isn't a secret: set it in your shell, where the child inherits it.");
+        throw new TswapException($"'--env {name}': {exactly}, with nothing around it.");
     }
 
     // A source file's text, or a refusal naming it (never a raw IO exception).

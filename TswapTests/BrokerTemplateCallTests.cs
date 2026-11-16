@@ -247,11 +247,9 @@ public class BrokerTemplateCallTests(ITestOutputHelper output) : IAsyncLifetime
     /// Row 1b's pin for <c>broker call</c>'s own argument parsing: names are ordinal, so "who" and "Who" are two
     /// arguments (the broker refuses the undeclared one), while the same name twice is refused locally.
     /// </summary>
-    [Fact]
+    [UnixFact("the broker is Unix only")]
     public void TheCallCommand_TakesArgumentNamesDifferingOnlyInCase_AsTwoArguments()
     {
-        if (OperatingSystem.IsWindows())
-            return; // the broker is Unix only
         using var m = new FleetMachine("tplcase");
         var missing = Path.Combine(m.Dir, "missing.sock");
 
@@ -439,11 +437,9 @@ public class BrokerTemplateVaultReadTests : IDisposable
 
     public void Dispose() => _m.Dispose();
 
-    [Fact]
+    [UnixFact]
     public void ATemplateUsingTwoOfFiftySecrets_DecryptsTwoRecords_InOneUnlock()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _m.Ok("", "init", "--tpm", "--no-recovery");
         for (var i = 0; i < 50; i++)
             _m.Ok($"value-{i}\n", "ingest", "s" + i);
@@ -466,11 +462,9 @@ public class BrokerTemplateVaultReadTests : IDisposable
     }
 
     /// <summary>Row 1b's pin: secrets whose names differ only in case are two secrets, each read as its own.</summary>
-    [Fact]
+    [UnixFact]
     public void SecretsDifferingOnlyInCase_AreReadAsTwoSecrets()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _m.Ok("", "init", "--tpm", "--no-recovery");
         _m.Ok("lower-value\n", "ingest", "tok");
         _m.Ok("upper-value\n", "ingest", "TOK");
@@ -487,11 +481,9 @@ public class BrokerTemplateVaultReadTests : IDisposable
             v.Dispose();
     }
 
-    [Fact]
+    [UnixFact]
     public void AMissingSecret_FailsTheCall_AndZeroesWhatWasRead()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _m.Ok("", "init", "--tpm", "--no-recovery");
         _m.Ok("value-0\n", "ingest", "s0");
         var store = Assert.IsType<RecordVaultStore>(VaultStores.Open(_m.Dir));

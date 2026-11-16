@@ -129,10 +129,25 @@ deployment.
 | Determined local attacker with root | Root can attach debuggers, read `/proc/*/mem`, or intercept syscalls — no userspace tool can prevent this |
 | Sophisticated exfiltration via `run` | The blocklist is shallow by design. Commands like `curl`, a script file, or custom binaries (and `cp` without a file token) can still exfiltrate secrets passed through token substitution |
 | Compromised YubiKey firmware | tswap trusts Yubico's .NET SDK (built into the binary) and the YubiKey's HMAC-SHA1 implementation; firmware-level attacks are out of scope |
-| Secrets in process memory | During `run`, the substituted command (with plaintext values) exists in the subprocess memory. Memory forensics or core dumps could recover it, and while it runs, its command line can be read through `/proc/<pid>/cmdline` (`ps`), as the broker guide notes for argv |
+| Secrets in process memory | During `run`, a secret's plaintext exists in the subprocess memory, wherever `run` put it. Memory forensics or core dumps could recover it. Who else can read it while the command runs depends on the form (below): none of them hides a value from the agent's own user, which starts the child and can read all three; against the agent itself that stays the job of output masking and of running work under another user (the broker) |
 | Network interception | Once a secret is passed to a legitimate program (e.g., `psql`, `rclone`), tswap has no control over how that program transmits it |
 | Silencing the touch notice | The acknowledged postures live in `config.json`, writable by any process running as you; the changed-posture notice is advisory. `tswap slots` shows each slot's recorded posture: a YubiKey's from its slot, a Secure Enclave's from `config.json` |
 | Brute-force on encrypted vault | A record vault's key is random (256 bits) and wrapped per slot. A classic vault (`secrets.json.enc`): AES-256-GCM + PBKDF2 (100k iterations) raises the cost, but the file could be attacked offline if both the file and the XOR share (in `config.json`) are obtained without a YubiKey |
+
+### Who can read a secret `run` hands to a command
+
+`run` has three ways to hand a command a secret (brief T26, #71). The agent's prompt prefers them in this
+order: a `{{@file}}` copy, then `--env`, then a `{{name}}` in an argument.
+
+| Form | Linux | macOS | Windows |
+|---|---|---|---|
+| `{{name}}` in an argument (the child's argv) | every local user while the command runs (`/proc/<pid>/cmdline`, `ps`), unless `/proc` is mounted with `hidepid`; also process accounting and audit logs | every local user while the command runs (`ps`) | — |
+| `--env NAME={{name}}` (the child's environment) | the same user and root (`/proc/<pid>/environ`) | the same user and root | anyone who can open the child process |
+| `{{@file}}` (a filled copy; only its path is in argv) | the same user and root (a private `0700` folder) | the same user and root | the current user (a current-user-only access list) |
+
+The copy is zeroed and deleted when the command ends; SIGKILL or a power loss leaves it until the next
+file-token `run` sweeps it ("Files with secrets", below). On a machine with several users, mount `/proc` with
+`hidepid=invisible,gid=<group>` ([commands.md, `run --env`](commands.md#run---env)).
 
 ### What each command decrypts
 
@@ -211,7 +226,7 @@ Limits of reading metadata only:
 
 ### What `run` masks
 
-`run` masks its own substituted values in every form it wrote (as before), and since 0.3 every other
+`run` masks its own substituted and `--env` values in every form it wrote (as before), and since 0.3 every other
 value version in the vault that has fingerprints, by those fingerprints alone: during the child run
 only the substituted values, the fingerprints and the fingerprint key are in memory, not the rest of
 the vault. Records that can't be matched (format 2 records, a version without fingerprints, an

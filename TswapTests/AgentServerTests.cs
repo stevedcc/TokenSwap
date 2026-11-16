@@ -29,11 +29,9 @@ public class AgentServerTests : IAsyncLifetime
 
     // ------------------------------------------------------------------ peer checks (rulings 7 and 20)
 
-    [Fact]
+    [UnixFact]
     public async Task Server_RefusesOtherUid()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var server = await _h.StartAsync();
         PeerIdentity.ReadCredentials = socket => (AgentHarness.MyUid + 1, Environment.ProcessId);
 
@@ -45,12 +43,10 @@ public class AgentServerTests : IAsyncLifetime
         Assert.Contains($"refused a peer: uid {AgentHarness.MyUid + 1}", _h.LogText);
     }
 
-    [Fact]
+    [UnixFact]
     public async Task Status_ReportsTheRefusedPeersCount_OverTheWire()
     {
         // Review T17 p5 GLM minor 4: a non-zero count reaches 'agent status' (12-byte status payload).
-        if (OperatingSystem.IsWindows())
-            return;
         var server = await _h.StartAsync();
         var real = PeerIdentity.ReadCredentials;
         PeerIdentity.ReadCredentials = socket => (AgentHarness.MyUid + 1, Environment.ProcessId);
@@ -71,11 +67,9 @@ public class AgentServerTests : IAsyncLifetime
         Assert.Equal(2u, running.RefusedPeers);
     }
 
-    [Fact]
+    [UnixFact]
     public async Task Server_AcceptsUidZero()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         await _h.StartAsync();
         PeerIdentity.ReadCredentials = socket => (0u, Environment.ProcessId);
 
@@ -85,11 +79,9 @@ public class AgentServerTests : IAsyncLifetime
         Assert.Equal(_h.Key, answer?.Payload);
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task Server_RefusesPeerInAnotherUserNamespace()
     {
-        if (!OperatingSystem.IsLinux())
-            return;
         var server = await _h.StartAsync();
         PeerIdentity.ReadUserNamespace = _ => "user:[4026533193]"; // podman unshare's, not ours
 
@@ -100,11 +92,9 @@ public class AgentServerTests : IAsyncLifetime
         Assert.Contains("peer in another user namespace", _h.LogText);
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task Server_SameUserNamespace_ReadThroughTheRealProc_IsAccepted()
     {
-        if (!OperatingSystem.IsLinux())
-            return;
         var calls = 0;
         PeerIdentity.ReadUserNamespace = peer => { calls++; return PeerIdentity.DefaultReadUserNamespace(peer); };
         await _h.StartAsync();
@@ -115,11 +105,9 @@ public class AgentServerTests : IAsyncLifetime
         Assert.StartsWith("user:[", PeerIdentity.ReadOwnUserNamespace());
     }
 
-    [Fact]
+    [UnixFact]
     public async Task Client_NoNamespaceCheckOnAgentServer()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         // A fake server that answers with the key: no PeerIdentity runs on its side.
         Directory.CreateDirectory(_h.Folder);
         using var listener = Listen(_h.SocketPath);
@@ -134,14 +122,12 @@ public class AgentServerTests : IAsyncLifetime
         await serving;
     }
 
-    [Theory]
+    [LinuxTheory]
     [InlineData("container_t")]
     [InlineData("spc_t")]
     [InlineData("container_runtime_t")]
     public async Task Server_RefusesContainerLabel(string type)
     {
-        if (!OperatingSystem.IsLinux())
-            return;
         var server = await _h.StartAsync();
         PeerIdentity.ReadPeerLabel = _ => $"system_u:system_r:{type}:s0:c12,c34";
 
@@ -152,11 +138,9 @@ public class AgentServerTests : IAsyncLifetime
         Assert.Contains($"peer label {type}", _h.LogText);
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task Server_NoSelinux_SkipsLabelCheck()
     {
-        if (!OperatingSystem.IsLinux())
-            return;
         await _h.StartAsync();
         PeerIdentity.ReadPeerLabel = _ => null; // ENOPROTOOPT, or an empty label
 
@@ -193,11 +177,9 @@ public class AgentServerTests : IAsyncLifetime
         Assert.Equal(context, PeerIdentity.SelinuxLabel(Encoding.UTF8.GetBytes(context)));
     }
 
-    [Fact]
+    [UnixFact]
     public async Task Client_RefusesAServerOfAnotherUid()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         await _h.StartAsync();
 
         var ex = await Assert.ThrowsAsync<TswapException>(() => Task.Run(() => ClientUnlock(expectedUid: AgentHarness.MyUid + 1)));
@@ -207,11 +189,9 @@ public class AgentServerTests : IAsyncLifetime
         Assert.Equal(0, _h.UnlockCalls); // refused before the request was sent
     }
 
-    [Fact]
+    [UnixFact]
     public async Task AgentSockVariable_CannotBypassServerUidCheck()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         await _h.StartAsync();
         // The vault's owner is another uid; TSWAP_AGENT_SOCK points at a socket this uid serves.
         var owner = AgentHarness.MyUid + 1;
@@ -225,11 +205,9 @@ public class AgentServerTests : IAsyncLifetime
         Assert.Equal(0, _h.UnlockCalls);
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task UidZeroPeer_UnreadableNamespace_Accepted_LabelStillChecked()
     {
-        if (!OperatingSystem.IsLinux())
-            return;
         var server = await _h.StartAsync();
         PeerIdentity.ReadCredentials = _ => (0u, Environment.ProcessId);
         PeerIdentity.OpenPeer = _ => null;              // hidepid=2: /proc/<pid> unreadable
@@ -244,11 +222,9 @@ public class AgentServerTests : IAsyncLifetime
         Assert.Contains("peer label container_t", _h.LogText);
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task NonRootPeer_UnreadableNamespace_Refused()
     {
-        if (!OperatingSystem.IsLinux())
-            return;
         await _h.StartAsync();
         PeerIdentity.ReadUserNamespace = _ => null;
 
@@ -260,11 +236,9 @@ public class AgentServerTests : IAsyncLifetime
         Assert.Equal(0, _h.UnlockCalls);
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task PidfdDeadAfterDirOpen_Refused()
     {
-        if (!OperatingSystem.IsLinux())
-            return;
         var server = await _h.StartAsync();
         var opened = false;
         PeerIdentity.OpenPeer = socket =>
@@ -284,11 +258,9 @@ public class AgentServerTests : IAsyncLifetime
         Assert.Contains("exited", _h.LogText);
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task PidfdAlive_IsTrueForALiveProcess_ThroughTheRealSyscall()
     {
-        if (!OperatingSystem.IsLinux())
-            return;
         List<bool> alive = [];
         PeerIdentity.PidfdAlive = peer => { var a = PeerIdentity.DefaultPidfdAlive(peer); alive.Add(a); return a; };
         await _h.StartAsync();
@@ -297,11 +269,9 @@ public class AgentServerTests : IAsyncLifetime
         Assert.Equal([true], alive);
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task StatusUidDiffersFromCred_Refused()
     {
-        if (!OperatingSystem.IsLinux())
-            return;
         await _h.StartAsync();
         PeerIdentity.ReadStatusUid = _ => AgentHarness.MyUid + 1;
 
@@ -318,11 +288,9 @@ public class AgentServerTests : IAsyncLifetime
         Assert.Equal(AgentHarness.MyUid, read);
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task NoPeerPidfd_FallsBackToDirAndStatusUid()
     {
-        if (!OperatingSystem.IsLinux())
-            return;
         await _h.StartAsync();
         int namespaces = 0, statuses = 0;
         PeerIdentity.OpenPeer = socket => PeerIdentity.DefaultOpenPeer(socket, usePidfd: false); // ENOPROTOOPT: kernel < 6.3
@@ -338,11 +306,9 @@ public class AgentServerTests : IAsyncLifetime
         Assert.Null(await _h.RawAsync(AgentOp.Unlock));
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task NoProc_AgentAllowsOnlyRoot_ControlSocketNoOne()
     {
-        if (!OperatingSystem.IsLinux())
-            return;
         PeerIdentity.ProcMounted = () => false;
         var server = await _h.StartAsync();
 
@@ -373,11 +339,9 @@ public class AgentServerTests : IAsyncLifetime
             PeerIdentity.NoProcControlMessage);
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task BrokerControlPolicy_RefusesUidZero_ChecksNamespaceAndLabel()
     {
-        if (!OperatingSystem.IsLinux())
-            return;
         var controlPath = Path.Combine(_h.Root.FullName, "control.sock");
         using var listener = Listen(controlPath);
 
@@ -401,11 +365,9 @@ public class AgentServerTests : IAsyncLifetime
 
     // ------------------------------------------------------------------ unlocks (ruling 8)
 
-    [Fact]
+    [UnixFact]
     public async Task Unlock_OtherVault_NeverCallsUnlockVault()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         await _h.StartAsync();
         var other = RandomNumberGenerator.GetBytes(16);
 
@@ -416,11 +378,9 @@ public class AgentServerTests : IAsyncLifetime
         Assert.Equal(0, _h.UnlockCalls);
     }
 
-    [Fact]
+    [UnixFact]
     public async Task PrefixCollision_SaysAnotherVaultsAgent()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         await _h.StartAsync();
         // Another vault whose id shares the first 8 bytes: the same socket name, so it reaches this agent.
         var other = _h.VaultId.ToArray();
@@ -435,11 +395,9 @@ public class AgentServerTests : IAsyncLifetime
         Assert.Equal(0, _h.UnlockCalls);
     }
 
-    [Fact]
+    [UnixFact]
     public async Task Unlock_Ok_ReturnsKey_ServerZeroesItsCopy()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         List<byte[]> observed = [];
         AgentServer.AfterSendObserver = frame => { lock (observed) observed.Add(frame.ToArray()); };
         await _h.StartAsync();
@@ -475,11 +433,9 @@ public class AgentServerTests : IAsyncLifetime
         Assert.DoesNotContain("1, 2, 3", text);
     }
 
-    [Fact]
+    [UnixFact]
     public async Task HardwareFailed_PayloadHoldsNoSecret()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var stretched = RandomNumberGenerator.GetBytes(32);
         var key = RandomNumberGenerator.GetBytes(32);
         var raw = Encoding.Latin1.GetString(stretched);
@@ -510,11 +466,9 @@ public class AgentServerTests : IAsyncLifetime
         Assert.Equal(text, Assert.IsType<AgentAnswer.HardwareFailed>(answer).Message);
     }
 
-    [Fact]
+    [UnixFact]
     public async Task HardwareFailed_KeepsAnOrdinaryBackendText()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         const string message = "TPM operation failed while unsealing the key: tpm2_unseal exited 1 (see /tmp/x.log).";
         _h.Unlock = () => throw new TswapException(message);
         await _h.StartAsync();
@@ -527,11 +481,9 @@ public class AgentServerTests : IAsyncLifetime
         Assert.DoesNotContain("internal detail", other);
     }
 
-    [Fact]
+    [UnixFact]
     public async Task Expiry_ZeroesAndStops_AtTheDeadline_EvenWhileBusy()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var deadline = _h.Clock.GetUtcNow() + TimeSpan.FromMinutes(5);
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new ManualResetEventSlim();
@@ -569,14 +521,12 @@ public class AgentServerTests : IAsyncLifetime
         }
     }
 
-    [Fact]
+    [UnixFact]
     public async Task Stop_WhileAnUnlockIsAboutToCloneTheHeldPassword_TheCloneIsRefused()
     {
         // Review T17 p2 MiMo I1: the stop zeroes Held while an unlock may still clone it. The clone after
         // the zeroing must be refused (ObjectDisposedException, StretchedPassword's lock serialises
         // Clone/CopyTo against Dispose), never a read of freed memory, and the client gets Expired.
-        if (OperatingSystem.IsWindows())
-            return;
         var deadline = _h.Clock.GetUtcNow() + TimeSpan.FromMinutes(5);
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var cloneOutcome = new TaskCompletionSource<Exception?>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -617,21 +567,17 @@ public class AgentServerTests : IAsyncLifetime
         }
     }
 
-    [Fact]
+    [UnixFact]
     public async Task ExpiryInThePast_StopsAtOnce()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var server = await _h.StartAsync(_h.Options(expiresAt: _h.Clock.GetUtcNow() - TimeSpan.FromSeconds(1)));
         await server.Stopped;
         Assert.Equal(0, _h.UnlockCalls);
     }
 
-    [Fact]
+    [UnixFact]
     public async Task OneUnlockAtATime()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         int running = 0, maxRunning = 0;
         var entered = new[] { new SemaphoreSlim(0), };
         var release = new SemaphoreSlim(0);
@@ -672,11 +618,9 @@ public class AgentServerTests : IAsyncLifetime
         }
     }
 
-    [Fact]
+    [UnixFact]
     public async Task StopAndStatus_BypassTheUnlockGate()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new ManualResetEventSlim();
         _h.Unlock = () => { entered.TrySetResult(); release.Wait(); return _h.Key.ToArray(); };
@@ -705,11 +649,9 @@ public class AgentServerTests : IAsyncLifetime
         }
     }
 
-    [Fact]
+    [UnixFact]
     public async Task SeventeenthConnection_ClosedAtAccept()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         await _h.StartAsync();
         List<Socket> idle = [];
         try
@@ -742,11 +684,9 @@ public class AgentServerTests : IAsyncLifetime
         }
     }
 
-    [Fact]
+    [UnixFact]
     public async Task SlowClient_ClosedAfterFiveSeconds_WithoutAnAnswer()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         await _h.StartAsync();
         using var slow = await AgentHarness.ConnectAsync(_h.SocketPath);
         var reading = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -763,11 +703,9 @@ public class AgentServerTests : IAsyncLifetime
         Assert.Equal(0, _h.UnlockCalls);
     }
 
-    [Fact]
+    [UnixFact]
     public async Task MalformedRequest_AnswersMalformed_UnknownOpToo()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         await _h.StartAsync();
         var badMagic = AgentProtocol.EncodeRequest((byte)AgentOp.Unlock, _h.VaultId);
         badMagic[7] = (byte)'X';
@@ -781,11 +719,9 @@ public class AgentServerTests : IAsyncLifetime
         Assert.Equal(0, _h.UnlockCalls);
     }
 
-    [Fact]
+    [UnixFact]
     public async Task Client_ConnectDeadline_TwoSeconds()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         Directory.CreateDirectory(_h.Folder);
         using var listener = Listen(_h.SocketPath); // exists, but the connect never completes (seam)
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -807,11 +743,9 @@ public class AgentServerTests : IAsyncLifetime
         Assert.Equal(TimeSpan.FromSeconds(120), AgentClient.DefaultResponseTimeout);
     }
 
-    [Fact]
+    [UnixFact]
     public async Task Client_ResponseDeadline_IsNotRunning()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         Directory.CreateDirectory(_h.Folder);
         using var listener = Listen(_h.SocketPath); // the kernel accepts into the backlog; nobody answers
         AgentClient.Time = _h.Clock;
@@ -827,15 +761,13 @@ public class AgentServerTests : IAsyncLifetime
         Assert.IsType<AgentAnswer.NotRunning>(await answer);
     }
 
-    [Theory]
+    [UnixTheory]
     [InlineData("status")]
     [InlineData("stop")]
     public async Task Client_StatusAndStop_SilentServer_NotRunningAfterTwoSeconds(string op)
     {
         // Review T17 p5 GLM I1, implementation ruling 3: a squatter that accepts and never answers can't hang
         // 'agent status' or 'agent stop' (2 s), unlike an unlock (120 s).
-        if (OperatingSystem.IsWindows())
-            return;
         Directory.CreateDirectory(_h.Folder);
         using var listener = Listen(_h.SocketPath); // the kernel accepts into the backlog; nobody answers
         AgentClient.Time = _h.Clock;
@@ -854,11 +786,9 @@ public class AgentServerTests : IAsyncLifetime
         Assert.Equal(TimeSpan.FromSeconds(2), AgentClient.ControlResponseTimeout);
     }
 
-    [Fact]
+    [UnixFact]
     public void Client_MissingFolder_IsNotRunning_CreatesNothing()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         Assert.False(Directory.Exists(_h.Folder));
 
         Assert.IsType<AgentAnswer.NotRunning>(ClientUnlock());
@@ -869,11 +799,9 @@ public class AgentServerTests : IAsyncLifetime
         Assert.Empty(_h.Root.EnumerateFileSystemInfos());
     }
 
-    [Fact]
+    [UnixFact]
     public async Task Client_MalformedAnswer_IsMalformed()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         Directory.CreateDirectory(_h.Folder);
         using var listener = Listen(_h.SocketPath);
         // An Ok answer to an unlock whose key isn't 32 bytes.
@@ -885,11 +813,9 @@ public class AgentServerTests : IAsyncLifetime
 
     // ------------------------------------------------------------------ starts (rulings 6 and 21)
 
-    [Fact]
+    [UnixFact]
     public async Task Start_CreatesTheFolder0700_AndTheSocket()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         Assert.False(Directory.Exists(_h.Folder));
 
         var server = await _h.StartAsync();
@@ -906,11 +832,10 @@ public class AgentServerTests : IAsyncLifetime
         Assert.Equal(0u, running.RefusedPeers);
     }
 
-    [Fact]
+    [UnixFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public async Task StaleSocket_StartReplacesIt_ClientFallsBack()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         Directory.CreateDirectory(_h.Folder);
         File.SetUnixFileMode(_h.Folder, (UnixFileMode)0b111_000_000);
         // An agent killed without cleaning up: the socket file stays, nothing listens. (.NET unlinks a
@@ -928,12 +853,13 @@ public class AgentServerTests : IAsyncLifetime
         Assert.Equal(_h.Key, Assert.IsType<AgentAnswer.Unlocked>(await Task.Run(() => ClientUnlock())).VaultKey);
     }
 
-    [Fact]
+    [UnixFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public async Task StaleSocket_ProbeFailsOtherwise_RefusedNamingThePath_LeftInPlace()
     {
         // Review T17 p2 MiMo minor 8: a probe failure other than "refused" (here EACCES on a socket of mode
         // 000) is a refusal naming the path, not a raw SocketException, and the file is left alone.
-        if (OperatingSystem.IsWindows() || Environment.IsPrivilegedProcess)
+        if (Environment.IsPrivilegedProcess)
             return; // root connects through mode 000
         Directory.CreateDirectory(_h.Folder);
         File.SetUnixFileMode(_h.Folder, (UnixFileMode)0b111_000_000);
@@ -948,13 +874,11 @@ public class AgentServerTests : IAsyncLifetime
         Assert.Equal(BrokerNative.EntryType.Socket, BrokerNative.LStat(_h.SocketPath)!.Value.Type);
     }
 
-    [Fact]
+    [UnixFact]
     public async Task Start_AnotherVaultsAgentAtThePath_SaysSo()
     {
         // Review T17 p2 GLM M-3: a 16-hex prefix collision (or TSWAP_AGENT_SOCK pointing at another vault's
         // agent) is not "an agent for this vault is already running".
-        if (OperatingSystem.IsWindows())
-            return;
         await _h.StartAsync(_h.Options() with { VaultId = RandomNumberGenerator.GetBytes(16) });
 
         var ex = await Assert.ThrowsAsync<TswapException>(() => AgentServer.StartAsync(_h.Options()));
@@ -962,11 +886,9 @@ public class AgentServerTests : IAsyncLifetime
         Assert.Equal(AgentSocketPath.OtherVaultMessage(_h.SocketPath), ex.Message);
     }
 
-    [Fact]
+    [UnixFact]
     public async Task TwoConcurrentStarts_ExactlyOneReady_OtherAlreadyRunning()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var starts = await Task.WhenAll(Enumerable.Range(0, 2).Select(_ => Task.Run(async () =>
         {
             try
@@ -986,11 +908,9 @@ public class AgentServerTests : IAsyncLifetime
         await ready.Server!.DisposeAsync();
     }
 
-    [Fact]
+    [UnixFact]
     public async Task LiveAgent_SecondStart_AlreadyRunning_LiveSocketUntouched()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         await _h.StartAsync();
         var before = BrokerNative.Identify(_h.SocketPath, follow: false);
 
@@ -1003,11 +923,10 @@ public class AgentServerTests : IAsyncLifetime
         Assert.IsType<AgentAnswer.Unlocked>(await Task.Run(() => ClientUnlock()));
     }
 
-    [Fact]
+    [UnixFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public async Task LockHeld_SaysAlreadyRunning()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         Directory.CreateDirectory(_h.Folder);
         File.SetUnixFileMode(_h.Folder, (UnixFileMode)0b111_000_000);
         using var held = UnixLockFile.TryTake(Path.Combine(_h.Folder, $"agent-{AgentSocketPath.Prefix(_h.VaultId)}.lock"), out _);
@@ -1019,11 +938,10 @@ public class AgentServerTests : IAsyncLifetime
         Assert.Equal(BrokerNative.EntryType.Missing, BrokerNative.LStat(_h.SocketPath)!.Value.Type);
     }
 
-    [Fact]
+    [UnixFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public async Task Probe_AcceptsButNeverAnswers_RefusesWithoutReplacing()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         Directory.CreateDirectory(_h.Folder);
         File.SetUnixFileMode(_h.Folder, (UnixFileMode)0b111_000_000);
         using var squatter = Listen(_h.SocketPath); // accepts (into the backlog) and never answers
@@ -1038,11 +956,10 @@ public class AgentServerTests : IAsyncLifetime
         Assert.Equal(TimeSpan.FromSeconds(2), _h.Options().ProbeTimeout);
     }
 
-    [Fact]
+    [UnixFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public async Task Probe_SomethingAnswers_AlreadyRunning()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         Directory.CreateDirectory(_h.Folder);
         File.SetUnixFileMode(_h.Folder, (UnixFileMode)0b111_000_000);
         using var listener = Listen(_h.SocketPath); // an agent without the lock (e.g. another lock path) that answers
@@ -1054,11 +971,10 @@ public class AgentServerTests : IAsyncLifetime
         await serving;
     }
 
-    [Fact]
+    [UnixFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public async Task NonSocketFileAtPath_Refused()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         Directory.CreateDirectory(_h.Folder);
         File.SetUnixFileMode(_h.Folder, (UnixFileMode)0b111_000_000);
         await File.WriteAllTextAsync(_h.SocketPath, "not a socket");
@@ -1069,11 +985,9 @@ public class AgentServerTests : IAsyncLifetime
         Assert.Equal("not a socket", await File.ReadAllTextAsync(_h.SocketPath));
     }
 
-    [Fact]
+    [UnixFact]
     public async Task Serve_RefusesRoot_LeavesNothing()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var ex = await Assert.ThrowsAsync<TswapException>(() =>
             AgentServer.StartAsync(_h.Options(ownership: new AgentOwnership(privileged: true)) with { VaultUserName = "alice" }));
 
@@ -1081,11 +995,10 @@ public class AgentServerTests : IAsyncLifetime
         Assert.Empty(_h.Root.EnumerateFileSystemInfos("*", SearchOption.AllDirectories)); // no folder, socket, lock or temp file
     }
 
-    [Fact]
+    [UnixFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public async Task Serve_FolderChecksApply_ToAnExistingFolder()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         Directory.CreateDirectory(_h.Folder);
         File.SetUnixFileMode(_h.Folder, (UnixFileMode)0b111_101_101);
 
@@ -1095,11 +1008,9 @@ public class AgentServerTests : IAsyncLifetime
         Assert.Empty(Directory.EnumerateFileSystemEntries(_h.Folder));
     }
 
-    [Fact]
+    [UnixFact]
     public async Task Stop_RemovesTheSocket_ReleasesTheLock_SoANewStartWorks()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var server = await _h.StartAsync();
         Assert.IsType<AgentAnswer.Stopped>(await Task.Run(() => AgentClient.Stop(_h.SocketPath, _h.VaultId, AgentHarness.MyUid)));
         await server.Stopped;
@@ -1160,11 +1071,9 @@ public class AgentServerTests : IAsyncLifetime
 
     // ------------------------------------------------------------------ Windows
 
-    [Fact]
+    [WindowsFact]
     public async Task Windows_Client_RefusesServerOfAnotherSid()
     {
-        if (!OperatingSystem.IsWindows())
-            return;
         await _h.StartAsync();
         Assert.IsType<AgentAnswer.Unlocked>(await Task.Run(() => ClientUnlock()));
 

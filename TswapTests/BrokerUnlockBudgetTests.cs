@@ -37,11 +37,9 @@ public class BrokerUnlockBudgetTests(ITestOutputHelper output) : IAsyncLifetime
 
     // ------------------------------------------------------------------ the guard
 
-    [Fact]
+    [UnixFact("the broker is Unix only")]
     public void ASocketAt20AttemptsInAMinute_IsRefusedWithSocketUnlockRate_AnotherSocketStillUnlocks()
     {
-        if (OperatingSystem.IsWindows())
-            return; // the broker is Unix only
         var clock = new BrokerManualClock();
         var guard = new BrokerUnlockGuard(new BrokerLimits(), clock);
 
@@ -51,11 +49,9 @@ public class BrokerUnlockBudgetTests(ITestOutputHelper output) : IAsyncLifetime
         Assert.Null(guard.Refusal("B"));
     }
 
-    [Fact]
+    [UnixFact]
     public void AAt20_BAt10_AThirdSocketGetsUnlockRate_AndAStillGetsSocketUnlockRate()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var clock = new BrokerManualClock();
         var guard = new BrokerUnlockGuard(new BrokerLimits(), clock);
         Attempts(guard, "A", 20);
@@ -66,11 +62,9 @@ public class BrokerUnlockBudgetTests(ITestOutputHelper output) : IAsyncLifetime
         Assert.Equal("unlock-rate", guard.Refusal("B"));
     }
 
-    [Fact]
+    [UnixFact]
     public void AfterTheMinutePasses_ASocketAtItsBudgetUnlocksAgain()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var clock = new BrokerManualClock();
         var guard = new BrokerUnlockGuard(new BrokerLimits(), clock);
         Attempts(guard, "A", 20);
@@ -83,11 +77,9 @@ public class BrokerUnlockBudgetTests(ITestOutputHelper output) : IAsyncLifetime
         Assert.Equal("socket-unlock-rate", guard.Refusal("A"));
     }
 
-    [Fact]
+    [UnixFact]
     public void ASocketBothLockedOutAndAtItsBudget_ReportsLockedOut()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var clock = new BrokerManualClock();
         var limits = new BrokerLimits();
         var guard = new BrokerUnlockGuard(limits, clock);
@@ -109,11 +101,9 @@ public class BrokerUnlockBudgetTests(ITestOutputHelper output) : IAsyncLifetime
     private static string LogLines(BrokerHarness h, string socket, string reason) =>
         string.Join('\n', h.LogText.ToString().Split('\n').Where(l => l.Contains($"socket={socket} ", StringComparison.Ordinal) && l.Contains($"reason={reason}", StringComparison.Ordinal)));
 
-    [Fact]
+    [UnixFact]
     public async Task ARouteSocketAtItsBudget_GetsTheUniform503_ByteIdenticalToAnUnlockRateRefusal()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         await _h.StartAsync();
         for (var i = 0; i < 20; i++)
             Assert.Equal(200, BrokerHarness.StatusOf(await _h.GetAsync("lane1", "/echo/a")));
@@ -188,11 +178,9 @@ public class BrokerUnlockBudgetTests(ITestOutputHelper output) : IAsyncLifetime
     private static readonly byte[] KeyA = SshTestKeyMaker.Ed25519Pem(RandomNumberGenerator.GetBytes(32));
     private static readonly byte[] BlobA = SshTestKeyMaker.PublicBlob(KeyA);
 
-    [Fact]
+    [UnixFact("the broker is Unix-only (Unix sockets and kernel peer credentials)")]
     public async Task AnSshAgentSocketAtItsBudget_GetsSshAgentFailure_LoggedAsSocketUnlockRate()
     {
-        if (SshTestSkip.OnWindows(output))
-            return;
         await using var ssh = new SshAgentHarness();
         var config = $$"""
             {

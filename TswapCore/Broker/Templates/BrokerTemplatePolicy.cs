@@ -188,41 +188,6 @@ public static class BrokerTemplateValidator
     /// <summary>A cap on the whole command line (well under the kernel's limit with the environment).</summary>
     public const int MaxArgvTotalBytes = 1024 * 1024;
 
-    /// <summary>
-    /// Environment variables that make a shell, an interpreter, a library or a tool run code they name,
-    /// or load, trust or write files they name (fix round 1, GLM 6 / MiMo M7; brief I224 D7 H4):
-    /// refused, like PATH and LD_*. The operator's tool, not the caller, would run it, but with the
-    /// secret in reach. <c>HOME</c> is here because the sandbox doesn't set it: a template's
-    /// <c>HOME</c> would redirect <c>~/.gitconfig</c>, <c>~/.netrc</c> and <c>~/.curlrc</c>.
-    /// Names a prefix in <see cref="CodeEnvPrefixes"/> covers are not repeated here.
-    /// </summary>
-    private static readonly HashSet<string> CodeEnvNames = new(StringComparer.Ordinal)
-    {
-        "BASH_ENV", "ENV", "SHELLOPTS", "BASHOPTS", "PS4", "PROMPT_COMMAND", "IFS", "CDPATH",
-        "GLIBC_TUNABLES", "MALLOC_CHECK_",
-        "GIT_SSH", "GIT_SSH_COMMAND", "GIT_EXTERNAL_DIFF", "GIT_ASKPASS", "SSH_ASKPASS", "GIT_EXEC_PATH",
-        "GIT_PROXY_COMMAND", "GIT_TEMPLATE_DIR", "GIT_EDITOR", "EDITOR", "VISUAL", "PAGER", "GIT_PAGER",
-        // Brief I224 D7 H4.
-        "GCONV_PATH", "LOCPATH", "NLSPATH", "REQUESTS_CA_BUNDLE", "NETRC", "HOSTALIASES", "LOCALDOMAIN",
-        "RES_OPTIONS", "TMPDIR", "HOME", "CLASSPATH", "SSLKEYLOGFILE", "INPUTRC", "TERMINFO", "TERMINFO_DIRS",
-        "MAVEN_OPTS", "GRADLE_OPTS",
-        // I224 fix round 1 (MiMo p2 M3, the code-execution ones): a repo with hooks, less's input filters, a browser.
-        "GIT_DIR", "GIT_WORK_TREE", "LESSOPEN", "LESSCLOSE", "BROWSER",
-    };
-
-    /// <summary>
-    /// Prefixes refused for the same reason (brief I224 D7 H4 added all but the first two). They
-    /// knowingly also refuse harmless names (<c>JAVA_HOME</c>, <c>NODE_ENV</c>, <c>PYTHONUNBUFFERED</c>,
-    /// <c>DOTNET_CLI_TELEMETRY_OPTOUT</c>): a template that needs one sets it in a wrapper script under
-    /// <c>/usr</c> or in the image instead.
-    /// </summary>
-    private static readonly string[] CodeEnvPrefixes =
-    [
-        "GIT_CONFIG", "BASH_FUNC_",
-        "PYTHON", "PERL", "RUBY", "GEM_", "NODE_", "DOTNET_", "JAVA", "_JAVA_", "JDK_JAVA_", "OPENSSL_", "LUA_",
-        "XDG_", "SSL_", "CURL_",
-    ];
-
     /// <summary>How long an argument's pattern may take on one value.</summary>
     public static readonly TimeSpan ArgMatchTimeout = TimeSpan.FromMilliseconds(100);
 
@@ -236,7 +201,6 @@ public static class BrokerTemplateValidator
     private static readonly string[] SystemRoots = ["/usr/", "/bin/", "/sbin/", "/lib/", "/lib64/"];
 
     private static readonly Regex ArgNameRegex = new(@"\A[a-z0-9_-]{1,32}\z", RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
-    private static readonly Regex EnvNameRegex = new(@"\A[A-Za-z_][A-Za-z0-9_]{0,63}\z", RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
     private static readonly Regex SecretNameRegex = new(@"\A[a-zA-Z0-9_-]{1,64}\z", RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
     private static readonly Regex SecretFileNameRegex = new(@"\A[A-Za-z0-9._-]{1,64}\z", RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
 
@@ -356,14 +320,18 @@ public static class BrokerTemplateValidator
         List<BrokerTemplateEnv> env = [];
         foreach (var (envName, value) in t.Env ?? [])
         {
-            if (!EnvNameRegex.IsMatch(envName))
-                throw Ex($"'{BrokerPolicy.Printable(envName)}' is not a valid environment variable name.");
-            if (envName is "PATH" or "LC_ALL" or "PWD")
-                throw Ex($"env may not set {envName}: the baseline (PATH=/usr/bin:/bin, LC_ALL=C, and bwrap's PWD) is fixed.");
-            if (envName.StartsWith("LD_", StringComparison.Ordinal))
-                throw Ex($"env may not set {envName} (LD_* changes how every program in the sandbox loads).");
-            if (CodeEnvNames.Contains(envName) || CodeEnvPrefixes.Any(prefix => envName.StartsWith(prefix, StringComparison.Ordinal)))
-                throw Ex($"env may not set {envName}: it can make a shell, interpreter, library or tool run extra code, or load, trust or write files it names.");
+            // Brief T26: the name rules are shared with 'run --env' (ChildEnvironmentRules); the wording is the broker's.
+            switch (ChildEnvironmentRules.Classify(envName, StringComparison.Ordinal))
+            {
+                case ChildEnvironmentName.BadShape:
+                    throw Ex($"'{BrokerPolicy.Printable(envName)}' is not a valid environment variable name.");
+                case ChildEnvironmentName.Baseline:
+                    throw Ex($"env may not set {envName}: the baseline (PATH=/usr/bin:/bin, LC_ALL=C, and bwrap's PWD) is fixed.");
+                case ChildEnvironmentName.Loader:
+                    throw Ex($"env may not set {envName} (LD_* changes how every program in the sandbox loads).");
+                case ChildEnvironmentName.Code:
+                    throw Ex($"env may not set {envName}: it can make a shell, interpreter, library or tool run extra code, or load, trust or write files it names.");
+            }
             if (value is null)
                 throw Ex($"env '{envName}' has no value.");
             var secret = BrokerPolicy.SecretRefRegex.Match(value!);

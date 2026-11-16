@@ -72,11 +72,9 @@ public class BrokerLockedTests : IAsyncLifetime
 
     // ================================================================== the locked answer
 
-    [Fact]
+    [UnixFact]
     public async Task LockedBroker_HttpAnswerIsByteIdenticalToTheBusyRefusal()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _c.NewState();
         var locked = await HttpBrokerAsync();
         var lockedBytes = await locked.SendRawAsync("lane1", "GET /echo/a HTTP/1.1\r\nHost: broker\r\nConnection: close\r\n\r\n");
@@ -95,11 +93,9 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.Equal(0, locked.Secrets.Unlocks);
     }
 
-    [Fact]
+    [UnixFact]
     public async Task LockedBroker_SshAgentAndCall_GetTheirUniformRefusal()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _c.NewState();
 
         // The ssh-agent endpoint: every request, the identities list included, is SSH_AGENT_FAILURE.
@@ -184,11 +180,9 @@ public class BrokerLockedTests : IAsyncLifetime
         }
     }
 
-    [Fact]
+    [UnixFact]
     public async Task Locked_IsNotCountedAsUnlockFailure()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         await _c.StartAsync();
         var h = await HttpBrokerAsync();
 
@@ -204,11 +198,9 @@ public class BrokerLockedTests : IAsyncLifetime
 
     // ================================================================== unlock, lock, status
 
-    [Fact]
+    [UnixFact]
     public async Task Unlock_ThenStatus_ThenLock_InProcess()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         await _c.StartAsync();
         var before = Assert.IsType<BrokerControlAnswer.State>(await _c.StatusAsync());
         Assert.False(before.Unlocked);
@@ -227,12 +219,10 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.Throws<BrokerLockedException>(() => _c.State.CloneHeld());
     }
 
-    [Fact]
+    [UnixFact]
     public async Task Unlock_LogLine_TimeIsTheSameInEveryCulture()
     {
         // Review T17 p3 MiMo M-8, the broker's own log line: the Buddhist calendar must not move the year.
-        if (OperatingSystem.IsWindows())
-            return;
         var previous = System.Globalization.CultureInfo.CurrentCulture;
         try
         {
@@ -251,11 +241,9 @@ public class BrokerLockedTests : IAsyncLifetime
         }
     }
 
-    [Fact]
+    [UnixFact]
     public async Task EmptyPassword_AtBrokerUnlock_Cancels()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         using var m = new FleetMachine("bk-empty") { Tpm = RandomNumberGenerator.GetBytes(32) };
         var fleet = await RealVaultBrokerAsync(m);
 
@@ -268,11 +256,9 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.True(fleet.State.IsLocked);
     }
 
-    [Fact]
+    [UnixFact]
     public async Task Unlock_WrongPassword_StaysLocked_SaysWrongPassword()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         // The real proof (simulated TPM password slot) through the CLI's 'broker unlock'.
         using var m = new FleetMachine("bk-wrong") { Tpm = RandomNumberGenerator.GetBytes(32) };
         var fleet = await RealVaultBrokerAsync(m);
@@ -296,12 +282,10 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.Contains("The broker is locked.", m.Ok("", "broker", "status"));
     }
 
-    [Fact]
+    [UnixFact]
     public async Task BrokerUnlock_RamDisclosureOnStderr_BeforeThePrompt()
     {
         // Review T17 p3 GLM I1/M3: the disclosure is said before the user types the password, on stderr.
-        if (OperatingSystem.IsWindows())
-            return;
         using var m = new FleetMachine("bk-disclose") { Tpm = RandomNumberGenerator.GetBytes(32) };
         await RealVaultBrokerAsync(m);
 
@@ -315,12 +299,10 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.True(disclosure < stderr.IndexOf(TerminalPasswordProvider.PromptText, StringComparison.Ordinal), stderr);
     }
 
-    [Fact]
+    [UnixFact]
     public async Task BrokerUnlock_NoTerminal_SaysRunItFromATerminal_NotTheAgent()
     {
         // Review T17 p3 MiMo M-5: a broker never asks an agent, so its refusal without a terminal doesn't suggest one.
-        if (OperatingSystem.IsWindows())
-            return;
         using var m = new FleetMachine("bk-piped") { Tpm = RandomNumberGenerator.GetBytes(32) };
         var c = await RealVaultBrokerAsync(m);
 
@@ -333,12 +315,10 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.True(c.State.IsLocked);
     }
 
-    [Fact]
+    [UnixFact]
     public void BrokerUnlock_NoBrokerRunning_SaysSoBeforeThePrompt()
     {
         // Review T17 p3 GLM I1 (second half): a broker that doesn't answer is found before the password is typed.
-        if (OperatingSystem.IsWindows())
-            return;
         using var m = new FleetMachine("bk-absent") { Tpm = RandomNumberGenerator.GetBytes(32) };
         PasswordVaultTestSupport.InitTpmPasswordVault(m, Password);
         var path = Path.Combine(_c.Root.FullName, "absent", "control.sock");
@@ -371,11 +351,9 @@ public class BrokerLockedTests : IAsyncLifetime
         return c;
     }
 
-    [Fact]
+    [UnixFact]
     public async Task UnlockWhileUnlocked_RefusedBeforePayloadRead()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         await _c.StartAsync();
         Assert.IsType<BrokerControlAnswer.Done>(await _c.UnlockAsync());
         var reads = _c.Events.Count(e => e == "payload-read");
@@ -388,11 +366,9 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.Equal(_c.Right, _c.HeldBytes());
     }
 
-    [Fact]
+    [UnixFact]
     public async Task TwoConcurrentUnlocks_OneFails()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         // Right first, wrong second: the second is refused as already unlocked, its payload never read.
         await _c.StartAsync();
         _c.ProveGate = ControlHarness.NewSignal();
@@ -409,11 +385,9 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.Equal(_c.Right, _c.HeldBytes());
     }
 
-    [Fact]
+    [UnixFact]
     public async Task TwoConcurrentUnlocks_WrongFirst_RightSecond_Unlocks()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         await _c.StartAsync();
         _c.ProveGate = ControlHarness.NewSignal();
         var first = _c.UnlockAsync(right: false);
@@ -450,11 +424,9 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.Contains("non-dumpable", ex.Message);
     }
 
-    [Fact]
+    [UnixFact]
     public async Task DumpableTransitions_Unlock_NonDumpableBeforeThePayloadRead()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         await _c.StartAsync();
         var mark = _c.Mark;
 
@@ -466,11 +438,9 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.DoesNotContain("dumpable:True", events);
     }
 
-    [Fact]
+    [UnixFact]
     public async Task DumpableTransitions_Lock_ZeroesAndUnloadsBeforeDumpable()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         await _c.StartAsync();
         Assert.IsType<BrokerControlAnswer.Done>(await _c.UnlockAsync());
         var mark = _c.Mark;
@@ -480,11 +450,9 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.Equal(["free", "ssh-unloaded", "set-dumpable:True", "dumpable:True"], _c.EventsSince(mark));
     }
 
-    [Fact]
+    [UnixFact]
     public async Task DumpableTransitions_Timeout_ZeroesAndUnloadsBeforeDumpable()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         await _c.StartAsync();
         Assert.IsType<BrokerControlAnswer.Done>(await _c.UnlockAsync(expiresAt: _c.Clock.GetUtcNow().AddMinutes(5)));
         var mark = _c.Mark;
@@ -504,13 +472,11 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.Contains("timeout", _c.LogText);
     }
 
-    [Fact]
+    [UnixFact]
     public async Task StaleExpiryTimer_FiringAfterALockAndANewUnlock_DoesNotLockTheNewUnlock()
     {
         // Review T17 re-review (verify before merge): a timer's callback can still run after Dispose (it was
         // already queued). The first unlock's timer, fired late, must not end a later unlock.
-        if (OperatingSystem.IsWindows())
-            return;
         await _c.StartAsync();
         Assert.IsType<BrokerControlAnswer.Done>(await _c.UnlockAsync(expiresAt: _c.Clock.GetUtcNow().AddMinutes(5)));
         var firstTimer = _c.Clock.CreatedCallbacks.Last();
@@ -535,11 +501,9 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.True(_c.State.IsLocked);
     }
 
-    [Fact]
+    [UnixFact]
     public async Task DumpableTransitions_FailedProof_ClonesAndCandidateFreedBeforeDumpable()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         await _c.StartAsync();
         var mark = _c.Mark;
 
@@ -556,13 +520,11 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.True(_c.State.IsLocked);
     }
 
-    [Fact]
+    [UnixFact]
     public async Task DumpableTransitions_LockCantMakeDumpableAgain_StopsServe()
     {
         // Ruling 12 (controller ruling, review T17 p2 MiMo I3): a failed PR_SET_DUMPABLE 1 on the way
         // back to locked is fatal for serve, like the other transitions.
-        if (OperatingSystem.IsWindows())
-            return;
         await _c.StartAsync();
         Assert.IsType<BrokerControlAnswer.Done>(await _c.UnlockAsync());
         Assert.Empty(_c.FatalReasons);
@@ -576,12 +538,10 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.Throws<BrokerLockedException>(() => _c.State.CloneHeld());
     }
 
-    [Fact]
+    [UnixFact]
     public async Task DumpableTransitions_FailedProofCantMakeDumpableAgain_StopsServe()
     {
         // Review T17 p2 GLM M-1 / MiMo I3: the failed proof's way back to locked is a transition too.
-        if (OperatingSystem.IsWindows())
-            return;
         await _c.StartAsync();
         _c.DumpableOneFails = true;
 
@@ -593,11 +553,9 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.True(_c.State.IsLocked);
     }
 
-    [Fact]
+    [UnixFact]
     public async Task Unlock_SshKeyCantLoad_StaysLocked_NamesTheKey_NotCountedByTheGuard()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var loads = 0;
         _c.LoadSshKeys = () =>
         {
@@ -628,11 +586,9 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.False(_c.State.IsLocked);
     }
 
-    [Fact]
+    [UnixFact]
     public async Task WrongPasswords_AreCountedByTheGuard()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         await _c.StartAsync();
         for (var i = 0; i < new BrokerLimits().FailuresBeforeLockout; i++)
             Assert.Equal(VaultPasswordMessages.WrongPasswordTpm, ControlHarness.Refusal(await _c.UnlockAsync(right: false)));
@@ -646,13 +602,11 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.True(_c.State.IsLocked);
     }
 
-    [Fact]
+    [UnixFact]
     public async Task MissingVaultPasswordFile_IsNotCountedByTheGuard()
     {
         // Review T17 p2 MiMo minor 2: a broken configuration (no vault-password file, or conflicting
         // copies) must not trip the brute-force guard and then refuse the right password.
-        if (OperatingSystem.IsWindows())
-            return;
         var missing = true;
         await _c.StartAsync(prove: candidate =>
             missing ? throw new VaultPasswordUnavailableException(VaultPasswordMessages.MissingFile) : _c.Prove(candidate));
@@ -664,13 +618,11 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.False(_c.State.IsLocked);
     }
 
-    [Fact]
+    [UnixFact]
     public async Task VerifierMismatch_IsNotCountedByTheGuard()
     {
         // Review T17 p5 MiMo I2 (controller ruling, fix round 3): the hardware accepted the password and only the
         // vault-password file refused it; guessing can't produce that, so the brute-force guard doesn't count it.
-        if (OperatingSystem.IsWindows())
-            return;
         var mismatch = true;
         await _c.StartAsync(prove: candidate => mismatch
             ? throw new VaultPasswordRefusedException(VaultPasswordMessages.VerifierMismatch, VaultPasswordRefusal.FileMismatch)
@@ -700,11 +652,9 @@ public class BrokerLockedTests : IAsyncLifetime
         }
     }
 
-    [Fact]
+    [UnixFact]
     public async Task LockWithUnlockInFlight_DrainsBeforeDumpable_HttpRequest()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         await _c.StartAsync();
         var secrets = new ProviderSecrets(_c.State) { Gate = ControlHarness.NewSignal() };
         var (h, _) = await HttpBrokerWithSourceAsync(secrets);
@@ -735,11 +685,9 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.Equal(["drain-wait", "free", "free", "ssh-unloaded", "set-dumpable:True", "dumpable:True"], _c.EventsSince(mark));
     }
 
-    [Fact]
+    [UnixFact]
     public async Task TimeoutWithUnlockInFlight_DrainsBeforeDumpable_HttpRequest()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         await _c.StartAsync();
         var secrets = new ProviderSecrets(_c.State) { Gate = ControlHarness.NewSignal() };
         var (h, _) = await HttpBrokerWithSourceAsync(secrets);
@@ -771,11 +719,9 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.Equal(["drain-wait", "free", "free", "ssh-unloaded", "set-dumpable:True", "dumpable:True"], _c.EventsSince(mark));
     }
 
-    [Fact]
+    [UnixFact]
     public async Task LockWithUnlockInFlight_DrainsBeforeDumpable_ProofInFlight()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         await _c.StartAsync();
         _c.ProveGate = ControlHarness.NewSignal();
         var unlock = _c.UnlockAsync();
@@ -805,11 +751,9 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.Throws<BrokerLockedException>(() => _c.State.CloneHeld());
     }
 
-    [Fact]
+    [UnixFact]
     public async Task UnlockQueuedAtLock_RefusedBeforePayloadRead()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         await _c.StartAsync();
         _c.ProveGate = ControlHarness.NewSignal();
         var first = _c.UnlockAsync();
@@ -830,13 +774,11 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.Equal(1, _c.ProveCalls);
     }
 
-    [Fact]
+    [UnixFact]
     public async Task LockAfterTheProofHeld_NoSshKeys_AnswersLockedWhileUnlocking()
     {
         // Review T17 p2 (MiMo B1, GLM I-1): with no ssh keys configured, a return to locked that runs
         // after the candidate is held but before the answer is sent must not be answered "Ok".
-        if (OperatingSystem.IsWindows())
-            return;
         Assert.Null(_c.LoadSshKeys);
         await _c.StartAsync();
         var locks = 0;
@@ -857,11 +799,9 @@ public class BrokerLockedTests : IAsyncLifetime
 
     // ================================================================== macOS (seam order; the steps are faked, so this runs everywhere)
 
-    [Fact]
+    [UnixFact]
     public async Task MacOs_DenyAttachBeforeFirstPayloadRead()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         await _c.StartAsync(ProcessHardening.Platform.MacOs);
 
         Assert.IsType<BrokerControlAnswer.Done>(await _c.UnlockAsync());
@@ -887,11 +827,9 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.Equal(["core-limit"], _c.EventsSince(mark));
     }
 
-    [Fact]
+    [UnixFact]
     public async Task MacOs_UnlockAtUnlockedBroker_ServerSaysAlreadyUnlocked()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         // On macOS the client can't tell (no namespace link); the server refuses without reading the payload.
         await _c.StartAsync(ProcessHardening.Platform.MacOs);
         Assert.IsType<BrokerControlAnswer.Done>(await _c.UnlockAsync());
@@ -916,11 +854,9 @@ public class BrokerLockedTests : IAsyncLifetime
         return BrokerControlClient.Unlock(path, _c.VaultId, MyUid, password, null);
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task UnlockClient_UnreadableServerLink_RefusesNothingSent()
     {
-        if (!OperatingSystem.IsLinux())
-            return;
         var fake = FakeServer(FakeControlServer.Answer(AgentStatus.Ok));
         PeerIdentity.ReadUserNamespace = _ => null; // EACCES: a non-dumpable (unlocked, or not the real) broker
 
@@ -931,11 +867,9 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.Empty(fake.Received);
     }
 
-    [Fact]
+    [UnixFact]
     public async Task UnlockClient_RefusesServerOfAnotherUid()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var fake = FakeServer(FakeControlServer.Answer(AgentStatus.Ok));
         PeerIdentity.ReadCredentials = _ => (MyUid + 1, 4242);
 
@@ -946,11 +880,9 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.Empty(fake.Received);
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task UnlockClient_RefusesServerInAnotherUserNamespace_NeverSends()
     {
-        if (!OperatingSystem.IsLinux())
-            return;
         var fake = FakeServer(FakeControlServer.Answer(AgentStatus.Ok));
         PeerIdentity.ReadUserNamespace = _ => "user:[4026531999]";
 
@@ -961,11 +893,9 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.Empty(fake.Received);
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task UnlockClient_RefusesServerWithContainerLabel()
     {
-        if (!OperatingSystem.IsLinux())
-            return;
         var fake = FakeServer(FakeControlServer.Answer(AgentStatus.Ok));
         PeerIdentity.ReadPeerLabel = _ => "system_u:system_r:container_t:s0:c1,c2";
 
@@ -976,11 +906,9 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.Empty(fake.Received);
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task LockAndStatus_NoNamespaceCheck_UidAndLabelOnly()
     {
-        if (!OperatingSystem.IsLinux())
-            return;
         // A server in another user namespace (a non-dumpable unlocked broker reads that way too): lock and status still work.
         PeerIdentity.ReadUserNamespace = _ => "user:[4026531999]";
         var lockServer = FakeServer(FakeControlServer.Answer(AgentStatus.Ok));
@@ -1003,13 +931,11 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.Empty(labelled.Received);
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task StatusClient_SilentServer_NotRunningAfterTwoSeconds()
     {
         // Review T17 p5 GLM I1, implementation ruling 3: a squatter that accepts and never answers can't hang
         // 'broker status'. ('broker lock' waits up to 120 s by design: it may have to drain a running unlock.)
-        if (!OperatingSystem.IsLinux())
-            return;
         var silent = FakeServer(answer: null);
         BrokerControlClient.Time = _c.Clock;
 
@@ -1026,11 +952,9 @@ public class BrokerLockedTests : IAsyncLifetime
 
     // ================================================================== the server's checks of its peers (ruling 20)
 
-    [Fact]
+    [UnixFact]
     public async Task ControlSocket_RefusesUidZeroAndOthers()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var server = await _c.StartAsync();
 
         PeerIdentity.ReadCredentials = _ => (0, Environment.ProcessId);
@@ -1046,11 +970,9 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.True(_c.State.IsLocked);
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task ControlSocket_RefusesPeerInAnotherUserNamespace()
     {
-        if (!OperatingSystem.IsLinux())
-            return;
         var server = await _c.StartAsync();
         PeerIdentity.ReadUserNamespace = _ => "user:[4026531999]";
 
@@ -1062,14 +984,12 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.DoesNotContain("payload-read", _c.Events);
     }
 
-    [Theory]
+    [LinuxTheory]
     [InlineData("container_t")]
     [InlineData("spc_t")]
     [InlineData("container_runtime_t")]
     public async Task ControlSocket_RefusesContainerLabel(string type)
     {
-        if (!OperatingSystem.IsLinux())
-            return;
         var server = await _c.StartAsync();
         PeerIdentity.ReadPeerLabel = _ => $"system_u:system_r:{type}:s0:c1,c2";
 
@@ -1080,11 +1000,9 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.Equal(0, _c.ProveCalls);
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task ControlSocket_NoProc_NothingMayConnect_SaidOnce()
     {
-        if (!OperatingSystem.IsLinux())
-            return;
         PeerIdentity.ProcMounted = () => false;
         await _c.StartAsync();
 
@@ -1094,11 +1012,9 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.Equal(1, _c.LogText.Split('\n').Count(l => l.Contains(PeerIdentity.NoProcControlMessage) && !l.Contains("refused")));
     }
 
-    [Fact]
+    [UnixFact]
     public async Task ControlSocket_OtherVaultAndMalformed_NeverProve()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         await _c.StartAsync();
 
         var other = await AgentHarness.RawAsync(_c.SocketPath,
@@ -1114,7 +1030,7 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.DoesNotContain("dumpable:False", _c.Events);
     }
 
-    [Theory]
+    [UnixTheory]
     [InlineData(0)]
     [InlineData(1)]
     [InlineData(31)]
@@ -1125,8 +1041,6 @@ public class BrokerLockedTests : IAsyncLifetime
     public async Task ControlSocket_UnlockPayloadNot32Or40Bytes_IsMalformed_NeverProves(int length)
     {
         // Review T17 p5 MiMo M5: ruling 14's unlock payload is the 32 stretched bytes, or those plus 8 for an expiry.
-        if (OperatingSystem.IsWindows())
-            return;
         await _c.StartAsync();
 
         var answer = await AgentHarness.RawAsync(_c.SocketPath, _c.UnlockFrame(new byte[length]));
@@ -1138,11 +1052,9 @@ public class BrokerLockedTests : IAsyncLifetime
 
     // ================================================================== folders, locks, stale sockets (rulings 6 and 21)
 
-    [Fact]
+    [UnixFact]
     public async Task BrokerServe_CreatesTheRunFolder_WhenMissing()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         Assert.False(Directory.Exists(_c.RunDir));
 
         await _c.StartAsync();
@@ -1158,11 +1070,10 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.IsType<BrokerControlAnswer.Done>(await _c.UnlockAsync());
     }
 
-    [Fact]
+    [UnixFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public async Task ControlSocket_FolderIs0700()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var folder = Path.GetDirectoryName(_c.SocketPath)!;
         Directory.CreateDirectory(folder);
         File.SetUnixFileMode(_c.RunDir, (UnixFileMode)0b111_000_000);
@@ -1175,11 +1086,9 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.Empty(Directory.EnumerateFileSystemEntries(folder));
     }
 
-    [Fact]
+    [UnixFact]
     public async Task BrokerServe_AsRoot_Refuses_LeavesNothing()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var ex = await Assert.ThrowsAsync<TswapException>(() => _c.StartAsync(ownership: new AgentOwnership(privileged: true)));
 
         Assert.Contains("never as root", ex.Message);
@@ -1187,11 +1096,9 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.Empty(Directory.EnumerateFileSystemEntries(_c.Root.FullName));
     }
 
-    [Fact]
+    [UnixFact]
     public void BrokerServe_AsRoot_ServeCommandRefusesBeforeCreatingAnything()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         using var m = new FleetMachine("bk-root") { Tpm = RandomNumberGenerator.GetBytes(32) };
         PasswordVaultTestSupport.InitTpmPasswordVault(m, Password);
         BrokerCommand.Ownership = new AgentOwnership(privileged: true);
@@ -1204,11 +1111,10 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.False(Directory.Exists(_c.RunDir));
     }
 
-    [Fact]
+    [UnixFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public async Task ControlSocket_Stale_ReplacedUnderTheLock()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var folder = Path.GetDirectoryName(_c.SocketPath)!;
         Directory.CreateDirectory(folder);
         File.SetUnixFileMode(_c.RunDir, (UnixFileMode)0b111_000_000);
@@ -1234,11 +1140,10 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.False(Assert.IsType<BrokerControlAnswer.State>(await _c.StatusAsync()).Unlocked);
     }
 
-    [Fact]
+    [UnixFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public async Task ControlSocket_NotASocketAtThePath_Refused()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var folder = Path.GetDirectoryName(_c.SocketPath)!;
         Directory.CreateDirectory(folder);
         File.SetUnixFileMode(_c.RunDir, (UnixFileMode)0b111_000_000);
@@ -1251,11 +1156,9 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.Equal("not a socket", File.ReadAllText(_c.SocketPath));
     }
 
-    [Fact]
+    [UnixFact]
     public async Task SecondServe_AlreadyRunning()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         await _c.StartAsync();
 
         var ex = await Assert.ThrowsAsync<TswapException>(() => BrokerControlServer.StartAsync(_c.Options()));
@@ -1278,11 +1181,9 @@ public class BrokerLockedTests : IAsyncLifetime
 
     // ================================================================== the CLI's refusals before connecting
 
-    [Fact]
+    [UnixFact]
     public void SudoBrokerUnlock_RefusedBeforeConnect()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         using var m = new FleetMachine("bk-sudo") { Tpm = RandomNumberGenerator.GetBytes(32) };
         PasswordVaultTestSupport.InitTpmPasswordVault(m, Password);
         BrokerCommand.Ownership = new AgentOwnership(privileged: true);
@@ -1297,11 +1198,9 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.Equal(0, m.LastConsole!.Reads); // no password asked
     }
 
-    [Fact]
+    [UnixFact]
     public void PasswordFreeBroker_Unchanged_UnlockSaysNeverLocked_WithoutConnecting()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         using var m = new FleetMachine("bk-free") { Tpm = RandomNumberGenerator.GetBytes(32) };
         m.Ok("", "init", "--tpm", "--no-password", "--no-recovery");
         var connects = 0;
@@ -1389,11 +1288,9 @@ public class BrokerLockedTests : IAsyncLifetime
 
     // ================================================================== serve never asks an agent (ruling 13)
 
-    [Fact]
+    [UnixFact]
     public void Serve_NeverAsksTheAgent()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         // Every unlock serve makes (the proof, a route's secret, an ssh key) uses these sources: no agent.
         using var held = StretchedPassword.FromBytes(RandomNumberGenerator.GetBytes(32));
         var sources = BrokerPasswordProof.SourcesFor(held.Clone);
@@ -1431,11 +1328,9 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.Equal(0, agentAsked);
     }
 
-    [Fact]
+    [UnixFact]
     public void Prove_RightHardwareButWrongVerifier_IsAFileMismatch_NotAWrongPassword()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         // A planted vault-password whose verifier is for another password: the hardware opens, the proof fails.
         using var m = new FleetMachine("bk-verifier") { Tpm = RandomNumberGenerator.GetBytes(32) };
         var vaultKey = PasswordVaultTestSupport.InitTpmPasswordVault(m, Password);
@@ -1457,13 +1352,11 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.Equal(VaultPasswordRefusal.FileMismatch, ex.Reason);
     }
 
-    [Fact]
+    [UnixFact]
     public void Prove_ConflictingVaultPasswordCopies_IsUnavailable_NotAWrongPassword()
     {
         // Review T17 fix round 1: a conflict in the vault-password files is a configuration problem the
         // control server must not count as a wrong password (MissingVaultPasswordFile_IsNotCountedByTheGuard).
-        if (OperatingSystem.IsWindows())
-            return;
         using var m = new FleetMachine("bk-conflict") { Tpm = RandomNumberGenerator.GetBytes(32) };
         var vaultKey = PasswordVaultTestSupport.InitTpmPasswordVault(m, Password);
         var store = new RecordVaultStore(m.Dir);
@@ -1491,11 +1384,9 @@ public class BrokerLockedTests : IAsyncLifetime
         m.Keys.Challenges.Clear();
     }
 
-    [Fact]
+    [UnixFact]
     public void Prove_MixedVault_UsesThePasswordSlot()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         // Task 12 (fix after the merge): 'broker unlock' proves the password on a password slot of this
         // machine, even when a password-free slot here would open the vault without it.
         using var m = new FleetMachine("bk-mixed", SimulatedYubiKeyService.WithKeys(RecordVaultTestSupport.SerialA))
@@ -1521,11 +1412,9 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.Empty(m.Keys.Challenges);
     }
 
-    [Fact]
+    [UnixFact]
     public void Prove_MixedVault_WrongPassword_RefusedByThePasswordSlot()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         // The password-free YubiKey slot would open the vault; the wrong password is refused by the password
         // slot's hardware (ruling 18's text), not only by the verifier.
         using var m = new FleetMachine("bk-mixed-wrong", SimulatedYubiKeyService.WithKeys(RecordVaultTestSupport.SerialA))

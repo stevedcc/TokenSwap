@@ -151,12 +151,10 @@ public sealed partial class MacPkgScriptTests : IDisposable
 
     // ---- build ----
 
-    [Fact]
+    [UnixFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void Build_PassesIdentifierVersionOwnershipAndNoScripts()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, output) = Build(Publish());
 
         Assert.True(exitCode == 0, output);
@@ -174,12 +172,9 @@ public sealed partial class MacPkgScriptTests : IDisposable
         Assert.False(File.Exists(Pkg + ".partial"));
     }
 
-    [Fact]
+    [UnixFact]
     public void Build_SignsWithTheInstallerIdentityAndTimestamp()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, output) = Build(Publish());
 
         Assert.True(exitCode == 0, output);
@@ -189,12 +184,9 @@ public sealed partial class MacPkgScriptTests : IDisposable
         Assert.Matches($@"^--timestamp --keychain \S+/tswap-signing\.keychain-db --sign {MacFakeTools.InstallerHash} \S+/unsigned\.pkg \S+$", productsign);
     }
 
-    [Fact]
+    [UnixFact]
     public void Build_MissingDylib_FailsWithoutAPkg()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, output) = Build(Publish(withDylib: false));
 
         Assert.NotEqual(0, exitCode);
@@ -203,12 +195,9 @@ public sealed partial class MacPkgScriptTests : IDisposable
         Assert.False(Directory.Exists(Dist) && Directory.EnumerateFileSystemEntries(Dist).Any(), "no pkg may be left behind");
     }
 
-    [Fact]
+    [UnixFact]
     public void Build_WithoutTheInstallerIdentity_Fails()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, output) = _fake.Run(_script, "build", Publish(), "0.3.0", Dist);
 
         Assert.NotEqual(0, exitCode);
@@ -263,11 +252,9 @@ public sealed partial class MacPkgScriptTests : IDisposable
 
     // ---- notarise ----
 
-    [Fact]
+    [UnixFact]
     public void Notarise_StaplesAndValidates()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         PkgAndTarball();
         _fake.Environment["MACOS_NOTARY_KEY_P8_BASE64"] = Convert.ToBase64String("marker-key"u8.ToArray());
         _fake.Environment["MACOS_NOTARY_KEY_ID"] = "KEYID12345";
@@ -282,11 +269,9 @@ public sealed partial class MacPkgScriptTests : IDisposable
         Assert.True(xcrun.FindIndex(line => line.StartsWith("stapler staple", StringComparison.Ordinal)) > xcrun.FindIndex(line => line.StartsWith("notarytool log", StringComparison.Ordinal)));
     }
 
-    [Fact]
+    [UnixFact]
     public void Notarise_StapleFails_Fails()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         PkgAndTarball();
         _fake.Environment["MACOS_NOTARY_KEY_P8_BASE64"] = Convert.ToBase64String("marker-key"u8.ToArray());
         _fake.Environment["MACOS_NOTARY_KEY_ID"] = "KEYID12345";
@@ -300,11 +285,9 @@ public sealed partial class MacPkgScriptTests : IDisposable
 
     // ---- check ----
 
-    [Fact]
+    [UnixFact]
     public void Check_GoodPkg_Passes()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _fake.Environment["TSWAP_MACOS_GATE_RUNNER_CHECKS"] = "1";
 
         var (exitCode, output) = Check(PkgAndTarball());
@@ -316,23 +299,18 @@ public sealed partial class MacPkgScriptTests : IDisposable
         Assert.Equal(2, _fake.Log("codesign").Count(line => line.StartsWith("-dvvv ", StringComparison.Ordinal) && line.Contains("component.pkg/Payload/usr/local/bin/")));
     }
 
-    [Fact]
+    [UnixFact]
     public void Check_PayloadDiffersFromTarball_Fails()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, output) = Check(PkgAndTarball(dylib: "another build"));
 
         Assert.NotEqual(0, exitCode);
         Assert.Contains("libtswapse.dylib in the pkg is not the tarball's", output);
     }
 
-    [Fact]
+    [UnixFact]
     public void Check_ExtraPayloadFile_Fails()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var tarball = PkgAndTarball();
         File.WriteAllText(Path.Combine(Payload, "usr", "local", "bin", "tswap.dbg"), "symbols");
 
@@ -342,11 +320,9 @@ public sealed partial class MacPkgScriptTests : IDisposable
         Assert.Contains("the payload holds ./usr/local/bin/tswap.dbg; it must hold only tswap and libtswapse.dylib", output);
     }
 
-    [Fact]
+    [UnixFact]
     public void Check_NotNotarisedSource_Fails()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _fake.Write("spctl-install.out", "tswap-osx-arm64.pkg: accepted\nsource=Developer ID\norigin=Developer ID Installer: Test Person (TEAMID1234)\n");
 
         var (exitCode, output) = Check(PkgAndTarball());
@@ -355,11 +331,9 @@ public sealed partial class MacPkgScriptTests : IDisposable
         Assert.Contains("spctl -a -t install did not say accepted with source=Notarized Developer ID", output);
     }
 
-    [Fact]
+    [UnixFact]
     public void Check_InstallerOfAnotherTeam_Fails()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _fake.Write("pkgutil-signature.out", "Package \"x\":\n   Status: signed by a developer certificate issued by Apple for distribution\n   Signed with a trusted timestamp on: 2026\n   Certificate Chain:\n    1. Developer ID Installer: Someone Else (OTHERTEAM1)\n    2. Developer ID Certification Authority\n");
 
         var (exitCode, output) = Check(PkgAndTarball());
@@ -368,11 +342,9 @@ public sealed partial class MacPkgScriptTests : IDisposable
         Assert.Contains("the pkg's first certificate is 'Developer ID Installer: Someone Else (OTHERTEAM1)', expected Developer ID Installer: … (TEAMID1234)", output);
     }
 
-    [Fact]
+    [UnixFact]
     public void Check_BomNotRootOwned_Fails()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _fake.Write("lsbom.out", "./usr/local/bin/libtswapse.dylib\t100755\t0/0\t5\t1\n./usr/local/bin/tswap\t100755\t501/20\t5\t2\n");
 
         var (exitCode, output) = Check(PkgAndTarball());
@@ -381,11 +353,9 @@ public sealed partial class MacPkgScriptTests : IDisposable
         Assert.Contains("tswap: the Bom says 100755 501/20, expected 100755 0/0", output);
     }
 
-    [Fact]
+    [UnixFact]
     public void Check_OtherTimestampWording_ReportOnly_Passes()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _fake.Write("pkgutil-signature.out", "Package \"x\":\n   Status: signed by a developer certificate issued by Apple for distribution\n   Signed with a timestamp of some kind\n   Certificate Chain:\n    1. Developer ID Installer: Test Person (TEAMID1234)\n");
 
         var (exitCode, output) = Check(PkgAndTarball());
@@ -394,11 +364,9 @@ public sealed partial class MacPkgScriptTests : IDisposable
         Assert.Contains("REPORT-ONLY pkg-timestamp: pkgutil --check-signature does not say \"Signed with a trusted timestamp\"", output);
     }
 
-    [Fact]
+    [UnixFact]
     public void Check_OtherTimestampWording_Gated_Fails()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _fake.Environment["TSWAP_MACOS_GATE_RUNNER_CHECKS"] = "1";
         _fake.Write("pkgutil-signature.out", "Package \"x\":\n   Status: signed by a developer certificate issued by Apple for distribution\n   Certificate Chain:\n    1. Developer ID Installer: Test Person (TEAMID1234)\n");
 
@@ -408,11 +376,9 @@ public sealed partial class MacPkgScriptTests : IDisposable
         Assert.Contains("::error::pkg-timestamp:", output);
     }
 
-    [Fact]
+    [UnixFact]
     public void Check_DistributionMinOsOtherThanThePayload_Fails()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _fake.Write("minos-tswap", "13.0");
         _fake.Write("minos-libtswapse.dylib", "13.0");
 
@@ -478,11 +444,10 @@ public sealed partial class MacPkgScriptTests : IDisposable
         return _fake.Run(_script, "install-test", Pkg);
     }
 
-    [Fact]
+    [UnixFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void InstallTest_RefusesOutsideGitHubRunner()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         FakeInstalledBinary(PerUserScript);
         _fake.Environment["CI"] = "true"; // CI alone is not enough: a self-hosted runner could be someone's Mac
 
@@ -493,11 +458,10 @@ public sealed partial class MacPkgScriptTests : IDisposable
         Assert.Empty(_fake.Log("sudo"));
     }
 
-    [Fact]
+    [UnixFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void InstallTest_GitHubRunnerWithoutCi_Refuses()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         FakeInstalledBinary(PerUserScript);
         _fake.Environment["RUNNER_ENVIRONMENT"] = "github-hosted";
 
@@ -518,11 +482,10 @@ public sealed partial class MacPkgScriptTests : IDisposable
         Assert.Contains(required, TswapCore.InstallScript.GetMacOSScript(TswapCore.InstalledCopy.MacOSInstallPath, [1], binaryInstalled: true));
     }
 
-    [Fact]
+    [UnixFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void InstallTest_ExistingTswap_Refuses()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         FakeInstalledBinary(PerUserScript);
         Directory.CreateDirectory(Path.Combine(TestRoot, "usr", "local", "bin"));
         File.WriteAllText(Path.Combine(TestRoot, "usr", "local", "bin", "tswap"), "someone's tswap");
@@ -534,11 +497,10 @@ public sealed partial class MacPkgScriptTests : IDisposable
         Assert.Empty(_fake.Log("sudo"));
     }
 
-    [Fact]
+    [UnixFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void InstallTest_RunsTheDocumentedUninstall()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         FakeInstalledBinary(PerUserScript);
 
         var (exitCode, output) = InstallTest();
@@ -554,11 +516,10 @@ public sealed partial class MacPkgScriptTests : IDisposable
         Assert.Contains("uninstalled: both files and the receipt are gone", output);
     }
 
-    [Fact]
+    [UnixFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void InstallTest_RunsTheInstalledCopyAndThePerUserScript()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         FakeInstalledBinary(PerUserScript);
 
         var (exitCode, output) = InstallTest();
@@ -585,11 +546,10 @@ public sealed partial class MacPkgScriptTests : IDisposable
         Assert.Contains("--pkg-info dev.crawford.tswap.pkg", _fake.Log("pkgutil"));
     }
 
-    [Fact]
+    [UnixFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void InstallTest_InstallscriptWithSudo_Fails()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         FakeInstalledBinary(PerUserScript + "sudo true\n");
 
         var (exitCode, output) = InstallTest();
@@ -598,11 +558,10 @@ public sealed partial class MacPkgScriptTests : IDisposable
         Assert.Contains("the installed copy's installscript is not the per-user-only script", output);
     }
 
-    [Fact]
+    [UnixFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void InstallTest_NotRootOwned_Fails()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         FakeInstalledBinary(PerUserScript);
         _fake.Write("stat.out-libtswapse.dylib", "runner:staff 755\n");
 

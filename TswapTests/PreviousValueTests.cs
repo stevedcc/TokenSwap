@@ -31,11 +31,9 @@ public sealed class PreviousValueTests : IDisposable
         return File.ReadAllText(output);
     }
 
-    [Fact]
+    [UnixFact("the capture script is a POSIX shell script")]
     public void AfterARotation_PreviousGivesTheOldValue_AndTheNameTheNewOne()
     {
-        if (OperatingSystem.IsWindows())
-            return; // the capture script is a POSIX shell script
         _m.Ok("old-pw", "ingest", "db-pw");
         _m.Ok("new-pw", "ingest", "--rotate", "db-pw");
 
