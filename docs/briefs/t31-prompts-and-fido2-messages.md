@@ -439,3 +439,47 @@ Files: `TswapCli/Fido2SlotEnrollment.cs`, `TswapCli/Commands/SlotCommand.cs` (on
 - An automatic retry after a device read failure (#289's "possibly"); a libfido2 power-cycle query.
 - Discarding typeahead before the prompt is written (per call site), and draining .NET's own console reader buffer.
 - One-touch enrolment (#292), any change to PIN entry on Windows (the dialog owns it).
+
+
+## Amendments after brief review round 1 (binding; they win over the text above)
+
+Round 1: MiMo and GLM-5.3 both "yes" after these folds; no design change.
+
+**A1. The two key-choice prompts read through `IConsole` too (GLM I-1).** `CommandContext.AskWhichKey` (~:318) and
+`ChooseSerial` (~:398) call `Console.ReadLine()` directly, so Task 1's discard would not reach them. Task 1 routes both
+through `ctx.Console.ReadLine()` (add `TswapCli/CommandContext.cs` to Task 1's files; no other change there). Their
+`Ask` path is only taken when stdin is a terminal, so no scripted-input test reaches it. With this, the "Still open"
+list and the docs sentence are true as written.
+
+**A2. State the typeahead cost honestly (MiMo I1).** Replace "keys typed in the microseconds between the prompt and the
+read are dropped; a person can't type that fast" with: anything typed before tswap reads the answer is discarded,
+including a real answer typed early (while keys are listed, a password is stretched or a key enrolled); on a question
+with a default (`(Y/n)`, `(y/N)`) a lost answer followed by Enter takes the default. Destructive questions are already
+`(yes/no)` with no default and re-ask, so no destructive default can be chosen this way. The docs say "type your answer
+after the prompt appears", in one general note in `docs/setup.md` (covering every prompt: vault password, guided init,
+key choice, `add`'s value, passphrases), not only under the FIDO2 PIN bullet. The PR description repeats it.
+
+**A3. Every key test gets its own break-it-once (MiMo I2).** The pairs listed in each task are examples, not the whole
+set: every new or changed key test gets a revert-line / failing-test pair recorded in its task's commit message
+(including `ReadPassword_Piped_ReadsTheLineWithoutDiscarding`, the Ctrl-C and `ReadSecret` tests, the touch-line
+test, the blocked/reinsert pre-checks, the unlock ordering and Windows-hint tests, the init header and the one-name
+tests, `ExplainTouch`).
+
+**A4. Minors (MiMo).**
+- The pty tests that type into tswap's own prompts are four: `EndToEnd_Run_PromptVisible_WithPemInVault` plus
+  `RunTswapWithPtyCtrlC`'s `Add_CtrlC_*`, `Export_CtrlC_*` and `Import_CtrlC_*` (they stay green because the harness
+  re-sends after 500 ms of quiet when an early byte is dropped); name all four in the analysis.
+- #290.1's ruling: the key's state is "read earlier in the same run; at enrolment that can be a minute earlier", same
+  cost (refused once more, works on the next run).
+- H1-H6 (the owner checks) are added to `docs/superpowers/fido2-owner-checks.md` as new checks with an empty results
+  table, in Task 3.
+- Sweep before the Task 2 and 3 commits: no `migrate`-path test pins `ExplainTouch`'s third line or
+  `ElevatedCommand.Line`; no test compares a `Fido2KeyInfo` by value against a positional construction that would now
+  differ in `ReinsertRequired` (`CompositeFido2KeysTests`, `CliHostFido2WiringTests`, `Fido2TestSlots` users);
+  `Fido2TestSlots.ModelName == YubicoAaguids.ModelName(Fido2TestSlots.Aaguid)`.
+- Sketch fix: `FailNext(GetHmacSecret, Other, detail: detail, afterPin: true)` (named argument). Task 1's `TCOFLUSH`
+  break-it-once fails on Linux only (on macOS 1 is `TCIFLUSH`); say "on Linux" in the commit note.
+
+**A5. Coordination with T29 (in implementation in parallel).** `Fido2KeyInfo` gains `bool? ReinsertRequired` as its
+last positional member. T29's locking decorator passes records through unchanged; if either branch merges second, its
+merge must keep `ReinsertRequired` flowing through `Find()`/`FindHolder()` (a `with`-copy, never a positional rebuild).
