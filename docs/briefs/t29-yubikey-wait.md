@@ -9,8 +9,9 @@ member, the default bodies included), `TswapCore/Vault/SdkYubiKeyService.cs` (`L
 `TswapCore/Vault/Fido2/IFido2Keys.cs`, `TswapCore/Vault/Fido2/Fido2Service.cs` (`Call`), `TswapCore/Agent/UnixLockFile.cs`
 and `TswapTests/UnixLockFileRaceTests.cs` (#236: why the lock is taken at open, never upgraded),
 `TswapCore/FileOwnership.cs` (`DirectoryOwnerMatcher.AsOwner`), `TswapCli/CliHost.cs` (the composition, `Fido2Service`,
-`Fido2Keys`), `TswapCli/CliEnvironment.cs` (`ConfigDir`, `ResolveConfigDir`: the config folder under sudo is
-`SUDO_USER`'s), and the tests `TswapTests/SimulatedYubiKeyService.cs`, `TswapTests/FleetMachine.cs` (`Context`),
+`Fido2Keys`), `TswapCli/CliEnvironment.cs` (`ResolveConfigDir`, `InvokingUserHome`, `CheckInvokingUser`: the home under sudo is
+`SUDO_USER`'s passwd entry), `DirectoryOwnerMatcher.CreateDirectory` (missing folders 0700, as the nearest existing
+folder's owner), and the tests `TswapTests/SimulatedYubiKeyService.cs`, `TswapTests/FleetMachine.cs` (`Context`),
 `TswapTests/SdkYubiKeyServiceTests.cs` (`ThrowingOtpKeys`, `SdkExceptions`), `TswapTests/CliHostFido2WiringTests.cs`,
 `TswapTests/VaultFreeCommandTests.cs` (`YubiKeySetup_WithoutAHomeFolder_ChecksNoVaultAndGoesOn`),
 `TswapTests/BrokerTestSupport.cs` (`BrokerManualClock`, `ObservedLog`), `TswapTests/EndToEndTests.cs` (`MakePsi`) and
@@ -26,7 +27,8 @@ concrete conditions (an event, a line on a stream), each with a 30-second test t
 Never change an existing test's assertion: this brief sanctions none, so if an existing test fails, stop and report.
 British spelling in new text.
 
-**Review history.** None yet (first draft).
+**Review history.** Before review: the coordinator changed the lock from per config folder to per user (the owner's
+two vaults on one key, below); body edited in place.
 
 ## Why
 
@@ -88,26 +90,34 @@ cross-process exclusive lock. Two new decorators take it around every call that 
   one tswap the other waits with the same line instead of opening a second dialog. The owner's priority is Linux and
   macOS; Windows gets the same behaviour at no extra cost.
 
-**Where the lock lives.** `<config folder>/yubikey.lock` (`YubiKeyLock.FileName = "yubikey.lock"`), the folder
-`CliEnvironment.ConfigDir` resolves.
-- Ruling: the config folder, not `$XDG_RUNTIME_DIR` (#173's proposal) — why: under sudo the config folder already
-  resolves to `SUDO_USER`'s (`ResolveConfigDir`), so `sudo tswap get` and the user's own `tswap run` share one lock (the
-  owner's daily case: a human's sudo command beside an agent's `run`; #273's pipeline mixes both), where a per-user run
-  folder would give root a different one; every process that unlocks the same vault resolves the same folder; and the
-  tests get isolation for free through `TSWAP_CONFIG_DIR`. The cost: two different config folders of one user
-  (`TSWAP_CONFIG_DIR` set for one command and not the other, including a `sudo` that drops it) don't share a lock. That
-  is the existing rule for which vault sudo uses (`sudo --preserve-env=TSWAP_CONFIG_DIR`), and #42 proposed the config
-  folder too.
+**Where the lock lives.** One per user, at a fixed path independent of `TSWAP_CONFIG_DIR` and `XDG_CONFIG_HOME`:
+`<home>/.cache/tswap/yubikey.lock` on Linux and macOS, `%LOCALAPPDATA%\tswap\yubikey.lock` on Windows
+(`YubiKeyLock.FileName = "yubikey.lock"`).
+- Ruling: per user, not per config folder — owner's case: the owner runs two vaults on one machine with one YubiKey
+  (his main vault, and the router's through `TSWAP_CONFIG_DIR`), and a per-config-folder lock would not serialise them.
+- **`<home>`** is resolved as `CliEnvironment.ResolveConfigDir` resolves the config folder's home, without its
+  `TSWAP_CONFIG_DIR` and `XDG_CONFIG_HOME` steps: privileged on Unix with `SUDO_USER` set, `InvokingUserHome` (the
+  passwd entry of `SUDO_USER`, trusted only when `SUDO_UID` matches; root for `SUDO_USER=root` or `SUDO_UID=0`, which
+  falls through to `HOME`); otherwise `HOME`. On Windows `LOCALAPPDATA` from the environment (read through `getEnv`,
+  so tests can point it at a temp folder), else `Environment.GetFolderPath(SpecialFolder.LocalApplicationData)`. A new
+  `internal static string YubiKeyLockPath(Func<string, string?> getEnv, bool isPrivileged, Func<string,
+  UnixPasswdEntry?>? lookupUser = null, bool? isWindows = null)` in `CliEnvironment` returns the path; it throws
+  `TswapException` when there is no usable home (unset, not absolute, or `InvokingUserHome`'s refusals), which the
+  warn-and-carry-on ruling below turns into the warning. So `sudo tswap get` and the user's own `tswap run` share the
+  lock (the owner's daily case: a human's sudo command beside an agent's `run`; #273's pipeline mixes both), and so do
+  any number of config folders of one user.
 - Resolved once per process, at the first take (`Func<string>` given to the constructor; `CliHost` passes
-  `() => Path.Combine(env.ConfigDir, YubiKeyLock.FileName)`), so commands that never reach a key never resolve the
-  folder.
-- **Folder missing** (a machine before `init`, or a `TSWAP_CONFIG_DIR` that doesn't exist yet): that call runs without
-  the lock, silently, and nothing is created. Checked at every take, so a folder `init` creates mid-command is used by
-  its later calls. Ruling: the lock never creates the config folder — why: an `init` that refuses early must still leave
-  nothing behind, and with no config folder no other tswap is unlocking this vault.
+  `() => CliEnvironment.YubiKeyLockPath(getEnv, isPrivileged)`), so commands that never reach a key resolve nothing.
+- **Folder missing:** `<home>/.cache/tswap` (Windows `%LOCALAPPDATA%\tswap`) is created when missing, through
+  `DirectoryOwnerMatcher.CreateDirectory` (each missing level 0700 on Unix, as the owner of the nearest existing folder,
+  so under sudo as `SUDO_USER`, never as root). If that fails, the warn-and-carry-on ruling applies. An existing folder
+  is used as it is (its mode is never changed).
+- Ruling: two different users on one machine don't share the lock — why: a machine-wide lock needs a place every user
+  can write (a shared `/tmp` or `/var/lock` file), where any local user could hold it or plant a file; the owner's
+  security posture argues against that, so it is out of scope and the docs say so.
 - **Unix:** `UnixLockFile.TryTake(path, out heldElsewhere)` (exclusive `flock` taken at open via `FileShare.None`,
   created 0600, a non-regular file refused), run inside `DirectoryOwnerMatcher.AsOwner(path, …)`, so under sudo the file
-  is created and opened as the config folder's owner and comes out the user's (a later unprivileged process can open
+  is created and opened as the owner of `.cache/tswap` (the invoking user) and comes out the user's (a later unprivileged process can open
   it); the device call itself then runs as root, outside the switch, as today. **Windows:** a `FileStream`
   (`FileMode.OpenOrCreate`, `FileAccess.ReadWrite`, `FileShare.None`); an `IOException` whose `HResult & 0xFFFF` is 32
   (`ERROR_SHARING_VIOLATION`) means held elsewhere. The file is never deleted (deleting a lock file lets a new taker
@@ -120,8 +130,8 @@ cross-process exclusive lock. Two new decorators take it around every call that 
   a library such as `DistributedLock.FileSystem` would add a dependency for the same `FileShare.None` open, takes no
   `TimeProvider` (so its wait can't be tested without real time) and would create its file as root under sudo. A named
   `Mutex` is out, as #173 says (thread-affine; its Unix scope and permissions are subtle).
-- **Can't take the lock for another reason** (the config folder can't be resolved: `Cannot determine the config
-  folder …`; the lock path is a folder, a symlink or unreadable; an owner switch fails; any `TswapException`, `IOException`
+- **Can't take the lock** (no usable home: `YubiKeyLockPath` throws; `.cache/tswap` can't be created; the lock path is
+  a folder, a symlink or unreadable; an owner switch fails; any `TswapException`, `IOException`
   or `UnauthorizedAccessException` from resolving or opening): print once per process, on the lock's notice writer
   (stderr), ``Warning: tswap couldn't take its YubiKey lock (<the exception's message>), so another tswap using the key
   at the same time could disturb this one.``, and run this and every later call of the process without the file lock.
@@ -187,15 +197,16 @@ public sealed class YubiKeyLock(Func<string> lockPath, TextWriter notices, TimeP
   TimeProvider time, DirectoryOwnerMatcher owner)`: a lock when `testKey` is null; in test mode null, unless (Debug
   builds only, inside `#if DEBUG`) `getEnv("TSWAP_TEST_YUBIKEY_LOCK") == "1"`. Ruling: off in test mode by default —
   why: test-mode runs through `CliHost` (the E2E suite, `SecureEnclaveOwnerScopeTests`, `VaultFreeCommandTests`) would
-  otherwise gain a `yubikey.lock` file in folders some tests compare file by file, and an owner switch that
-  `SecureEnclaveOwnerScopeTests` count; the variable lets this brief's E2E test opt in.
+  otherwise create `~/.cache/tswap/yubikey.lock` in the real home of whoever runs the tests and add an owner switch that
+  `SecureEnclaveOwnerScopeTests` count; the variable lets this brief's E2E test opt in (with `HOME` or `LOCALAPPDATA`
+  pointed at a temp folder).
 - `IYubiKeyService YubiKeyService(byte[]? testKey, YubiKeyLock? hardwareLock, TextWriter? verbose,
   Func<IYubiKeyService>? real = null)`: the inner is `TestKeyYubiKeyService` in test mode, else `real?.Invoke() ?? new
   SdkYubiKeyService(verbose)`; wrapped in `LockedYubiKeyService` when `hardwareLock` is not null.
 - `IFido2Keys WithLock(IFido2Keys keys, YubiKeyLock? hardwareLock)`; `Fido2Service` gains a trailing optional
   `YubiKeyLock? hardwareLock = null` and builds `new Fido2Service(WithLock(keys, hardwareLock), verbose)`.
   `Fido2Keys` is unchanged (`CliHostFido2WiringTests` pins its types).
-- `Run` builds the lock with `() => Path.Combine(env.ConfigDir, YubiKeyLock.FileName)`, `console.Error`, its `time` and
+- `Run` builds the lock with `() => CliEnvironment.YubiKeyLockPath(getEnv, isPrivileged)`, `console.Error`, its `time` and
   `owner ?? DirectoryOwnerMatcher.Default` (the same matcher as the store), and passes it to both.
 
 **#301's second point: the raw SDK message.** A `MalformedYubiKeyResponseException` during a challenge, other than the
@@ -207,15 +218,16 @@ e)`: `Interrupted` for a `MalformedYubiKeyResponseException` that `Classify` map
 cut short: another tswap or app used the key at the same time. Try again.`` (the owner's wording in #301; for serial
 40107596: `YubiKey 40107596's answer was cut short: another tswap or app used the key at the same time. Try again.`),
 kind `Interrupted`, the SDK's text dropped. With the lock this is left for a tswap that doesn't take it (an older one,
-another config folder) or another app. Ruling: challenge only — why: the session open's status read is already `Busy`,
+another user's) or another app. Ruling: challenge only — why: the session open's status read is already `Busy`,
 and programming failures carry their own kinds (`ProgramFailed` and the verify kinds); the FIDO2 "operation failed
 (type)" texts are T31's (FIDO2 messages), and with the lock tswap no longer produces them against itself.
 
 ## Task 1: `YubiKeyLock`
 
-Files: `TswapCore/Vault/YubiKeyLock.cs` (new), `TswapTests/YubiKeyLockTests.cs` (new).
+Files: `TswapCore/Vault/YubiKeyLock.cs` (new), `TswapCli/CliEnvironment.cs` (`YubiKeyLockPath` only),
+`TswapTests/YubiKeyLockTests.cs` (new).
 
-Tests (`YubiKeyLockTests`; each uses a temp folder as the config folder; "held elsewhere" means the test holds the
+Tests (`YubiKeyLockTests`; each uses a temp folder for the lock's folder; "held elsewhere" means the test holds the
 same path itself, with `UnixLockFile.TryTake` on Unix and a `FileShare.None` `FileStream` on Windows; the clock is a
 `BrokerManualClock`; the notice writer a `StringWriter`):
 - Free: `Run` runs the call once and returns its value; the notices are empty; afterwards the test takes the same path
@@ -227,13 +239,21 @@ same path itself, with `UnixLockFile.TryTake` on Unix and a `FileShare.None` `Fi
   `Serial == null`, `Message == TimeoutText`; pauses == 2; the call never ran; the notices are `WaitingLine` once. A
   second `Run` on the same instance throws the same at once: no further pause, no second `WaitingLine`, call not run.
 - The call throws: the same exception instance comes out, and the test then takes the path at once.
-- Config folder missing (`lockPath` inside a folder that doesn't exist): the call runs; notices empty; the folder
-  still doesn't exist. Then the test creates the folder and a second `Run` takes the file lock (the test can't take
-  the path while the call runs).
-- `lockPath` throws `TswapException("Cannot determine the config folder …")`: two `Run`s both run their calls; the
-  notices hold `Warning(<that message>)` exactly once. The same for a lock path that is a folder (Unix and Windows).
+- Folder missing (`lockPath` = `<temp>/home/.cache/tswap/yubikey.lock`, only `<temp>/home` exists): the call runs
+  with the lock held (the test can't take the path during the call); `.cache` and `.cache/tswap` now exist, each mode
+  0700 on Unix; notices empty.
+- The folder can't be created (`<temp>/home/.cache` is a regular file): two `Run`s both run their calls; the notices
+  hold `Warning(<the reason>)` exactly once. The same for `lockPath` throwing `TswapException` and for a lock path that is
+  a folder (Unix and Windows).
+- `CliEnvironment.YubiKeyLockPath` (`[UnixFact]` rows and a `[WindowsFact]`): `HOME=/home/alice` →
+  `/home/alice/.cache/tswap/yubikey.lock`, also with `TSWAP_CONFIG_DIR=/srv/router` and `XDG_CONFIG_HOME=/srv/cfg` set
+  (both ignored); privileged with `SUDO_USER=alice`, `SUDO_UID` matching a fake passwd entry with home `/home/alice` and
+  `HOME=/root` → `/home/alice/...`; privileged with `SUDO_UID` not matching → `TswapException` (the existing refusal
+  text); privileged without `SUDO_USER`, `HOME=/root` → `/root/.cache/tswap/yubikey.lock`; no `HOME` →
+  `TswapException`; Windows: `LOCALAPPDATA=C:\x` → `C:\x\tswap\yubikey.lock`.
 - Under sudo (`[UnixFact]`): `new DirectoryOwnerMatcher(new FileOwnershipTests.FakeOwnership(privileged: true, euid: 0,
-  dirUid: 1000, dirGid: 1001))`: after `Run`, the fake's `Switches` holds `(<full lock path>, 1000, 1001)`, and inside the
+  dirUid: 1000, dirGid: 1001))`, `.cache/tswap` missing: after `Run`, the fake's `Switches` holds a switch to
+  `(1000, 1001)` for the folder creation and `(<full lock path>, 1000, 1001)` for the open, and inside the
   call the fake's `Current` is null (the device call runs outside the switch).
 - Two threads, one `YubiKeyLock`: thread 1's call blocks on an event; thread 2's `Run` reaches its pause (the pause
   seam sets an event, then waits for thread 1's call to end); thread 1 is released; both calls ran, never at once (an
@@ -273,16 +293,17 @@ Tests:
   (in the test file) wraps `machine.Keys`: every member increments an active count on entry and decrements it on exit,
   counting an overlap (and setting an `overlapped` event) when the count exceeds 1. Two contexts from
   `machine.Context(console, ["names"]) with { YubiKeys = locked, Unlocker = new VaultUnlocker(locked) }`, each `locked`
-  a `LockedYubiKeyService` over the same double with its **own** `YubiKeyLock` on `<machine.Dir>/yubikey.lock` (two
+  a `LockedYubiKeyService` over the same double with its **own** `YubiKeyLock` on one `<temp>/.cache/tswap/yubikey.lock` (two
   processes); B's lock writes to an `ObservedLog` and its pause sets a `bWaiting` event, then waits for `aDone`. A runs
   `CliRunner.Run` on the test thread; the double's first `Challenge` on A's thread starts B's `CliRunner.Run` on a new
   thread and waits for `bWaiting` or `overlapped`. After A returns, the test sets `aDone` and joins B. Assert: both exit
   0 and both stdouts list the vault's names; overlaps == 0; B's log holds `WaitingLine` then `GoingOnLine`;
   `machine.Keys.Challenges` has one entry per command. Break-it-once: make `LockedYubiKeyService.ListSerials` call the
   inner directly; B's listing overlaps A's challenge and the overlap assertion fails.
-- **A second process waits (E2E).** A temp folder as `TSWAP_CONFIG_DIR`; the test holds `<folder>/yubikey.lock`
-  (Unix `UnixLockFile.TryTake`, Windows `FileShare.None`), then starts the binary with `TSWAP_TEST_KEY`,
-  `TSWAP_CONFIG_DIR` and `TSWAP_TEST_YUBIKEY_LOCK=1` running `yubikey setup --no-touch --serial 1` (chosen because it
+- **A second process waits (E2E).** A temp folder as `TSWAP_CONFIG_DIR` and another as the home (`HOME` on Unix,
+  `LOCALAPPDATA` on Windows); the test holds `<home>/.cache/tswap/yubikey.lock` (Windows `<LOCALAPPDATA>\tswap\yubikey.lock`;
+  Unix `UnixLockFile.TryTake`, Windows `FileShare.None`), then starts the binary with `TSWAP_TEST_KEY`,
+  `TSWAP_CONFIG_DIR`, that `HOME`/`LOCALAPPDATA` and `TSWAP_TEST_YUBIKEY_LOCK=1` running `yubikey setup --no-touch --serial 1` (chosen because it
   can never program a key in any build: after the locked `FindKeys` it refuses `YubiKey 1 is not plugged in.`). Read the
   child's stderr line by line until the line equals `WaitingLine` (on a reader task, 30 s test timeout); assert the
   child hasn't exited; release the lock; wait for exit. Assert exit 1, and stderr after the waiting line holds
@@ -308,16 +329,20 @@ Tests (`SdkYubiKeyServiceTests`, new):
 
 Docs:
 - `AGENTS.md`, after "YubiKey selection": a short paragraph, "Several tswap processes (brief T29)": the lock, where it
-  lives, per device call (the FIDO2 PIN prompt inside it), the two lines, the 60 s timeout, the warning when it can't be
+  lives (per user, the home under sudo as for the config folder, independent of `TSWAP_CONFIG_DIR`), per device call
+  (the FIDO2 PIN prompt inside it), the two lines, the 60 s timeout, the warning when it can't be
   taken, off in test mode unless `TSWAP_TEST_YUBIKEY_LOCK=1` (Debug only), and the in-process gate.
 - `docs/setup.md`, a new `### Several tswap commands at once` after "Several YubiKeys plugged in": a second command
   waits (the line it prints, the second touch it may need), Ctrl-C to stop waiting, the 60 s limit, that `sudo` and the
-  user's own commands share the lock through the config folder (and that a different `TSWAP_CONFIG_DIR` doesn't), that
+  user's own commands share the lock, and so do several vaults of one user (another `TSWAP_CONFIG_DIR`), that two
+  different users on one machine don't (a machine-wide lock would need a place every user can write), that
   ykman, a browser or an older tswap don't take it, and that scripts no longer need their own `flock`.
-- `docs/commands.md` "Files": `yubikey.lock` in the config directory (empty; never synced; safe to delete when no tswap
-  runs).
+- `docs/commands.md` "Files": the lock file, `~/.cache/tswap/yubikey.lock` on Linux and macOS (the invoking user's
+  under sudo), `%LOCALAPPDATA%\tswap\yubikey.lock` on Windows, not in the config or vault folder (empty; safe to delete
+  when no tswap runs).
 - `docs/security-model.md` "What tswap does not protect against": one row: the lock is a courtesy between tswap
-  processes, not a boundary: any process running as you can hold it (others then wait and time out), and a program that
+  processes of one user, not a boundary: any process running as you can hold it (others then wait and time out), another
+  user's tswap doesn't take yours, and a program that
   doesn't take it (ykman, a browser, an older tswap) can still interrupt a command (then the cut-short or busy text).
 - `docs/superpowers/fido2-owner-checks.md` B7: 1. terminal 2 prints the waiting line and nothing else; touch the key
   for terminal 1 (its `names` completes); terminal 2 prints the going-on line, the key flashes again, touch it, terminal
@@ -327,14 +352,11 @@ Docs:
 ## Out of scope
 
 Retrying when a key is busy with another program (ykman, a browser): retrying a challenge is how #301's takeover happens;
-the existing busy and probe texts stay. The FIDO2 failure texts (`Fido2Texts`, T31). A per-user lock shared across
-config folders (owner question below). A configurable timeout. #273's other point (the "YubiKey touch requirement
+the existing busy and probe texts stay. The FIDO2 failure texts (`Fido2Texts`, T31). A machine-wide lock shared by different users
+(it needs a shared, writable place, which the owner's security posture argues against). A configurable timeout. #273's other point (the "YubiKey touch requirement
 unknown" banner under sudo): a separate issue. Removing the agent harness's `flock` (another repo; after a release).
 Release notes.
 
-## Owner questions (the rulings above stand unless answered otherwise)
+## Owner question (the ruling above stands unless answered otherwise)
 
-1. Lock scope: one lock per config folder (shared by `sudo` and the user's own commands; not by two different
-   `TSWAP_CONFIG_DIR`s of one user), or one per user in the run folder (`/run/user/<uid>/tswap`), which would also cover
-   two config folders but needs the run folder created as the user under sudo?
-2. The 60-second wait: right for both a person and an agent, and fixed (no variable) in v1?
+1. The 60-second wait: right for both a person and an agent, and fixed (no variable) in v1?
