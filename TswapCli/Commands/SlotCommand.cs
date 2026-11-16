@@ -37,6 +37,12 @@ namespace TswapCli.Commands;
 /// machine with no existing usable vault (mirroring <c>init</c>) and never touch an *existing*
 /// vault's secrets — see <see cref="RequiresSudo"/>'s doc comment for how that mixed reality maps
 /// onto this type's single <c>RequiresSudo</c> flag.</para>
+///
+/// <para><b>Over SSH (briefs T27, T28).</b> <c>slot enroll --via</c> (<c>SlotEnroll.cs</c>) runs request and accept here
+/// and approve and merge on the host. Brief T28 adds <c>slot stage &lt;id&gt; put|get|clean</c> (<c>SlotStage.cs</c>), no
+/// sudo and refused under a sudo escalation, which moves the enrolment files between an SSH session and the host's
+/// staging folder, and <c>--staged &lt;id&gt; --expect &lt;sha256&gt;</c> on approve and merge, which read the staged file
+/// once and refuse it unless its SHA-256 is the one given; <c>RequireSudo</c> still comes first after argument parsing.</para>
 /// </summary>
 public sealed partial class SlotCommand : ICliCommand
 {
@@ -45,8 +51,8 @@ public sealed partial class SlotCommand : ICliCommand
 
     /// <summary>The subcommand forms, shared by the help line and the no-argument usage so the two can't drift.</summary>
     private static string Forms =>
-        $"slot request [--tpm|{SecureEnclaveTouchChoice.Flags}] {VaultPasswordChoice.Flags} [--vault-dir <folder>] <file> | slot approve <request-file> <approve-file> | slot approve - - | slot accept <file> [--receipt <file>] [--vault-dir <shared folder>] | slot merge <receipt> [--yes] | slot merge - | {EnrollForm} | slot add --tpm {VaultPasswordChoice.Flags} | slot add {SecureEnclaveTouchChoice.Flags} {VaultPasswordChoice.Flags} | slot add --fido2 [--serial <n>] | slot add --yubikey";
-    public string Description => "Enroll another machine into a keyring vault via hand-carried files (request, approve, accept, merge), or in one command run on the new machine over SSH (slot enroll --via <user@host>: request and accept there, approve and merge on the machine that opens the vault, under its sudo -n; --remote-tswap names tswap's path there, --no-remote-sudo drops sudo, --fresh starts a new enrolment instead of continuing a kept one; for a person, never an agent), or add this machine's TPM or Secure Enclave (--tpm, --secure-enclave with --with-touch or --no-touch; it then opens the vault on this machine) or a plugged-in YubiKey or other security key to this machine's keyring as its own slot (--yubikey: a YubiKey's OTP challenge-response; --fido2: a FIDO2 credential on a key of any brand, its PIN and a touch on every unlock, read at the terminal; --serial picks a YubiKey by its serial on Linux and macOS); slot request --secure-enclave and slot add --secure-enclave need --with-touch (Touch ID or password on every unlock) or --no-touch (no prompt; read its warning). A '-' file is stdin or stdout: slot approve - - reads the request from stdin and writes the approve file to stdout (every other line goes to stderr), as do slot approve - <approve-file> and slot approve <request-file> - for one of the two, and slot merge - reads the receipt from stdin";
+        $"slot request [--tpm|{SecureEnclaveTouchChoice.Flags}] {VaultPasswordChoice.Flags} [--vault-dir <folder>] <file> | slot approve <request-file> <approve-file> | slot approve - - | {StagedApproveForm} | slot accept <file> [--receipt <file>] [--vault-dir <shared folder>] | slot merge <receipt> [--yes] | slot merge - | {StagedMergeForm} | {EnrollForm} | {StageForm} | slot add --tpm {VaultPasswordChoice.Flags} | slot add {SecureEnclaveTouchChoice.Flags} {VaultPasswordChoice.Flags} | slot add --fido2 [--serial <n>] | slot add --yubikey";
+    public string Description => "Enroll another machine into a keyring vault via hand-carried files (request, approve, accept, merge), or in one command run on the new machine over SSH (slot enroll --via <user@host>: request and accept there, approve and merge on the machine that opens the vault, under its sudo on a terminal of their own, so sudo and the vault may ask for a password there; it needs a terminal here, and --batch runs it without one, under sudo -n with no prompt on the host; --remote-tswap names tswap's path there, --no-remote-sudo drops sudo, --fresh starts a new enrolment instead of continuing a kept one; for a person, never an agent), or add this machine's TPM or Secure Enclave (--tpm, --secure-enclave with --with-touch or --no-touch; it then opens the vault on this machine) or a plugged-in YubiKey or other security key to this machine's keyring as its own slot (--yubikey: a YubiKey's OTP challenge-response; --fido2: a FIDO2 credential on a key of any brand, its PIN and a touch on every unlock, read at the terminal; --serial picks a YubiKey by its serial on Linux and macOS); slot request --secure-enclave and slot add --secure-enclave need --with-touch (Touch ID or password on every unlock) or --no-touch (no prompt; read its warning). A '-' file is stdin or stdout: slot approve - - reads the request from stdin and writes the approve file to stdout (every other line goes to stderr), as do slot approve - <approve-file> and slot approve <request-file> - for one of the two, and slot merge - reads the receipt from stdin. slot stage <id> put|get|clean (no sudo, refused under sudo; run by slot enroll) moves the enrolment files between an SSH session and the host's staging folder (<config dir>/enrol-staged/<id>), and slot approve --staged <id> --expect <sha256-hex> and slot merge --staged <id> --expect <sha256-hex> read the staged file, refusing one whose SHA-256 isn't the one given";
 
     /// <summary>
     /// <c>true</c> even though only <c>approve</c> actually calls <c>ctx.RequireSudo</c>
@@ -79,6 +85,7 @@ public sealed partial class SlotCommand : ICliCommand
             "add" => ExecuteAdd(ctx, rest),
             "merge" => ExecuteMerge(ctx, rest),
             "enroll" => ExecuteEnroll(ctx, rest),
+            "stage" => ExecuteStage(ctx, rest),
             _ => throw new UsageException(Usage(ctx)),
         };
     }
@@ -455,12 +462,17 @@ public sealed partial class SlotCommand : ICliCommand
     /// </summary>
     private static int ExecuteApprove(CommandContext ctx, string[] args)
     {
-        var (positional, withRecoveryKey) = SplitRecoveryKeyFlag(args);
         var approveUsage = $"{ctx.Prefix} slot approve <request-file> <approve-file> [{RecoveryKeyFlag}]";
-        if (positional.Length != 2 || positional.Any(a => a.StartsWith("--")))
+        // Brief T28: --staged <id> --expect <sha256> reads the request from the staging folder and writes approve.json there.
+        var (stagedArgs, stagedId, expect) = SplitStaged(args, $"{ctx.Prefix} {StagedApproveForm}");
+        var (positional, withRecoveryKey) = SplitRecoveryKeyFlag(stagedArgs);
+        if (stagedId is not null && (positional.Length != 0 || withRecoveryKey))
+            throw new UsageException($"{ctx.Prefix} {StagedApproveForm}" +
+                "\n--staged takes no file and no --recovery-key-stdin: the request is the staged one, and the vault opens with this machine's hardware.");
+        if (stagedId is null && (positional.Length != 2 || positional.Any(a => a.StartsWith("--"))))
             throw new UsageException(approveUsage);
-        var requestPath = positional[0];
-        var approvePath = positional[1];
+        var requestPath = stagedId is null ? positional[0] : "";
+        var approvePath = stagedId is null ? positional[1] : "";
         // Brief T27: a '-' request file is read from stdin, which then can't carry the recovery key too.
         if (requestPath == StdioPath && withRecoveryKey)
             throw new UsageException(approveUsage + StdinCarriesOneText("request file"));
@@ -483,7 +495,13 @@ public sealed partial class SlotCommand : ICliCommand
         var c = ctx.Console;
 
         string requestText;
-        if (requestPath == StdioPath)
+        string? stagedFolder = null;
+        if (stagedId is not null)
+        {
+            (requestText, stagedFolder) = ReadStaged(ctx, stagedId, expect!, RequestFileName, "request file", "approved");
+            requestPath = Path.Combine(stagedFolder, RequestFileName);
+        }
+        else if (requestPath == StdioPath)
             requestText = ReadStdinFile(ctx, "slot approve", "request file");
         else if (!File.Exists(requestPath))
             throw new TswapException($"Slot request file not found: {requestPath}");
@@ -571,7 +589,17 @@ public sealed partial class SlotCommand : ICliCommand
             vaultPassword is null ? null : Convert.ToBase64String(vaultPassword));
 
         var approveText = SlotEnrollmentFileCodec.SerializeApprove(approveFile);
-        if (approveOut is null)
+        // Brief T28 (A3): staged, the approve file is serialised once into a buffer, that buffer is written, and the
+        // fingerprint printed below is computed over it (never a re-read of the file).
+        byte[]? stagedApprove = null;
+        if (stagedFolder is not null)
+        {
+            stagedApprove = System.Text.Encoding.UTF8.GetBytes(approveText);
+            var stagedApprovePath = Path.Combine(stagedFolder, ApproveFileName);
+            ctx.WriteOutputFile(stagedApprovePath, stagedApprove);
+            ctx.StagedSeams?.AfterApproveWritten?.Invoke(stagedApprovePath);
+        }
+        else if (approveOut is null)
             ctx.WriteOutputFile(approvePath, approveText);
 
         // Brief T5 decision 1: remember what was approved, so 'slot merge' can add the finished
@@ -584,6 +612,13 @@ public sealed partial class SlotCommand : ICliCommand
             .ToList();
         ctx.Storage.SaveConfig(config with { ApprovedSlots = approved });
 
+        if (stagedApprove is not null)
+        {
+            c.Out.WriteLine("✓ Approved. The joining machine collects the approve file next.");
+            c.Out.WriteLine($"Approve file fingerprint: {ApproveFileFingerprint(stagedApprove)}");
+            CryptographicOperations.ZeroMemory(stagedApprove);
+            return 0;
+        }
         if (approveOut is not null)
         {
             // Brief T27: once, after the ApprovedSlots save, to the original stdout.
@@ -647,7 +682,9 @@ public sealed partial class SlotCommand : ICliCommand
     /// <see cref="Config.PendingSlotPublicKey"/>/<see cref="Config.PendingSlotPrivateKey"/> are
     /// cleared now that they're baked into the real keyring.
     /// </summary>
-    private static int ExecuteAccept(CommandContext ctx, string[] args)
+    /// <param name="approveText">Brief T28: the approve file's text as <c>slot enroll</c> received it (its fingerprint was
+    /// computed over those bytes), parsed instead of a re-read of the file at the path; null: the file.</param>
+    private static int ExecuteAccept(CommandContext ctx, string[] args, string? approveText = null)
     {
         var acceptUsage = $"{ctx.Prefix} slot accept <approve-file> [--receipt <file>] [--vault-dir <shared folder>]";
         // Brief T6 decision 8: --vault-dir joins a shared vault folder (record store).
@@ -707,7 +744,7 @@ public sealed partial class SlotCommand : ICliCommand
                 : $"Config is corrupted: this machine's pending '{config.Backend!.Value.DisplayName}' slot request has no hardware " +
                   "blob. Run 'tswap slot request' again on this machine, and have it approved again.");
 
-        var approve = SlotEnrollmentFileCodec.DeserializeApprove(File.ReadAllText(path));
+        var approve = SlotEnrollmentFileCodec.DeserializeApprove(approveText ?? File.ReadAllText(path));
 
         var pendingSlotId = DecodePending(config.PendingSlotId, "slot id");
         var pendingPublicKey = DecodePending(config.PendingSlotPublicKey, "public key");
@@ -1605,12 +1642,20 @@ public sealed partial class SlotCommand : ICliCommand
     private static int ExecuteMerge(CommandContext ctx, string[] args)
     {
         var usage = $"{ctx.Prefix} slot merge <receipt> [--yes] [{RecoveryKeyFlag}]";
-        var (rest, withRecoveryKey) = SplitRecoveryKeyFlag(args);
+        // Brief T28: --staged <id> --expect <sha256> reads the receipt from the staging folder.
+        var stagedUsage = $"{ctx.Prefix} {StagedMergeForm}";
+        var (stagedArgs, stagedId, expect) = SplitStaged(args, stagedUsage);
+        var (rest, withRecoveryKey) = SplitRecoveryKeyFlag(stagedArgs);
         var yes = rest.Contains("--yes");
         var positional = rest.Where(a => a != "--yes").ToArray();
-        if (positional.Length != 1 || positional[0].StartsWith("--") || rest.Count(a => a == "--yes") > 1)
+        if (rest.Count(a => a == "--yes") > 1)
+            throw new UsageException(stagedId is null ? usage : stagedUsage);
+        if (stagedId is not null && (positional.Length != 0 || withRecoveryKey))
+            throw new UsageException(stagedUsage +
+                "\n--staged takes no file and no --recovery-key-stdin: the receipt is the staged one, and the vault opens with this machine's hardware.");
+        if (stagedId is null && (positional.Length != 1 || positional[0].StartsWith("--")))
             throw new UsageException(usage);
-        var path = positional[0];
+        var path = stagedId is null ? positional[0] : "";
         // Brief T27: a '-' receipt is read from stdin, which then can't carry the recovery key too.
         if (path == StdioPath && withRecoveryKey)
             throw new UsageException(usage + StdinCarriesOneText("receipt"));
@@ -1627,9 +1672,12 @@ public sealed partial class SlotCommand : ICliCommand
 
         ctx.RequireSudo("slot merge");
 
-        var (incoming, source) = path == StdioPath
-            ? ReadMergeText(ReadStdinFile(ctx, "slot merge", "receipt"), "stdin", ctx.Prefix)
-            : ReadMergeFile(path, ctx.Prefix);
+        var (incoming, source) = stagedId is not null
+            ? ReadMergeText(ReadStaged(ctx, stagedId, expect!, ReceiptFileName, "receipt", "merged").Text,
+                Path.Combine(StagedFolder(ctx, stagedId), ReceiptFileName), ctx.Prefix)
+            : path == StdioPath
+                ? ReadMergeText(ReadStdinFile(ctx, "slot merge", "receipt"), "stdin", ctx.Prefix)
+                : ReadMergeFile(path, ctx.Prefix);
         if (incoming.FormatVersion != keyring.FormatVersion)
             throw new TswapException(
                 $"The {source} is for a keyring format version {incoming.FormatVersion}; this vault's is version " +
@@ -1909,6 +1957,12 @@ public sealed partial class SlotCommand : ICliCommand
         if (!ctx.Console.IsInputRedirected)
             throw new TswapException(
                 $"{command}: '-' reads the {what} from stdin, and stdin is a terminal here. Pipe the file in, or name it.");
+        return ReadBoundedStdin(ctx, command, what);
+    }
+
+    /// <summary>All of stdin, refused past <see cref="MaxStdinFileSize"/> (nothing past that is read); brief T28's <c>slot stage put</c> too.</summary>
+    private static string ReadBoundedStdin(CommandContext ctx, string command, string what)
+    {
         var buffer = new char[MaxStdinFileSize + 1];
         var read = ctx.Console.In.ReadBlock(buffer, 0, buffer.Length);
         // A UTF-8 character is at least one byte, so more characters than the limit is more bytes too.
