@@ -17,7 +17,7 @@ decision, the issue's own words: "an input change by owner decision, not an asse
 commit message and list those tests in the report. Known ones, all sanctioned the same way:
 `CommandReferenceTests.Subcommands_TokenisesBothUsageShapes` (its expected list holds `"enroll"`, which becomes
 `"enrol"`), `CommandReferenceTests.SudoTableDrive` (its `results["slot enroll"]` key and its
-`g.Run("", "slot", "enroll", "--via", ...)` call), `SlotEnrollTests.UsageErrors` (the input rows and the
+`g.Run("", "slot", "enroll", "--via", ...)` call), `SlotEnrollTests.UsageErrors_RefuseBeforeAnySshCall` (its `UsageErrors` input rows and the
 `Usage: tswap slot enroll ...` text), and the `SlotEnrollTests` message assertions that quote the command
 (`slot enroll needs a terminal here...`, `'tswap slot enroll ... --fresh'`, `Running 'slot enroll' again...`). Any other
 changed assertion must be a printed string whose only change is a respelling; anything else is not sanctioned.
@@ -25,14 +25,20 @@ Also sanctioned:
 - every test invocation of the command (`SlotEnrollTests`' `Enroll`/`EnrollOnTerminal` helpers, which pass
   `["slot", "enroll", ...]`, and its direct calls) renames with it, apart from the synonym test;
 - the simulated hardware seam's call name: `SimulatedHardwareService` reports `nameof(Enroll)` to its `CallObserver`,
-  so renaming `Enroll` changes the observed `"Enroll"` to `"Enrol"` in `SecureEnclaveOwnerScopeTests` (lines 174, 186,
-  199, 234 and 481 at bdda149) and `GuidedInitTests` (line 785). `"Unlock"` is unaffected.
+  so renaming `Enroll` changes the observed `"Enroll"` to `"Enrol"`. Every assertion of that observed call name is
+  sanctioned, wherever it is (`c.Call == "Enroll"`, `AssertSecureEnclaveCallsRanAsTheOwner("Enroll", ...)`). At
+  bdda149 they are in `SecureEnclaveOwnerScopeTests` (lines 174, 186, 199, 234, 481) and `GuidedInitTests` (785).
+  `"Unlock"` is unaffected.
 List all of these in the report.
 
 **Review history.** Round 1 (MiMo): C1 (the guard scanned its own allowlist and word list), I1 (the
 confirmation check covered JSON members only), I2 (`docs/commands.md` is only partly generated), I3 (gaps in the
-word list), M1-M5. All folded in. GLM's round-1 session ended without a review. Round 2 (GLM): I1 (the seam's
-call-name assertions were not sanctioned) and M1-M8, all folded in.
+word list), M1-M5. All folded in. GLM's round-1 session ended without a review. Round 1 minors: M1 help test by
+regex, M2 `EnrolL` camelCase, M3 file types/dotfiles/tab split/CRLF, M4 inline anchor redirects and program
+`docs/...#anchor` literals, M5 sanctioned tests named. Round 2 (GLM): I1 (the seam's call-name assertions were not
+sanctioned); M1 red count, M2 all test invocations of the command, M3 other allowlist entries, M4 own lowercase
+identifiers, M5 `.py/.cil/.html`, M6 break-it-once for the help test, M7 more stems, M8 an unlisted released anchor;
+all folded in. Round 3 (MiMo, scoped): ready; F1-F6 wording fixes folded in.
 
 **Parallel briefs.** None: T33 runs last, alone, because it touches most files.
 
@@ -100,8 +106,8 @@ What stays:
   edited line falls out of the allowlist.
   A second test, `UsSpellingAllowlist_HasNoStaleEntries`, fails on an entry that matches no line any more.
 
-Run it before the sweep and record the red count in the report: about 1,000 hits, the controller's rough count on
-main at bdda149: about 700 hit lines in scope (about 1,000 counting the skipped record folders).
+Run it before the sweep and record the red count in the report. At bdda149, measured by the brief reviewer: about
+700 hit lines in scope (about 840 with the record folders; about 1,000 regex matches in all).
 
 A respelt British identifier whose next word starts with `L` (`EnrolList`, `enrolLookup`) still matches the regex.
 Don't respell it back to a US form. Choose another name or allowlist it with the reason "British spelling, camelCase
@@ -110,9 +116,9 @@ word break".
 **The command word.** `slot enroll` was added after v0.3.0 (T27, unreleased), so it is renamed outright to
 `slot enrol`: usage, `Forms`, `Description`, `Prompt.cs`, the docs and the hints that name it. Keep `enroll` as a
 synonym that runs the same command, so someone typing the US form isn't refused. It is not shown in help,
-`docs/commands.md` or the prompt. For the command word, its one literal in the dispatch and the test that pins it
-are the only allowlist entries. Other entries are expected too: released anchors, external names such as
-`ykpersonalize`, quoted tool errors (for example `Tpm2ArgvTests.cs`), Apple's `customize="never"` in
+`docs/commands.md` or the prompt. For the command word, the only allowlist entries are its one literal in the dispatch and
+the lines of the synonym test that use it, one entry per source line. Other entries are expected too: released anchors, external names such as
+`yubikey-personalization` (Yubico's tool; `Slot2Verify.cs`, `YubiKeyAccessTexts.cs`, `docs/install.md` and others), quoted tool errors (for example `Tpm2ArgvTests.cs`), Apple's `customize="never"` in
 `contrib/packaging/macos/distribution.xml`, and camelCase breaks. Tests, written first:
 - `SlotEnrol_UsSpelling_RunsTheSameCommand`: `slot enroll --via <user@host> --batch ...` behaves as `slot enrol`
   does. Reuse `SlotEnrollTests`' harness (renamed `SlotEnrolTests`), assert the same outcome as the existing batch
@@ -151,7 +157,11 @@ says that `-ize` is also a valid British (Oxford) spelling, and that the owner c
 
 Lowercase hits in tswap's own code are respelt like prose. That includes identifiers such as a `color` parameter
 across `IConsole` and its implementations, or `sanitized` and `normalized` locals. tswap's own PascalCase identifiers
-are out of Task 2's reach and stay as they are. The British forms are `-our`, `centre`, `grey`, `cancelled/cancelling`, `-ise/-isation/-iser` and `analyse/-yser`.
+are out of Task 2's reach and stay as they are. The British forms are `-our`, `centre`, `grey`, `cancelled/cancelling`, `-ise/-isation/-iser`, `analyse/-yser`,
+`defence`, `offence`, `acknowledgement(s)`, `fulfil/fulfils/fulfilment`, `travelled/travelling`,
+`labelled/labelling` and `modelled/modelling`. The guard only sees US forms, so take care that the replacement is the
+right British one. A member of a serialised type, an environment variable name, a `--flag` literal or a file or
+folder name constant is an interface name, as in Task 1: allowlist it and never respell it (none matches today).
 Before the sweep, run a catch-all once, `\b[a-z]+iz(e|es|ed|ing|ation|ations|er|ers)\b` over the same files. Add
 every further `-ize` stem it shows to the list (ignore `size`, `prize`, `seize`, `capsize` and the like, which have no
 `-ise` form), and list the added stems in the report. Same allowlist file and same rules as Task 1. A lowercase hit that is a name other software owns, such as a JSON
