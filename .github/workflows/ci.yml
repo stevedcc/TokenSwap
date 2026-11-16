@@ -116,7 +116,9 @@ jobs:
           CI_REQUIRE_SE: ${{ runner.os == 'macOS' && '1' || '' }}
           # CI_REQUIRE_LIBFIDO2=1 on Linux and macOS (installed above): Libfido2SmokeTests fails instead of skipping.
           CI_REQUIRE_LIBFIDO2: ${{ runner.os != 'Windows' && '1' || '' }}
-        run: dotnet test TokenSwap.slnx --no-build --filter "Category!=E2E&Category!=SecureEnclave&Category!=Tpm&Category!=TpmWindows&Category!=YubiKey&Category!=Perf"
+        # --blame-hang (2026-11-16): a test that runs past 10 minutes is stopped and named, with a dump, instead of
+        # the job hanging until GitHub's 6-hour limit (T31's macOS runs hung silently for hours).
+        run: dotnet test TokenSwap.slnx --no-build --blame-hang --blame-hang-timeout 10m --filter "Category!=E2E&Category!=SecureEnclave&Category!=Tpm&Category!=TpmWindows&Category!=YubiKey&Category!=Perf"
 
       - name: Remove libpcsclite again (Linux)
         if: runner.os == 'Linux'
