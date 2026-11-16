@@ -24,7 +24,7 @@ folders only. Tests never use the real clock or sleeps. Commits end with
 report when the brief can't be built as written. Never change an existing test's assertion unless this brief sanctions
 it by name (it sanctions two, in Task 5). British spelling in new text.
 
-**Review history.** None yet.
+**Review history.** None yet. Controller amendment A1 (Task 6 respells the banners, see there).
 
 **Parallel briefs.** T35 (Windows output: console encoding and glyphs, `run`'s ConPTY, `InitCommand`'s `--yubikey`
 header and closing line, `docs/install.md`), T36 (slot-kind labels in `slots`, tightening loose vault files,
@@ -357,8 +357,13 @@ Files: `TswapCli/Commands/SlotStage.cs`, `TswapCli/Commands/SlotCommand.cs` (`Hu
 
 ## Task 6: the init banner lines up (#337.6)
 
-Add one space before the closing `║` of `"║  ✓ INITIALIZATION COMPLETE            ║"` in `InitCommand.cs` (three places,
-`:373`, `:441`, `:759`) and `GuidedInit.cs:448`, so each is 42 characters like its `╔`/`╚` lines.
+Replace `"║  ✓ INITIALIZATION COMPLETE            ║"` in `InitCommand.cs` (three places, `:373`, `:441`, `:759`) and
+`GuidedInit.cs:448` with `"║  ✓ INITIALISATION COMPLETE            ║"` (British spelling, owner decision #254; the
+same length), plus the one missing space before the closing `║`, so each is 42 characters like its `╔`/`╚` lines. Respell
+the FIDO2 header `tswap - FIDO2 Keyring Initialization` the same way (`Initialisation`, keeping its box width), so #352
+has nothing left in these banners. The tests that assert these banner texts change with them (sanctioned: a respelling
+by owner decision); name them in the commit message. (Controller amendment A1: these literals are also on #352's list;
+doing the spelling here avoids touching them twice.)
 
 Tests:
 - A helper `BannerAssert.LinesUp(string output)` (new `TswapTests/BannerAssert.cs`): at least one line starts with `║`,
