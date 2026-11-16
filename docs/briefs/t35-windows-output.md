@@ -4,7 +4,8 @@ Issues: https://github.com/stevedcc/TokenSwap/issues/348 (three items, the third
 https://github.com/stevedcc/TokenSwap/issues/349 (and its comment on sshd's title), and the open parts of
 https://github.com/stevedcc/TokenSwap/issues/294: item 4 (garbled banners and glyphs in Windows PowerShell 5's
 console) and the T31 review's leftover (`init --yubikey`'s header and closing line print `sudo tswap slot add
---yubikey` on Windows too). Base: `origin/main` at 51b0b37. Read AGENTS.md and CLAUDE.md first, then:
+--yubikey` on Windows too). Also https://github.com/stevedcc/TokenSwap/issues/355 (non-ASCII values unredacted on a
+Windows console; library side stevedcc/RedactingPty#12), closed by Task 3 (amendment A4). Base: `origin/main` at 51b0b37. Read AGENTS.md and CLAUDE.md first, then:
 - for Task 1: `TswapCli/Commands/RunCommand.cs` (`Execute` up to `ctx.Storage.LoadConfig()`), `TswapCore/Validation.cs`
   (`TokenRegex`, `FileTokenRegex`, `ValidateFileTokens`, `ExtractTokens`, `ValidNameRegex`, `MaxNameLength`),
   `TswapTests/RunEnvTests.cs` (its `Run` helper and `ErrorLine`), `TswapTests/RecordingPty.cs`,
@@ -49,7 +50,16 @@ commit and in the report which tests are Windows-only and unverified locally; th
 check, and for those the break-it-once is done on CI by the controller (list the line to revert for each). What only the
 owner can check by hand is in "Owner checks" at the end.
 
-**Review history.** None yet.
+**Review history.** Round 1 (MiMo "no", GLM "yes"): both I1 (redirected output not byte-identical in the mixed
+console/redirect case) → A1; both I2 (unsanitised echo of `{@path}`) → A2; MiMo I3 (no end-to-end check of the
+sequences-as-text symptom) → A3, partly (the fragments it suggests are emitted by the outer pseudo console too); #355 →
+A4; MiMo M1 (EncodingHelper path) → A5 (the file exists, at `src/libraries/Common/...`; full path given); MiMo M2 / GLM
+M6b (paragraph placement) → A6; MiMo M3 (the line-686 argv) → A7; MiMo M4 / GLM M6c (sentinels, two captures) → A8;
+MiMo M5 (PowerShell 5.1 `-File` and `"`) → A9; MiMo M6 / GLM M4 (PowerShell mechanism stated as fact on bash) → A10;
+MiMo M7 (VT left on after Ctrl+C) → A11; MiMo M8 (`IsConsole` is private) → A12; GLM M1 (`print.ps1` doesn't exist) →
+A13; GLM M2 (the "63 `.Reason` assertions" figure) → A14; GLM M3 (the seam is live in in-process tests) → A15; GLM M5
+(the ingest check shows names, not the value) → A16; GLM M6a (where the braces warning goes) → A17. All folded in
+below; none rejected.
 
 **Parallel briefs.** T34 (SlotEnrol*.cs, SlotStage.cs, ProcessSshTransport.cs, SlotCommand.cs's request/accept output,
 docs/multi-machine.md's enrolling-over-SSH section), T36 (SlotsCommand's kind labels, vault-file modes,
@@ -517,3 +527,108 @@ In the classic console window (conhost) with Windows PowerShell 5.1, then in Win
    and home now, accepting misplaced output for children that move the cursor?
 3. `.cmd` scripts in the Windows advice: left out because `cmd.exe` re-parses a secret's `&`, `|`, `^`, `%` and `"`. Keep it
    PowerShell-only?
+
+
+## Amendments after brief review round 1 (binding; they win over the text above)
+
+Round 1 (MiMo, GLM-5.3): MiMo "no", GLM "yes". Both found that the design is sound and buildable, and both asked for A1
+and A2. The rulings on shape-only hints, `.ps1` over `.cmd`, passing the clear through, and dropping titles stand.
+
+**A1. Task 3: UTF-8 only when both stdout and stderr are consoles; the `SetOut`/`SetError` writers are dropped.** RedactingPty's
+`FallbackPty` and `WindowsPty` write the child's output straight to `Console.OpenStandardOutput()` /
+`OpenStandardError()` in `Console.OutputEncoding`, bypassing any `Console.SetOut` writer. So with one of the two streams
+redirected (`tswap run tool > out.txt` from a console), the brief's rule would put tswap's own lines in the OEM code page
+and the child's output in UTF-8 into the same file. The rule becomes:
+- not Windows; or Windows and stdout **or** stderr is not a console; or the output code page is already 65001: nothing
+  changes, and every byte stays as in 0.3.1;
+- otherwise (both are consoles): remember `Console.OutputEncoding`, set it to `new UTF8Encoding(false)`, and on dispose
+  flush both writers and set it back.
+This is the case `WindowsPty` needs. The ConPTY path also needs stdin to be a console, which this rule doesn't ask for,
+so the closing of #355 is unaffected. The mixed case keeps today's `?` glyphs. The cost: `tswap names > f` from a
+console still shows a garbled `❌` on stderr when it fails; that is the price of never mixing encodings in one stream.
+- `IConsoleEncodingHost` loses `UseWriter`. Its members are `IsWindows`, `IsConsole(StandardStream)`, `OutputEncoding`
+  and `Flush()`.
+- Tests: `Windows_StdoutRedirected_KeepsTheOriginalForIt` and its stderr mirror become
+  `Windows_StdoutRedirected_NothingSet` and `Windows_StderrRedirected_NothingSet` (no set, and dispose sets nothing). The
+  break-it-once for them: make the rule "either is a console", and both fail.
+- The docs bullet: replace "Output redirected to a file or pipe is written in the window's code page, as before." with
+  "When stdout or stderr is redirected to a file or pipe, nothing changes: tswap and the programs `tswap run` starts
+  write in the window's code page, as before." Add: "A long-running `tswap agent serve` in a console window keeps it at
+  UTF-8 until it exits."
+- Owner check 5 gains: `tswap run <a child that prints non-ASCII> > f` gives the same bytes in `f` as
+  0.3.1-pre-f7c61b0.
+
+**A2. The braces texts echo `Validation.Printable(argument)`.** A `{@path}` argument can carry control characters
+(ESC, CR, BEL), and the code's rule for echoed text is `Validation.Printable` (Validation.cs line 52: everything outside
+printable ASCII becomes `?`). `BracesHint` and `BracesWarning` use `var shown = Validation.Printable(argument)` for both
+places they quote it (`{shown}` and `{{{shown}}}`). The name shape is ASCII already, so its texts don't change. New Theory
+case in `NoToken_BracedName_HintsTheQuotedForm`'s file, `NoToken_ControlCharactersInAFileToken_ShownAsQuestionMarks`:
+`run tool "{@x\u001b[31my}"` gives a stderr that contains `{@x?[31my}` and `'{{@x?[31my}}'`, and contains no
+`\u001b`. Break-it-once: echo the raw argument, and this test fails. Remove the sentence "Echoing the argument is safe"
+and replace it with this ruling.
+
+**A3. Task 4's E2E: what it can and can't show.** MiMo asked for a check that the capture holds no literal `?9001h` or
+`[2J`. That can't be asserted. The *outer* pseudo console of `RunTswapInConPty` emits its own `ESC[?9001h`, `ESC[2J` and
+`ESC[H` at start, so those fragments are in every capture. Whether a VT-off ESC shows in the outer capture as a real ESC
+or as a `←` glyph can't be known from here. So:
+- `Run_NoChildTitle_WindowsConPty` also asserts that the capture has no `\u2190[` (the arrow form the owner saw).
+- In the report, give the `EscapeVt` dump of this test from the CI run with and without the `using (... AroundChild ...)`
+  line (the controller's break-it-once for it on CI). If the two dumps don't differ, say so. Then the unit test
+  `WindowsConsole_VtOnWhileTheChildRuns_RestoredAfter` and owner check 3 are the evidence for VT, and the E2E proves the
+  title drop only. Never loosen an assertion to make it pass.
+
+**A4. #355.** Add `#355` to the Task 3 commit's subject and body ("Fixes #355 on the ConPTY path"). Name
+`NonAsciiValue_Redacted_WindowsConPty` as the test that closes it. Its CI break-it-once (Program.cs's `using var
+consoleOutput` removed, the test fails) is the evidence the controller records on #355. Wording in "Why": Task 3 closes the
+gap on the ConPTY path, the only path where it exists. `FallbackPty` decodes and re-encodes in the console's code page,
+which is consistent for children that follow that code page. RedactingPty#12 (R1) is the library side.
+
+**A5. The .NET citation:** `EncodingHelper.GetSupportedConsoleEncoding` is in
+`src/libraries/Common/src/System/Text/EncodingHelper.Windows.cs` of dotnet/runtime, called from
+`src/libraries/System.Console/src/System/ConsolePal.Windows.cs` (`OutputEncoding`).
+
+**A6. `docs/agent-integration.md`:** the PowerShell paragraph goes immediately after the agent-role table, before the
+paragraph that starts "`init` needs no sudo either".
+
+**A7. `EveryWayOutReason_EndsWithTheWholeSentence`, line 686:** use `["nsenter"]` (from `ShellWhenNoCommand`; it holds
+`nsenter`, `runuser`, `doas`, `chroot`, `unshare`).
+
+**A8. `Glyphs_ReachTheConsole_WindowsConPty` makes two captures**, each its own `RunTswapInConPty` call with its own
+sentinel, which is ASCII and printed both before and after the change: the refused `run` waits for `No {{tokens}}`; the
+`init` waits for `INITIALIZATION COMPLETE`. The assertions about `❌` apply to the first capture, and those about `✓` and
+`╔═` to the second.
+
+**A9. Owner question 3 gains:** "Windows PowerShell 5.1's `-File` builds the script's arguments from the raw command
+line, so a secret containing `"` can reach the script altered. That is wrong data, not a command run; `cmd` is worse."
+
+**A10. The braces wording** doesn't state PowerShell's mechanism as fact on every shell. `BracesHint`:
+`$"The argument {shown} looks like the token {{{shown}}} with one pair of braces removed, as PowerShell does to an
+unquoted token. Quote it: '{{{shown}}}'."` `BracesWarning`: the same change (", as PowerShell does to an unquoted token;
+it is passed on as it is."). The exact text in `NoToken_BracedName_HintsTheQuotedForm` follows ("... with one pair of
+braces removed, as PowerShell does to an unquoted token. Quote it: '{{db-pw}}'.").
+
+**A11. Task 4's console-window bullet gains:** "After a Ctrl+C or a killed tswap the window may keep interpreting escape
+sequences; that is harmless." It is the same ruling as for the code page: no signal handler.
+
+**A12. `ControllingTerminal.WindowsConsole.IsConsole` is private.** `ConsoleOutputEncoding` and `WindowsVirtualTerminal`
+declare their own `GetStdHandle`/`GetConsoleMode` (`SetConsoleMode` for the second) `LibraryImport`s. Leave
+`ControllingTerminal` unchanged.
+
+**A13. The umlaut test reuses `print3.ps1` as it is**, written the way `Run_CompoundCommand_RedactedOutput_WindowsConPty`
+writes it, with its trailing `Start-Sleep`. That sleep is load-bearing: a child that exits at once can render as a blank
+session. It is existing child behaviour, not a test wait.
+
+**A14. Task 2's ruling:** replace "and `GetBlockedInvocation` has 63 test assertions on `.Reason`" with "and threading a
+flag would change every helper's signature for wording only". There is one `.Reason` assertion on it
+(`InlineCodeBlockTests.cs` line 255).
+
+**A15. `FleetMachine.Context` sets `StdoutConsoleMode = () => null`**, so no in-process test ever reaches a real console,
+also in a suite run from a Windows console. Today's `RunVaultRedactionTests` line 60 (`Assert.Single(_pty.Options!.Matchers)`)
+relies on this. The Task 4 tests set the seam themselves. `TswapTests/FleetMachine.cs` joins Task 4's files.
+
+**A16. The umlaut test checks the stored value**, not only the name. After `ingest`, `RunTswap("get", "umlaut")` (the E2E
+environment sets `TSWAP_TEST_SUDO_BYPASS=1`) prints `pässwört-conpty`. If that fails, the ingest leg is what to fix, not
+the redaction. Also, in the report, the CI revert of A4 failing is the proof that the test exercises the non-ASCII path.
+
+**A17. Where the braces warning goes:** immediately after the root check for `{{@file}}` (line 100), before the
+`if (ctx.Verbose)` block, so it comes after every refusal made before the vault opens and before any verbose line.
