@@ -738,6 +738,61 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
     }
 
     /// <summary>
+    /// Brief T32 (#320): B's own slot is password-free, A's needs the password, and the vault-password file is gone. B,
+    /// reprogrammed, is re-enrolled; only the new slot was to get the password.
+    /// </summary>
+    private FleetMachine ReprogrammedBOtherSlotNeedsTheMissingFile()
+    {
+        var m = PasswordVaultOnAAndB(bPassword: false, recovery: true);
+        Reprogram(m, SerialB);
+        File.Delete(Path.Combine(m.VaultDir!, RecordVaultStore.VaultPasswordFileName));
+        m.Keys.Challenges.Clear();
+        m.Keys.PluggedIn = [SerialB];
+        return m;
+    }
+
+    /// <summary>
+    /// Brief T32 (#320): a new password slot while other slots need the missing file is refused before the recovery key,
+    /// any password prompt and the liveness challenges: a freshly salted file would lock A's slot out.
+    /// </summary>
+    [Fact]
+    public void SlotAdd_Reenrol_NewSlotPassword_OtherSlotsNeedTheMissingFile_Refused()
+    {
+        var m = ReprogrammedBOtherSlotNeedsTheMissingFile();
+        var keyringBefore = File.ReadAllBytes(KeyringPath(m));
+        var configBefore = File.ReadAllBytes(m.ConfigPath);
+        var stdin = _recoveryKey + "\n" + Password + "\n" + Password + "\n";
+
+        var (exit, stdout, stderr) = m.Run(stdin, "slot", "add", "--yubikey", "--password", "--recovery-key-stdin");
+        KeyMaterial.AssertNotEchoed(stdout + stderr, _recoveryKey, Password);
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains(VaultPasswordChoice.FirstPasswordWithoutFileText, stderr);
+        Assert.Empty(m.Keys.Challenges); // no liveness check
+        Assert.Equal(keyringBefore, File.ReadAllBytes(KeyringPath(m)));
+        Assert.Equal(configBefore, File.ReadAllBytes(m.ConfigPath));
+        Assert.False(File.Exists(Path.Combine(m.VaultDir!, RecordVaultStore.VaultPasswordFileName)));
+        Assert.Empty(m.Keys.Programmed);
+        Assert.Equal(stdin, m.LastConsole!.In.ReadToEnd()); // nothing read: not the recovery key, not the password
+    }
+
+    /// <summary>Brief T32 (#320): the same state with <c>--no-password</c> re-enrols B without the password.</summary>
+    [Fact]
+    public void SlotAdd_Reenrol_NoPassword_OtherSlotsNeedTheMissingFile_Reenrols()
+    {
+        var m = ReprogrammedBOtherSlotNeedsTheMissingFile();
+
+        var (exit, stdout, stderr) = m.Run(_recoveryKey + "\n", "slot", "add", "--yubikey", "--no-password", "--recovery-key-stdin");
+
+        Assert.True(exit == 0, stderr + stdout);
+        Assert.Contains(ReenrolledLine(SerialB), stdout);
+        var slotsOfB = SlotsOf(m, SerialB);
+        Assert.Equal(2, slotsOfB.Count);
+        Assert.False(slotsOfB[^1].Blob.RequiresPassword);
+        Assert.False(File.Exists(Path.Combine(m.VaultDir!, RecordVaultStore.VaultPasswordFileName)));
+    }
+
+    /// <summary>
     /// Fix round, item 3: the unlock's own prompt can't run (no terminal), so nothing was typed: the refusal doesn't say
     /// the password may have been mistyped.
     /// </summary>
