@@ -820,4 +820,35 @@ public class SlotAddFido2Tests : IDisposable
             count++;
         return count;
     }
+
+    /// <summary>
+    /// Brief T32 (#320): FIDO2 key A has a password slot, the folder's vault-password file is gone, and key B is to get
+    /// the password: refused before any credential is made on B, and no new file is written.
+    /// </summary>
+    [Fact]
+    public void SlotAddFido2_Password_PasswordSlotsWithoutTheFile_Refused()
+    {
+        OtpVault();
+        _fido2.AddKey(SerialA, Fido2TestSlots.Aaguid);
+        _terminal = new FakeTerminal(Pin, Pin);
+        const string password = "a long vault password";
+        var (addExit, _, addErr) = Run($"{password}\n{password}\n", "slot", "add", "--fido2", "--serial", SerialA.ToString(), "--password");
+        Assert.True(addExit == 0, addErr);
+        var vaultPasswordPath = Path.Combine(VaultStores.Open(_dir).LoadConfig().VaultDir!, RecordVaultStore.VaultPasswordFileName);
+        Assert.True(File.Exists(vaultPasswordPath));
+        File.Delete(vaultPasswordPath);
+        _fido2.AddKey(SerialB, Fido2TestSlots.Aaguid);
+        _terminal = new FakeTerminal(Pin, Pin);
+        var keyringBefore = KeyringCodec.Encode(Keyring());
+        var callsBefore = _fido2.Calls.Count;
+
+        var (exit, stdout, stderr) = Run($"{password}\n{password}\n", "slot", "add", "--fido2", "--serial", SerialB.ToString(), "--password");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains(VaultPasswordChoice.FirstPasswordWithoutFileText, stderr);
+        Assert.DoesNotContain("New vault password", stdout + stderr);
+        Assert.False(File.Exists(vaultPasswordPath));
+        Assert.Equal(keyringBefore, KeyringCodec.Encode(Keyring()));
+        Assert.DoesNotContain(_fido2.Calls.Skip(callsBefore), c => c.Op == FakeFido2Op.MakeCredential);
+    }
 }

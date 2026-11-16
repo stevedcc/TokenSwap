@@ -147,6 +147,7 @@ tswap run rclone sync --password {{storj-pass}} /data remote:backup
 
 # See which secrets exist (names only, no sudo needed)
 tswap names
+tswap names 'k8s-*'   # only the names that match (quote the pattern in a Unix shell)
 ```
 
 An AI agent works the same way, and keeps values out of the command line where it can: a config file through

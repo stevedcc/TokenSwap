@@ -49,6 +49,12 @@ where shell history keeps them; read them without echo instead (bash: `read -rs 
   `vault-password` file in the vault folder. Every later one asks once and refuses a password that
   isn't the vault's. Without a terminal the password is read from stdin instead: twice, on two
   lines, for a first password slot.
+- **A missing `vault-password` file.** When the vault has password slots but the vault folder has no
+  `vault-password` file (it hasn't synced yet, or it was deleted), no command makes a new one: `slot add` and
+  `recover` with a password refuse before asking for it, because a new file would lock out every slot that needs
+  the old one. `--no-password` still adds the slot. Wait for the sync or restore the file from a backup, then add
+  the password slot. This guard is in tswap itself, so it holds per version: an older tswap on another machine
+  of the fleet can still create the file.
 - **Length.** A password under 12 characters gets a warning. An empty one is a usage error (use
   `--no-password`).
 - **`recover --password`** reads the recovery key from stdin's **first line** and the vault password
