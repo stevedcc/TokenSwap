@@ -26,6 +26,13 @@ public sealed record BrokerLimits
     /// <summary>An unlock taking longer is abandoned: the request gets 503.</summary>
     public TimeSpan UnlockTimeout { get; init; } = TimeSpan.FromSeconds(30);
 
+    /// <summary>
+    /// Brief T29, amendment A2: how long a broker unlock waits for the YubiKey lock (another tswap using the key):
+    /// <see cref="UnlockTimeout"/> less 5 s, so the wait ends with the busy text, as a failed unlock, before the broker
+    /// abandons the unlock.
+    /// </summary>
+    public TimeSpan YubiKeyWaitBudget => UnlockTimeout - TimeSpan.FromSeconds(5);
+
     /// <summary>After this many abandoned unlocks in a row, serve exits non-zero (systemd restarts it).</summary>
     public int UnlockTimeoutsBeforeExit { get; init; } = 3;
 }

@@ -602,6 +602,11 @@ folder: `/run/user/<uid>/tswap/agent-<16 hex>.sock` on Linux (else `~/.cache/tsw
 `~/Library/Caches/tswap/run/` on macOS, a named pipe on Windows; a password broker's control socket
 is `broker-<16 hex>/control.sock` in the same folder.
 
+The YubiKey lock (several tswap commands take turns at the key, [setup.md](setup.md#several-tswap-commands-at-once))
+is `~/.cache/tswap/yubikey.lock` on Linux and macOS (the invoking user's under sudo) and
+`%LOCALAPPDATA%\tswap\yubikey.lock` on Windows, never in the config or vault folder. It is empty, and safe to
+delete when no tswap runs.
+
 A command that backs up `config.json` before it writes (`slot add`, `slot merge` and others) copies
 it to `config.json.bak-<UTC timestamp>` beside it (for example `config.json.bak-20261105T120000123Z`,
 with `-1`, `-2` added when two fall in one millisecond), never overwriting an earlier backup. Under

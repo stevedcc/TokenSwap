@@ -59,16 +59,22 @@ public interface IBrokerSecretSource
 /// record-store vault; <c>serve</c> refuses a classic one.
 /// <para>Brief T17: <paramref name="password"/> is a password broker's held password
 /// (<see cref="BrokerPasswordState.Provider"/>), null for a password-free one; no unlock asks an agent.</para>
+/// <para>Brief T29 (A2, fix round 1): each unlock waits for the YubiKey lock at most
+/// <see cref="BrokerLimits.YubiKeyWaitBudget"/> of <paramref name="limits"/> (default <see cref="BrokerLimits"/>), so it
+/// ends as a failed unlock before the broker abandons it, on every broker path (routes, templates).</para>
 /// </summary>
-public sealed class VaultBrokerSecretSource(RecordVaultStore store, VaultUnlocker unlocker, VaultPasswordProvider? password = null) : IBrokerSecretSource
+public sealed class VaultBrokerSecretSource(RecordVaultStore store, VaultUnlocker unlocker, VaultPasswordProvider? password = null, BrokerLimits? limits = null) : IBrokerSecretSource
 {
+    private readonly TimeSpan _yubiKeyWait = (limits ?? new BrokerLimits()).YubiKeyWaitBudget;
+
     public BrokerSecret Read(string secretName)
     {
         byte[] key;
         try
         {
             var config = store.LoadConfig();
-            key = unlocker.Unlock(config, BrokerPasswordProof.NoChoice, BrokerPasswordProof.SourcesFor(password));
+            using (TswapCore.Vault.YubiKeyLock.WithWaitBudget(_yubiKeyWait))
+                key = unlocker.Unlock(config, BrokerPasswordProof.NoChoice, BrokerPasswordProof.SourcesFor(password));
         }
         catch (Exception ex) when (ex is not (OutOfMemoryException or BrokerLockedException))
         {
@@ -104,7 +110,8 @@ public sealed class VaultBrokerSecretSource(RecordVaultStore store, VaultUnlocke
         try
         {
             var config = store.LoadConfig();
-            key = unlocker.Unlock(config, BrokerPasswordProof.NoChoice, BrokerPasswordProof.SourcesFor(password));
+            using (TswapCore.Vault.YubiKeyLock.WithWaitBudget(_yubiKeyWait))
+                key = unlocker.Unlock(config, BrokerPasswordProof.NoChoice, BrokerPasswordProof.SourcesFor(password));
         }
         catch (Exception ex) when (ex is not (OutOfMemoryException or BrokerLockedException))
         {
