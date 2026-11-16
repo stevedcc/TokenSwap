@@ -9,7 +9,7 @@ from Sealed Secrets, SOPS, age or Vault, which protect a secret at rest; use bot
    runtime: the agent never handles plaintext, and secrets never appear in shell history.
 
 2. **The vault key lives in hardware.** A vault opens with a YubiKey (HMAC-SHA1 challenge-response),
-   a FIDO2 security key of any brand with `hmac-secret` (its PIN and a touch on every unlock), a TPM 2.0
+   a FIDO2 security key of any brand with `hmac-secret` (0.3.0 or newer; its PIN and a touch on every unlock), a TPM 2.0
    (Linux, Windows) or a Mac's Secure Enclave. A vault has one slot per device, so any enrolled key,
    machine or the offline recovery key opens it alone. (The older **classic**
    single-file vault, which enrolled two YubiKeys at once via an XOR share, is only migrated since
@@ -59,10 +59,10 @@ own, and keep that folder writable only by you (tswap runs code from it). Run `t
 `installscript` (below).
 
 You need one hardware backend: a YubiKey (tswap prepares it with `tswap yubikey setup`; on Linux
-it needs Yubico's udev rule), a FIDO2 security key with a FIDO2 PIN set (a YubiKey needs nothing
-more; other brands need [libfido2](docs/install.md#libfido2-security-keys-other-than-yubikeys) on
-Linux and macOS, while Windows' own security key dialog works with every brand), a TPM 2.0 (Windows,
-or Linux with `tpm2-tools`), or a Mac's Secure Enclave. Prerequisites, building from source and notes for Windows
+it needs Yubico's udev rule), a FIDO2 security key, a TPM 2.0 (Windows, or Linux with `tpm2-tools`),
+or a Mac's Secure Enclave. A FIDO2 key needs its FIDO2 PIN set: a YubiKey needs nothing else, other
+brands need [libfido2](docs/install.md#libfido2-security-keys-other-than-yubikeys) on Linux and macOS,
+and on Windows the OS's own security key dialog covers every brand. Prerequisites, building from source and notes for Windows
 are in [Installing tswap](docs/install.md).
 
 **macOS (from v0.3.0): two downloads, signed and notarised, from the same bytes.** macOS 14 (Sonoma) or later, Apple silicon.
@@ -112,12 +112,13 @@ A FIDO2 slot needs nothing but the key's FIDO2 PIN. Then run `tswap init` in a t
 1. to plug in the security keys you want to use (don't touch them yet);
 2. which of the keys it found and this machine's chip (the TPM, or the Secure Enclave on a Mac) to
    use: each YubiKey is offered as an OTP slot and as a FIDO2 slot, and a security key of another
-   brand as a FIDO2 slot. You type their numbers, and any mix works (on a Mac, also whether each
+   brand as a FIDO2 slot (on Windows one FIDO2 entry covers every key, and Windows' dialog picks it:
+   [Guided `init` on each OS](docs/setup.md#guided-init-on-each-os)). You type their numbers, and any mix works (on a Mac, also whether each
    unlock asks for Touch ID or your login password, or neither);
 3. whether to add a vault password (optional);
 4. whether to add a recovery slot (the default): its private key is shown once, so store it
    offline;
-5. then it builds every slot and writes the vault in one step (touch a YubiKey when it flashes);
+5. then it builds every slot and writes the vault in one step (touch a key when it flashes; a FIDO2 slot asks for its PIN first);
 6. whether you have other machines: answer yes and it prints a step-by-step guide for adding them.
 
 For example, on a Linux laptop with a TPM and one YubiKey plugged in: pick both, skip the
