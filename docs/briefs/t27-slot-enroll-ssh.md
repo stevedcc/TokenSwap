@@ -15,7 +15,9 @@ simulated services, `TSWAP_CONFIG_DIR` and temp folders only. Commits end with
 report when the brief can't be built as written. Never change an existing test's assertion. British spelling in new
 text (enrol, enrolment); existing identifiers and messages that say "enroll" stay as they are.
 
-**Review history.** Round 1 (MiMo and GLM-5.3, both "Ready to implement: no", no Critical, design judged sound) found
+**Review history.** Round 2: GLM ready yes; MiMo no on four text slips (a leftover retry ruling, `--fresh` deleting
+before the confirmation, hand commands with a bare `tswap` that sudo's `secure_path` can't find, pinned help
+literals), folded with both reviewers' Minors. Round 1 (MiMo and GLM-5.3, both "Ready to implement: no", no Critical, design judged sound) found
 gaps in the brief's text, all folded in below: the machine states a retry depends on (a pending request without
 enrolment files, a declined overwrite, a re-run after a merge failure), the retry ignoring the new flags and having no
 way to abandon it (now `--fresh` and a flag check), `--vault-dir` threading (request refuses it without `--password`),
@@ -47,20 +49,26 @@ folder on its own, as `docs/multi-machine.md` "Sharing a vault folder" shows).
 **Machine states, checked first** (from the config and `<config dir>/enrol/`, before any SSH call):
 - **No pending request** (no config, or a complete one): step 2 runs as `slot request` does, including its
   `This machine already has a config. Overwrite and start a new slot request?` question on a complete config. A "no"
-  or EOF there stops `enroll` with exit 1 and `Nothing was changed.`; nothing is sent. If step 2 returns without
-  having written `request.json` (for whatever reason), `enroll` stops the same way and names the state.
+  or EOF there stops `enroll` with exit 1 and `Nothing was changed.`; nothing is sent. If step 2 fails after it
+  saved the pending config but before `request.json` was written (`ExecuteRequest` saves first), `enroll` stops with
+  ``The pending request was saved but its request file was not written (<reason>); the previous config was backed
+  up to <backup path>. Run 'tswap slot enroll ... --fresh' to start over, or 'tswap slot request <file>' by hand.``
+  (never "Nothing was changed").
 - **A pending request and `<config dir>/enrol/<id>/request.json` for its slot id**: continue from it (skip step 2),
   printing first `Continuing the pending enrolment of <device> kept in <folder> (run with --fresh to start over).`
-  Refused (usage-style, before any SSH call) when this run's backend, touch or password flags differ from the
-  pending request's (`Config.Backend`, the blob's touch and password marks): ``This machine's pending enrolment is
+  Refused (usage-style, before any SSH call) when a backend, touch or password flag **this run names** differs from
+  the pending request (`Config.Backend`; `Config.RequiresTouch` for a Secure Enclave; `Config.PendingVaultPassword`,
+  or for a YubiKey its blob's password and touch marks); flags this run doesn't name don't constrain, so the plain
+  retry the failure messages suggest always continues: ``This machine's pending enrolment is
   for <device>, not what this command names. Run the same command without those flags to continue it, or add
   --fresh to start over.`` A retry re-runs steps 3 to 5 against the `--via` destination given now.
 - **A pending request with no such `request.json`** (a hand-made `slot request`, or the files are gone): refuse with
   ``This machine has a pending slot request that 'slot enroll' has no files for. Finish it by hand (slot approve on
   the vault's machine, then slot accept here), or run 'tswap slot enroll ... --fresh' to start over.``
-- **`--fresh`**: delete this machine's `<config dir>/enrol/` folders, then run step 2 (which asks its overwrite
-  question about the pending config as `slot request` does). Ruling: `--fresh` never removes the pending request by
-  itself; only step 2's own overwrite does, after the person says yes.
+- **`--fresh`**: run step 2 (which asks its overwrite question about the pending config as `slot request` does), and
+  only once step 2 has written the new `request.json` delete the other `<config dir>/enrol/` folders (they may hold a
+  receipt a failed merge said to keep). A "no" or EOF changes nothing, folders included. Ruling: `--fresh` never
+  removes the pending request by itself; only step 2's own overwrite does, after the person says yes.
 - Two `enroll` runs at once on one machine are unsupported (last writer wins through the safe writer; say so in the
   docs, nothing more).
 
@@ -74,15 +82,15 @@ folder on its own, as `docs/multi-machine.md` "Sharing a vault folder" shows).
    unchanged), into the enrolment folder (below).
 3. **Approve**, remotely: `<remote prefix> slot approve - -`, the request file on its stdin; its stdout is the approve
    file. The host's messages (its fingerprint of the requesting slot, touch prompts) arrive on the local stderr as
-   they are printed, each line prefixed `[<destination>] ` so a host can't print something that looks like a local
-   prompt.
+   they are printed, each line prefixed `[<destination>] ` by the transport's relay, so the host's lines are visibly the
+   host's (a label for the person, not a boundary: all host output is untrusted text).
 4. **Accept**, locally, exactly as `slot accept <approve file> [--vault-dir <folder>]` (it already refuses an approve
    file whose slot id, echoed public key, backend or hardware blob differ from the pending request, and asks for the
    vault password when the slot has one); its receipt goes into the enrolment folder.
 5. **Merge**, remotely: `<remote prefix> slot merge -`, the receipt on its stdin. `enroll` never passes `--yes`, so the
    host adds only a slot it approved and hasn't merged yet (the existing `ApprovedSlots` guard; anything else is
    refused because stdin is not a terminal). The host's merge output (it has no file form; it comes back on stdout:
-   "Adding approved slot: ... fingerprint ...") is printed locally after the call, each line prefixed
+   "Adding approved slot: ... fingerprint ...") is printed locally after a successful call, each line prefixed
    `[<destination>] `.
 6. On success: print this slot's fingerprint again (`This machine's slot: <fingerprint>`, the one step 2 printed;
    the host's view of it is above, from step 3, for the user to compare), then `✓ Enrolled: <destination>'s vault now
@@ -117,7 +125,11 @@ can never be read as an option; refused as a usage error when it is empty, start
 a control character. No `BatchMode`: ssh asks for a key passphrase or a new host key at `/dev/tty` itself, which works
 with stdin piped. `-T` (no pseudo-terminal).
 
-**The `-` forms of approve and merge** (new, also usable by hand):
+**The `-` forms of approve and merge** (new, also usable by hand). In `Forms` they are **additional entries**
+(`slot approve - -`, `slot merge -`); the existing entries and help literals stay verbatim, because
+`SlotHelp_MergeTakesAReceipt`, `SlotHelp_AcceptNamesVaultDir` and `SlotUsage_IsTheHelpWithThePrefix` pin them
+(the help suffix keeps beginning ` (approve, merge and add take`). Check `CommandReferenceTests` with the extra
+entries too:
 - `slot approve - <approve-file>` reads the request from stdin; `slot approve <request-file> -` writes the approve
   file to stdout; `slot approve - -` both. `slot merge -` reads the receipt from stdin.
 - With an approve file of `-`, **stdout carries exactly the serialised approve file and nothing else**: every human
@@ -142,18 +154,21 @@ folder by accident. The docs tell the person to delete `<config dir>/enrol/` fol
 **Failure handling: stop at the first failed step, change nothing more, say what is left.** Exit code non-zero; the
 local messages, each naming the folder's actual paths. A `<reason>` is the exit code, `no output` or a one-line parse
 error, **never the captured bytes** (a partial approve file is a way into the vault while the pending private key is
-in `config.json`). The hand commands named are the `-` forms, which the sudoers rule above allows:
+in `config.json`). The hand commands named are the `-` forms, which the sudoers rule above allows, written with the
+program this run used on the host: `sudo <--remote-tswap value>` (default `sudo tswap`; no `sudo` under
+`--no-remote-sudo`), shown below as `<host tswap>`:
 - approve failed (ssh non-zero, empty or unparsable stdout): `The host didn't approve the request (<reason>). This
   machine's pending request is kept; nothing was added on <destination>. Fix the cause above and run the same 'tswap
-  slot enroll' again (it continues from the kept request), or carry <request.json> to the host and run 'sudo tswap
-  slot approve - - < request.json > approve.json' there, then 'tswap slot accept approve.json' here.` Ruling: running `enroll` again with a pending
-  request **continues from the pending request** (it skips step 2 and sends the kept `request.json`) instead of
-  refusing, when the enrolment folder for that pending slot id exists; with a pending request and no such folder it
-  refuses as `slot request` does today. This keeps a retry from needing a second touch-and-request.
-- accept failed: its own message (unchanged), then `The host approved this slot but its keyring is unchanged. After
-  fixing that, run 'tswap slot accept <approve.json>' here, then 'sudo tswap slot merge - < receipt.json' on <destination>.`
+  slot enroll' again (it continues from the kept request), or carry <request.json> to the host and run '<host tswap>
+  slot approve - - < request.json > approve.json' there, then 'tswap slot accept approve.json' here.` (A retry
+  follows "Machine states" above: it continues iff `enrol/<id>/request.json` exists for the pending slot id.)
+- accept failed: its own message (unchanged); if this machine no longer has a pending request afterwards (accept
+  saves the config before writing the receipt), then `This machine has joined the vault but no receipt was written;
+  run 'tswap slot enroll ... --fresh' for a new enrolment, or merge this machine's vault folder on the host with
+  'vault merge'.` Otherwise `The host approved this slot but its keyring is unchanged. After fixing that, run 'tswap
+  slot accept <approve.json>' here, then '<host tswap> slot merge - < receipt.json' on <destination>.`
 - merge failed: `This machine has its copy of the vault, but <destination> didn't add the slot (<reason>), so the
-  host's own keyring doesn't know it yet. Carry <receipt.json> to the host and run 'sudo tswap slot merge -
+  host's own keyring doesn't know it yet. Carry <receipt.json> to the host and run '<host tswap> slot merge -
   < receipt.json' there. Running 'slot enroll' again would start a new enrolment; the kept receipt is the way to
   finish this one.` (This machine's copy opens; the host's doesn't list the slot until merged.)
 
@@ -165,14 +180,15 @@ to `stderr` with the `[<destination>] ` prefix (the caller passes `ctx.Console.E
 own test), argv built by a pure `internal static IReadOnlyList<string> BuildArgv(string destination,
 IReadOnlyList<string> remoteArgs)` = `["-T", "--", destination, string.Join(' ', remoteArgs)]`, stdin written then
 closed (safe because approve and merge read all of stdin before writing), stdout read to the end; past 1 MiB the ssh
-child is killed (process tree) and the call refused, as above. `CommandContext` gets an init-only
+child is killed (process tree) and the call refused, as above. `enroll` zeroes the captured approve bytes after
+writing `approve.json`. `CommandContext` gets an init-only
 `ISshTransport Ssh { get; init; }` defaulting to `ProcessSshTransport`; tests set it.
 
 **Agents.** `slot enroll` is human use only: add it to `Prompt.cs`'s "must NEVER use" list beside `slot merge`, as
 ``- `%CMD% slot enroll --via <user@host>` — Adds this machine's key or chip to the vault on another machine over SSH
 (human use only)`` (no test pins the prompt hash; say in the commit that the prompt changed). It doesn't need local
-sudo (request and accept don't). Also name it in AGENTS.md's privilege lists and `docs/agent-integration.md`'s two role
-tables, beside the other `slot` subcommands.
+sudo (request and accept don't). Also name it in AGENTS.md's privilege lists. In `docs/agent-integration.md` it is **not** a row of the agent-role
+table: give it the callout below that table that `init` and `agent start` have (no sudo, but human use only).
 
 ## Task 1: the `-` forms of `slot approve` and `slot merge`
 
@@ -186,7 +202,7 @@ Tests (`TswapTests/SlotStdioTests.cs`, two config folders as in `SlotCommandTest
   refuses with the existing "did not approve" message and the keyring is unchanged (assert the config bytes).
 - Refusals: `-` with `--recovery-key-stdin` (usage, nothing read); a stdin over 1 MiB (message above, config bytes
   unchanged); stdin a terminal (the fake console's `IsInputRedirected == false`); `approve - -` without sudo in a
-  non-bypass context refuses before stdin is read (`FakeConsole.Reads == 0`, or a small `IConsole` whose `In` throws).
+  non-bypass context refuses before stdin is read (proved with a small `IConsole` whose `In` throws on any read; `FakeConsole.Reads` doesn't count stream reads).
   Sudo-refusal tests follow AGENTS.md: return early on `Environment.IsPrivilegedProcess` and assert the
   platform-neutral "requires", as `SlotCommandTests`' existing ones do.
 - `approve req.json -`: the closing line on stderr says `written to stdout`.
@@ -224,8 +240,8 @@ left.
   `--via`. Each before any SSH call (the double saw nothing).
 - `ProcessSshTransport.BuildArgv("me@host", ["sudo","-n","tswap","slot","merge","-"])` ==
   `["-T","--","me@host","sudo -n tswap slot merge -"]`; on Unix only (a first-statement platform guard as in T23), a
-  stub program (a script in a temp folder that writes its argv and stdin to files and prints `ok`) proves the argv,
-  that stdin arrived and was closed, and that stdout came back.
+  stub program (a script in a temp folder that writes its argv and stdin to files and prints `ok`, and writes two lines to stderr) proves the argv, that stdin arrived and was closed, that stdout came
+  back, and that both stderr lines reached the given writer prefixed `[me@host] `.
 - Merge failure messages and every failure message: assert the captured stdout bytes (the double returns a known
   marker string as garbage) never appear in the local output.
 - Break-it-once: pass `--yes` to the remote merge; the happy path's "no `--yes` anywhere" assertion must fail. Drop
@@ -252,7 +268,8 @@ left.
   pins the list `["request","approve","accept","merge","add"]`; add `enroll` in its place in `Forms`' order, and say
   so in the commit message.
 - `docs/multi-machine.md`'s four-step section shows the `-` forms beside the file forms, with a note that the sudoers
-  rule allows only the `-` forms.
+  rule allows only the `-` forms with the exact path it names, and that `slot approve <req> -` at a terminal puts the
+  approve file (a way into the vault for the requester) in the scrollback.
 - `Prompt.cs`: the line above.
 
 ## Out of scope
