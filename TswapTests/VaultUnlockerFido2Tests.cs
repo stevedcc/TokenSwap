@@ -636,6 +636,145 @@ public class VaultUnlockerFido2Tests
         Assert.Equal([blobA.CredentialId, blobB.CredentialId], Assert.Single(_fido2.Calls).CredentialIds);
     }
 
+    // ---- Brief T31: #290 (no PIN prompt for a blocked key; the touch line), #291.1 (a tried key's failure leads),
+    // #294.1 (Windows' "doesn't look familiar")
+
+    [Fact]
+    public void Unlock_Fido2PinBlocked_NoPinPromptNoTouchLine()
+    {
+        var vault = new Vault();
+        var (own, _) = vault.AddFido2(_fido2, _fido2.AddKey(KeyA, Fido2TestSlots.Aaguid, retries: 0));
+
+        var ex = Assert.ThrowsAny<TswapException>(() => Unlock(Unlocker(), vault.Config(HardwareBackend.YubiKey, own), Sources()));
+
+        Assert.Contains(Fido2Texts.PinBlocked($"YubiKey {KeyA}"), ex.Message);
+        Assert.Empty(_pinRequests);
+        Assert.DoesNotContain(_log, l => l.StartsWith("notice: ", StringComparison.Ordinal));
+        Assert.Equal(0, Count(FakeFido2Op.GetHmacSecret));
+    }
+
+    [Fact]
+    public void Unlock_Fido2ReinsertRequired_NoPinPrompt()
+    {
+        var vault = new Vault();
+        var a = _fido2.AddKey(KeyA, Fido2TestSlots.Aaguid, retries: 5);
+        a.WrongInARow = 3;
+        var (own, _) = vault.AddFido2(_fido2, a);
+
+        var ex = Assert.ThrowsAny<TswapException>(() => Unlock(Unlocker(), vault.Config(HardwareBackend.YubiKey, own), Sources()));
+
+        Assert.Contains(Fido2Texts.PinNeedsReinsert($"YubiKey {KeyA}", 5), ex.Message);
+        Assert.Empty(_pinRequests);
+        Assert.Equal(0, Count(FakeFido2Op.GetHmacSecret));
+    }
+
+    [Fact]
+    public void Unlock_WrongPinOnThePluggedKey_LeadsWithoutTheAbsentKeysPlugIn()
+    {
+        var vault = new Vault();
+        var a = _fido2.AddKey(KeyA, Fido2TestSlots.Aaguid);
+        var b = _fido2.AddKey(KeyB, Fido2TestSlots.Aaguid);
+        var (own, _) = vault.AddFido2(_fido2, a);
+        vault.AddFido2(_fido2, b);
+        a.PluggedIn = false;
+
+        var ex = Assert.ThrowsAny<TswapException>(() =>
+            Unlock(Unlocker(), vault.Config(HardwareBackend.YubiKey, own), Sources(pin: PinAnswer("000000"))));
+
+        Assert.StartsWith(Fido2Texts.PinWrong($"YubiKey {KeyB}", 7), ex.Message);
+        Assert.DoesNotContain(Fido2Texts.PlugIn($"YubiKey {KeyA}"), ex.Message);
+        Assert.DoesNotContain("plug it in.", ex.Message);
+    }
+
+    /// <summary>The unlock ordering keeps the other notes, after the failure: a lookalike key's reset note.</summary>
+    [Fact]
+    public void Unlock_WrongPinOnThePluggedKey_OtherNotesFollowTheFailure()
+    {
+        var vault = new Vault();
+        var a = _fido2.AddKey(KeyA, Fido2TestSlots.Aaguid);
+        var b = _fido2.AddKey(KeyB, Fido2TestSlots.Aaguid);
+        var c = _fido2.AddKey(33060007, Fido2TestSlots.Aaguid);
+        var (own, _) = vault.AddFido2(_fido2, a);
+        vault.AddFido2(_fido2, b);
+        vault.AddFido2(_fido2, c);
+        a.PluggedIn = false;
+        _fido2.Reset(c); // c is plugged in but holds its slot's credential no more
+        c.Pin = Pin;
+
+        var ex = Assert.ThrowsAny<TswapException>(() =>
+            Unlock(Unlocker(), vault.Config(HardwareBackend.YubiKey, own), Sources(pin: PinAnswer("000000"))));
+
+        var reset = $"YubiKey 33060007 is plugged in but no longer holds this slot's credential";
+        Assert.StartsWith(Fido2Texts.PinWrong($"YubiKey {KeyB}", 7) + " " + reset, ex.Message);
+        Assert.DoesNotContain(Fido2Texts.PlugIn($"YubiKey {KeyA}"), ex.Message);
+    }
+
+    [Fact]
+    public void Unlock_NoFido2KeyPluggedIn_NamesEachSlotToPlugIn()
+    {
+        var vault = new Vault();
+        var a = _fido2.AddKey(KeyA, Fido2TestSlots.Aaguid);
+        var b = _fido2.AddKey(KeyB, Fido2TestSlots.Aaguid);
+        var (own, _) = vault.AddFido2(_fido2, a);
+        vault.AddFido2(_fido2, b);
+        a.PluggedIn = false;
+        b.PluggedIn = false;
+
+        var ex = Assert.ThrowsAny<TswapException>(() => Unlock(Unlocker(), vault.Config(HardwareBackend.YubiKey, own), Sources()));
+
+        Assert.StartsWith(Fido2Texts.PlugIn($"YubiKey {KeyA}") + " " + Fido2Texts.PlugIn($"YubiKey {KeyB}"), ex.Message);
+        Assert.Empty(_pinRequests);
+        Assert.Equal(0, Count(FakeFido2Op.GetHmacSecret));
+    }
+
+    [Fact]
+    public void Unlock_Fido2WrongPin_TouchLineSaysItBlinksOnlyForTheRightPin()
+    {
+        var vault = new Vault();
+        var (own, _) = vault.AddFido2(_fido2, _fido2.AddKey(KeyA, Fido2TestSlots.Aaguid));
+
+        Assert.ThrowsAny<TswapException>(() =>
+            Unlock(Unlocker(), vault.Config(HardwareBackend.YubiKey, own), Sources(pin: PinAnswer("000000"))));
+
+        var pin = _log.IndexOf("pin");
+        Assert.True(pin >= 0, "the PIN was never asked");
+        Assert.Equal("notice: Touch your security key when it blinks (it blinks only if the PIN is right).", _log[pin + 1]);
+        Assert.Single(_log, l => l.StartsWith("notice: ", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Unlock_Windows_Cancelled_AddsTheUnfamiliarKeyHint()
+    {
+        var vault = new Vault();
+        var a = _fido2.AddKey(null, Fido2TestSlots.Aaguid);
+        var b = _fido2.AddKey(null, Aaguid5Ci);
+        var (own, _) = vault.AddFido2(_fido2, a);
+        vault.AddFido2(_fido2, b);
+        _fido2.CanList = false;
+        _fido2.Picked = b;
+        _fido2.FailNext(FakeFido2Op.GetHmacSecret, Fido2Failure.Cancelled);
+
+        var ex = Assert.ThrowsAny<TswapException>(() => Unlock(Unlocker(), vault.Config(HardwareBackend.YubiKey, own), Sources()));
+
+        Assert.Contains(
+            "The key you picked: the FIDO2 PIN or touch was cancelled. If Windows said the key doesn't look familiar, it holds none of this vault's FIDO2 credentials: use a key that has a slot (`tswap slots` lists them), or, after a FIDO2 reset, enrol the key again with `tswap slot add --fido2`.",
+            ex.Message);
+    }
+
+    [Fact]
+    public void Unlock_LinuxCancelled_NoWindowsHint()
+    {
+        var vault = new Vault();
+        var (own, _) = vault.AddFido2(_fido2, _fido2.AddKey(KeyA, Fido2TestSlots.Aaguid));
+
+        var ex = Assert.ThrowsAny<TswapException>(() =>
+            Unlock(Unlocker(), vault.Config(HardwareBackend.YubiKey, own), Sources(pin: _ => [])));
+
+        Assert.Contains(Fido2Texts.Cancelled($"YubiKey {KeyA}"), ex.Message);
+        Assert.DoesNotContain(Fido2Texts.WindowsUnfamiliarKey, ex.Message);
+        Assert.DoesNotContain("doesn't look familiar", ex.Message);
+    }
+
     [Fact]
     public void Unlock_Fido2PasswordSlotOnly_NoPasswordAvailable()
     {

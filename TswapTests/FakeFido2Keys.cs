@@ -114,8 +114,12 @@ internal sealed class FakeFido2Keys : IFido2Keys
         return key;
     }
 
-    /// <summary>What <see cref="Find"/> would say about <paramref name="key"/> now.</summary>
-    public static Fido2KeyInfo Info(Key key) => new(key.Ref, key.Serial, key.Aaguid, key.Pin is not null, key.Retries);
+    /// <summary>
+    /// What <see cref="Find"/> would say about <paramref name="key"/> now. <see cref="Fido2KeyInfo.ReinsertRequired"/> as
+    /// the SDK reports it (brief T31): after three wrong PINs in a row, for a key with a PIN.
+    /// </summary>
+    public static Fido2KeyInfo Info(Key key) => new(key.Ref, key.Serial, key.Aaguid, key.Pin is not null, key.Retries,
+        ReinsertRequired: key.Pin is null ? null : key.WrongInARow >= 3);
 
     /// <summary>A credential made on <paramref name="key"/> earlier (64 random bytes, like a YubiKey's id).</summary>
     public byte[] AddCredential(Key key) => AddCredential(key, 64);

@@ -233,7 +233,8 @@ PIN is the key's own FIDO2 PIN (the one websites ask for), not a tswap password.
 
 - **Linux and macOS:** tswap asks at the terminal, `FIDO2 PIN for YubiKey N: `, without echo. It
   reads the PIN from the terminal itself (`/dev/tty`), not from stdin, so `--recovery-key-stdin`
-  works alongside. Once the PIN is typed it says `Touch your security key when it blinks.`
+  works alongside. Once the PIN is typed it says `Touch your security key when it blinks (it
+  blinks only if the PIN is right).`
   Anything typed before a prompt (a YubiKey's one-time code from a stray touch, say) is discarded
   when tswap reads the answer, so it can't become the answer or a wrong PIN; piped input is never
   discarded.
@@ -248,6 +249,8 @@ PIN is the key's own FIDO2 PIN (the one websites ask for), not a tswap password.
   allows 8 wrong PINs in all). After three wrong PINs in a row, unplug the key and plug it in again
   before the next try.` Eight wrong PINs in all block the key's FIDO2 until a FIDO2 reset, which
   deletes every FIDO2 credential on it (below).
+  A key whose PIN is blocked, or a YubiKey that needs re-inserting after three wrong PINs, is
+  refused before the PIN prompt.
 - **tswap never changes a PIN and never resets a key.** The one PIN it writes is a first one: on
   Linux and macOS a key without a FIDO2 PIN gets `YubiKey N has no FIDO2 PIN; a FIDO2 slot needs
   one. Set a FIDO2 PIN on it now? (Y/n): ` (Enter is yes) at enrolment, then the new PIN twice (at least 4
