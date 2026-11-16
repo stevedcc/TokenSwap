@@ -411,4 +411,25 @@ public sealed class FieldWriteTests : IDisposable
         Assert.Equal(record.Version, FieldsIn(record).Since);
         Assert.Equal("x", FieldsIn(record).Get("owner")!.Value);
     }
+
+    /// <summary>
+    /// MiMo final 11: <see cref="FieldEdits.Apply"/> drops delete markers older than <see cref="FieldSet.Since"/>, as
+    /// the merge does (spec Merge rule 2: they belong to an earlier life). Only a planted, never-merged set carries
+    /// one (a store write reads the record through the merge, which drops them already), so this calls Apply itself.
+    /// </summary>
+    [Fact]
+    public void Apply_DropsDeleteMarkersOlderThanSince()
+    {
+        var since = new Stamp(new Hlc(1_800_000_000_000, 0), new byte[KeyringFormat.OriginIdSize]);
+        var before = new Stamp(new Hlc(since.Hlc.PhysicalMs - 1, 0), since.Origin);
+        var after = new Stamp(new Hlc(since.Hlc.PhysicalMs + 1, 0), since.Origin);
+        var next = new Stamp(new Hlc(since.Hlc.PhysicalMs + 2, 0), since.Origin);
+        var kept = new FieldEntry("kept", null, true, after, Claude, []);
+        var current = new FieldSet(since, [kept, new FieldEntry("stale", null, true, before, Claude, [])]);
+
+        var result = FieldEdits.Apply(current, [new FieldEdit("url", "https://x.example")], Owner, () => next, "s");
+
+        Assert.Equal(["kept", "url"], result.Entries.Select(e => e.Name));
+        Assert.Equal(new FieldSet(since, [kept, new FieldEntry("url", "https://x.example", false, next, Owner, [])]), result);
+    }
 }

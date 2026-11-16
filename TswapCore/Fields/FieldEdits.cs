@@ -22,7 +22,8 @@ public static class FieldEdits
     /// <see cref="FieldsCodec.MaxHistory"/>, and stamps the entry with the new stamp and
     /// <paramref name="who"/>; a removal leaves a delete marker. Values are stored NFC-normalised
     /// (<see cref="FieldRules.NormaliseValue"/>). Returns <paramref name="current"/> itself when no
-    /// edit changed anything.
+    /// edit changed anything. A write that changes something also drops the delete markers older than
+    /// <see cref="FieldSet.Since"/>, as the merge does.
     /// </summary>
     /// <exception cref="TswapException">
     /// A field name or value the rules refuse (<see cref="FieldRules.Validate"/>); or the result is over a
@@ -72,7 +73,11 @@ public static class FieldEdits
         if (!changed)
             return current;
 
-        var next = new FieldSet(current.Since, [.. byName.Values.OrderBy(e => e.Name, StringComparer.Ordinal)]);
+        // A delete marker older than Since belongs to an earlier life and can no longer matter: the merge drops it
+        // (spec Merge rule 2), and so does a write (MiMo final 11).
+        var next = new FieldSet(current.Since, [.. byName.Values
+            .Where(e => !(e.Deleted && e.Changed.CompareTo(current.Since) < 0))
+            .OrderBy(e => e.Name, StringComparer.Ordinal)]);
         if (checkCaps && grows && FieldRules.CheckCaps(next) is { } cap)
             throw new TswapException($"Refused: the fields of '{secretName}' are over a cap. {cap}");
         return next;
