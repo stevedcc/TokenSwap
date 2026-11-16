@@ -107,7 +107,7 @@ public sealed class FieldAdoptTests : IDisposable
         Assert.All<Stamp>([field.Changed, after.Write, tombstone.Write], s => Assert.Equal(_now.ToUnixTimeMilliseconds(), s.Hlc.PhysicalMs));
         Assert.Equal(1, Math.Abs((long)after.Write.Hlc.Logical - tombstone.Write.Hlc.Logical));
         Assert.Equal(Password, _m.Get("db"));
-        Assert.Equal("username = \"svc-backup\"\n", _m.Ok("", "field", "show", "db"));
+        Assert.Equal("username = \"svc-backup\"\n", _m.Ok("", "field", "show", "db").ReplaceLineEndings("\n"));
         var (getExit, _, getErr) = _m.Run("", "get", "db-user");
         Assert.Equal(1, getExit);
         Assert.Contains("Secret 'db-user' not found", getErr);

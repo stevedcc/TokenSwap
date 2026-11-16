@@ -1787,7 +1787,7 @@ password2: """"  # tswap: missing-mixed-secret");
 
         Assert.True(exit == 0, stderr);
         Assert.Contains("Imported 1 secret(s)", stdout);
-        Assert.Equal("v2-value", RunTswap("get", "v2-secret").stdout.TrimEnd('\n'));
+        Assert.Equal("v2-value", RunTswap("get", "v2-secret").stdout.TrimEnd('\n', '\r'));
         Assert.Equal("{}", RunTswap("field", "show", "v2-secret", "--json").stdout.Trim());
     }
 

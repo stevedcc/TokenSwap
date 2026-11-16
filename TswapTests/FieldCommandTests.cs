@@ -40,10 +40,14 @@ public sealed class FieldCommandTests : IDisposable
         File.WriteAllBytes(path, SecretRecordCodec.Encode(change(SecretRecordCodec.Decode(File.ReadAllBytes(path), _key)), _key));
     }
 
+    // WriteLine ends a line with Environment.NewLine ("\r\n" on Windows); the expected texts below use "\n".
+    private static (int Exit, string Out, string Err) Lf((int Exit, string Out, string Err) result) =>
+        (result.Exit, result.Out.ReplaceLineEndings("\n"), result.Err.ReplaceLineEndings("\n"));
+
     private (int Exit, string Out, string Err) Field(params string[] args)
     {
         _now = _now.AddSeconds(1);
-        return _m.Run("", ["field", .. args]);
+        return Lf(_m.Run("", ["field", .. args]));
     }
 
     private string FieldOk(params string[] args)
@@ -511,7 +515,7 @@ public sealed class FieldCommandTests : IDisposable
         old.Ok(StoredValue, "ingest", "s");
         var before = File.ReadAllBytes(RecordFile(old, key, "s"));
 
-        var (exit, stdout, stderr) = old.Run("", "field", subcommand, "s", arg);
+        var (exit, stdout, stderr) = Lf(old.Run("", "field", subcommand, "s", arg));
 
         Assert.Equal(1, exit);
         Assert.Contains($"'field {subcommand}' checks each value against the stored secrets by their fingerprints, and 1 record(s) in this vault have none yet", stderr);
@@ -521,7 +525,7 @@ public sealed class FieldCommandTests : IDisposable
         Assert.Equal(before, File.ReadAllBytes(RecordFile(old, key, "s")));
 
         // show writes nothing and is not refused; it reads the record whole and says so.
-        var (showExit, showOut, showErr) = old.Run("", "field", "show", "s");
+        var (showExit, showOut, showErr) = Lf(old.Run("", "field", "show", "s"));
         Assert.Equal(0, showExit);
         Assert.Equal("'s' has no fields.\n", showOut);
         Assert.Contains("record format 2", showErr);

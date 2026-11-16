@@ -15,7 +15,7 @@ public sealed class FieldTokenRefusalTests : IDisposable
 
     public void Dispose() => _bare.Dispose();
 
-    private string NoVaultError => _bare.Run("", "list").Err.Trim().Replace("\n❌ Error: ", "");
+    private string NoVaultError => _bare.Run("", "list").Err.ReplaceLineEndings("\n").Trim().Replace("\n❌ Error: ", "");
 
     private static string FieldMessage(string token, string name) =>
         $"'{token}' is a field: fields aren't substituted into commands. " +
