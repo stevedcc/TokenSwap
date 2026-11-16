@@ -101,7 +101,7 @@ YubiKey N: tswap couldn't talk to the key (HidrawFailed). If it was just plugged
 ```
 
 Wait a second and run the command again. tswap doesn't retry by itself: the PIN may already have
-been typed, and it asks for one PIN per run.
+been typed, and it asks for one PIN per key operation, never a retry.
 
 ## Download a release
 

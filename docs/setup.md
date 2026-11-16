@@ -15,7 +15,8 @@ touch on a YubiKey (which types a one-time code) from becoming the answer or a w
 also drops a real answer typed early, while tswap is still listing keys, stretching a password or
 enrolling a key; on a question with a default (`(Y/n)`, `(y/N)`), Enter after a dropped answer then
 takes the default. Questions that destroy or replace something are `(yes/no)`, with no default, and
-ask again. Piped or redirected input is never discarded.
+ask again. Piped or redirected input is never discarded. (A second line typed in the same burst as an
+earlier answer may already have been read and can answer the next question.)
 
 ## Preparing a YubiKey
 
