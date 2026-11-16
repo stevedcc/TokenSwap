@@ -109,14 +109,16 @@ public sealed class RunShortValueTests : IDisposable
         _m.Ok("a\"b", "ingest", "q");
         var work = _m.PathOf("work");
         var xdg = _m.PathOf("xdg");
+        var tmp = _m.PathOf("tmp");
         Directory.CreateDirectory(work);
         Directory.CreateDirectory(xdg);
+        Directory.CreateDirectory(tmp); // Windows fills {{@file}} under TempRoot, which must exist (as in RunFileTokenTests)
         if (!OperatingSystem.IsWindows())
             File.SetUnixFileMode(xdg, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         _files = FilledFilesEnvironment.FromSystem() with
         {
             XdgRuntimeDir = xdg,
-            TempRoot = _m.PathOf("tmp"),
+            TempRoot = tmp,
             CurrentDirectory = work,
             RegisterSignals = _ => new NoSignals(),
             SignalChildren = _ => 0,
