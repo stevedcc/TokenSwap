@@ -23,9 +23,23 @@ internal static partial class KeyMaterial
     /// in groups, base64 with <c>/</c> included).</item>
     /// </list>
     /// And no run of hex groups separated by <c>-</c>, <c>:</c> or spaces adding up to 32 or more hex characters.
+    /// The test process's own temp folder (<see cref="Path.GetTempPath"/>) is read as <c>/tmp</c> first: it is never a
+    /// key (#345), and everything after it is checked as above.
     /// </summary>
-    public static void AssertNone(string output)
+    public static void AssertNone(string output) => AssertNone(output, Path.GetTempPath());
+
+    /// <summary>
+    /// <see cref="AssertNone(string)"/> with the test run's temp folder given: <paramref name="tempRoot"/> is the
+    /// tests' own folder, never a key, so it is read as <c>/tmp</c> (#345: a macOS runner's per-user temp folder,
+    /// <c>/var/folders/&lt;2&gt;/&lt;30 random characters&gt;/T</c>, can read as base64). What follows it is checked as usual.
+    /// Only a multi-part path counts (a separator after its first character, once trailing ones are trimmed): a root
+    /// such as <c>C:</c> or <c>q2</c> could occur inside a key, and replacing it there could hide the key.
+    /// </summary>
+    internal static void AssertNone(string output, string tempRoot)
     {
+        var root = tempRoot.TrimEnd('/', '\\');
+        if (root.IndexOfAny(['/', '\\'], Math.Min(1, root.Length)) > 0)
+            output = output.Replace(root, "/tmp", StringComparison.Ordinal);
         foreach (var printed in output.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
         {
             var token = TrimPunctuation(printed);
