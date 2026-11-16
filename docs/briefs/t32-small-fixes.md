@@ -314,3 +314,43 @@ matcher and touches none of T30's files.
 2. `names` keeps ignoring unknown options (T18's pinned behaviour), so `names --filter 'k8s-*'` works by accident.
    Keep that, or refuse unknown options (a usage error) and change
    `VersionAfterAnotherCommand_IsThatCommandsUnknownOption_NamesIgnoresIt`?
+
+
+## Amendments after brief review round 1 (binding; they win over the text above)
+
+Round 1 (MiMo, GLM-5.3): both "no" on two test fixtures that can't be built as written; the design was judged right.
+
+**A1. `SlotAddYubiKey_AnsweredYes_PasswordSlotsWithoutTheFile_Refused` gets its own chipless machine.**
+`VaultPasswordChoice.Decide` asks only when `!IsInputRedirected && ctx.TestKey is null`, and `FleetMachine.Context`
+passes `TestKey: Tpm ?? SecureEnclave`, so on the shared TPM machine the question is never asked. Build this test on a
+machine with no simulated chip (`tpm: false`, as `VaultPasswordEnrolmentTests.Init_NeitherFlag_OnATerminal_Asks_YesMakesAPasswordSlot`
+does): `init --yubikey --no-password` on key A, `add db`, `slot add --yubikey --password` for key B (the first password
+slot, which writes the file), delete `vault-password`, unplug B, plug A and a third key C, then
+`RunOnTerminal("yes\n" + password + "\n" + password + "\n", "slot", "add", "--yubikey")`: A opens the vault with no
+password, `Decide` asks, "yes" chooses a password, the guard refuses. Assert as the brief says (message, exit code,
+keyring/config/backups byte-identical, no `vault-password`).
+Wording: the `Reenrol` guard runs "before any password prompt, the recovery key and the liveness challenges" (not
+"before any prompt": `Decide` is a prompt and runs first).
+
+**A2. `NamesPatternTests`' fixture.** `add` needs sudo, so the setup runs with `m.Sudo = true` (`add` with the known
+strings) and every `names` run flips to `m.Sudo = false` before it runs, so the tests still prove `names` needs no
+sudo.
+
+**A3. The long name** in Task 2 is longer than every name that matches a pattern and **strictly under 40 characters**
+(the width is `Math.Min(40, longest)`; above 40 both widths cap and the width break-it-once stops breaking).
+
+**A4. Wording.** `Recover_WithPassword_UsesTheVaultPassword` passes unchanged because its vault already has a password
+slot and the file (`Resolve` takes `AskExisting`), not because a first file is created; the no-op case of the guard (a
+password-free vault still gets its first file) is `SlotAdd_FirstPasswordSlot_OfAPasswordFreeVault_CreatesTheFile`.
+
+**A5. `slot enroll --via`** (T27, in the base): add a row to the #320 command table: it composes `slot request` (refuses
+without the folder's file) and `slot accept` (copies the approver's real file only), so it can't mint a first file;
+unchanged, no test needed beyond the existing ones.
+
+**A6. A pattern starting with `-`** is read as an option (T18's pinned behaviour). Add to `NoMatchText` and the
+`names` usage/description: `(a pattern can't start with '-', which tswap reads as an option: write '?-...' or '*-...'
+for such names)`. Keep `PatternText`'s shell advice, and note in the docs it applies to Unix shells.
+
+**A7. Shared files.** Besides `VaultPasswordChoice.cs` and `Prompt.cs`, `TswapTests/SlotAddFido2Tests.cs` may also be
+touched by T31 (add T32's test at the end of the class to keep the merge simple). In the docs bullet on #320, say the
+fix is per tswap version: an older tswap on another machine of the fleet can still create the file.
