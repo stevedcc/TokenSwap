@@ -65,7 +65,7 @@ visible data, not a second kind of secret and not a way into commands: `run` ref
 - A field value that contains a stored secret value is refused, without saying which secret; never work around
   that refusal. A value that looks random gets a warning: if it is a secret, unset the field and store the value
   as a secret instead
-- A field write on a vault whose records have no fingerprints yet is refused, asking for the same reindex as
+- Setting a field on a vault whose records have no fingerprints yet is refused, asking for the same reindex as
   `%CMD% redact`: follow key rule 11
 
 Rules for fields:

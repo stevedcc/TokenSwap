@@ -107,10 +107,11 @@ public sealed class FieldCommand : ICliCommand
         try
         {
             // Metadata only (no value decrypted): guard rail 1 can't check what has no fingerprints, so refuse
-            // before any record is opened for the write.
+            // before any record is opened for the write. A removal sets no value: nothing to check (final review
+            // minor 4, ruling), so `field unset` isn't refused.
             var metadata = view.LoadAll(FormatTwoRecords.Skip);
             view.ThrowIfAnyUnreadable(command);
-            if (metadata.NotFingerprinted > 0)
+            if (metadata.NotFingerprinted > 0 && edits.Any(e => e.Value is not null))
                 throw new TswapException(NotFingerprintedRefusal(ctx.Prefix, command, metadata.NotFingerprinted));
             FingerprintTexts.NoteOlderVariants(ctx.Console.Error, ctx.Prefix, metadata.OlderVariantSet);
 

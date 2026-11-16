@@ -234,7 +234,9 @@ sudo tswap vault merge /mnt/usb/tswap-vault
   its old copy) does land on the new secret.
 - **Caps after a merge.** A merge never trims fields, so a merged secret may hold more than 64 fields or 64 KiB
   of them (two copies, each within the caps, with different fields). It stays readable; a write that would leave
-  it over a cap is refused, one that shrinks it (`field unset`, shorter values) is accepted.
+  it over a cap is refused, one that shrinks it (`field unset`, shorter values) is accepted. An unset brings it
+  back under the 64-field cap but frees few bytes (the removed field's marker keeps its history), so over 64 KiB
+  only shorter values help.
 - **Two copies with the same change stamp but different content** (only damage or a bug makes them): one is
   chosen the same way on every machine, and `field show` warns naming the field. The secret stays readable.
 - **Mixed versions.** A tswap 0.3.x machine keeps the fields' bytes but merges them by its own rule: the whole

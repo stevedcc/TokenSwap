@@ -157,7 +157,7 @@ and doesn't make the record format 2.
 | `run` | The value versions it substitutes (its tokens and its files' markers), each once; every other record's metadata only | Each record a token or marker names, decrypted whole; a warning after the child's output |
 | `create`, `ingest`, `rotate`, `ingest --rotate`, `burn`, `delete`, `add`, `import` | No value: only the records of the names given are read, their metadata (`import`: every exported name, so it can skip the ones the vault holds); a new value is encrypted, a kept one copied as it is (exceptions below) | Each format 2 record of those names, decrypted whole (`import`: each exported name the vault holds as format 2, up to the whole vault, though it writes none of them); a warning |
 | `restore` | The one value it puts back (the previous version, encrypted again as the new one; exceptions below) | That record, decrypted whole; a warning |
-| `field set`, `field unset`; `create`, `ingest`, `rotate`, `ingest --rotate`, `add` with `--field`/`--fields` | No value: every record's metadata, for the check that no field holds a stored value ([fields](#fields-plain-visible-data)); the value command's own value as above | None: the write is refused before anything is written, and asks for `sudo tswap vault reindex` |
+| `field set`, `field unset`; `create`, `ingest`, `rotate`, `ingest --rotate`, `add` with `--field`/`--fields` | No value: every record's metadata, for the check that no field holds a stored value ([fields](#fields-plain-visible-data)); the value command's own value as above | None: the write is refused before anything is written, and asks for `sudo tswap vault reindex` (`field unset` sets no value and isn't refused) |
 | `field show` | No value: the one record's metadata | That record, decrypted whole; a warning |
 | `field adopt` | The one value it turns into a field (the current version of SECRET), and every record's metadata | None: refused as `field set` is |
 | `export`, `migrate` | Every value, by their nature | The same |
@@ -638,8 +638,9 @@ formats: [commands.md](commands.md#fields-plain-data-next-to-a-secret).
   fingerprints of every stored value (every retained version of every live secret, burned ones included;
   no value is decrypted), and with a value command also against the value of that call. A value that
   contains one is refused without naming which secret. A long random-looking value only gets a warning.
-  On a vault with records that have no fingerprints yet (format 2) every field write is refused until
-  `sudo tswap vault reindex`, since the check can't see those values. Its limits:
+  On a vault with records that have no fingerprints yet (format 2) every field write that sets a value is
+  refused until `sudo tswap vault reindex`, since the check can't see those values (`field unset` sets
+  none and works). Its limits:
   - **Merges and imports are not checked.** `vault merge`, a sync tool's copies and `import` carry fields
     from your own machines and exports as they are; a peer or an export you don't trust can do worse than
     put a value in a field.

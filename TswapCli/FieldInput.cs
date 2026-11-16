@@ -72,12 +72,15 @@ public static class FieldInput
         JsonDocument document;
         try
         {
-            // Duplicate keys are refused by the parser and, below, by name after unescaping.
-            document = JsonDocument.Parse(text, new JsonDocumentOptions { AllowDuplicateProperties = false });
+            // Duplicate keys are refused below, by name after unescaping (the parser's own refusal would quote the input).
+            document = JsonDocument.Parse(text);
         }
         catch (JsonException ex)
         {
-            throw new TswapException($"The fields are not valid JSON: {ex.Message}");
+            // Final review minor 2 (ruling): the place only, never the parser's message: it quotes the offending
+            // character, which could be a secret's first character read from a pipe.
+            throw new TswapException(
+                $"The fields are not valid JSON (line {ex.LineNumber + 1}, position {ex.BytePositionInLine + 1}).");
         }
 
         using (document)
@@ -91,7 +94,7 @@ public static class FieldInput
                 var name = property.Name;
                 CheckName(name);
                 if (!seen.Add(name))
-                    throw new TswapException($"Field '{name}' is given twice; give each field once.");
+                    throw new TswapException($"Duplicate key: field '{name}' is given twice; give each field once.");
                 switch (property.Value.ValueKind)
                 {
                     case JsonValueKind.Null:

@@ -507,7 +507,6 @@ public sealed class FieldCommandTests : IDisposable
 
     [Theory]
     [InlineData("set", "url=https://x.example")]
-    [InlineData("unset", "url")]
     public void FieldWrite_OnVaultWithoutFingerprints_Refused(string subcommand, string arg)
     {
         using var old = new FleetMachine("field-command-format2", SimulatedYubiKeyService.WithKeys(SerialA));
@@ -530,6 +529,32 @@ public sealed class FieldCommandTests : IDisposable
         Assert.Equal("'s' has no fields.\n", showOut);
         Assert.Contains("record format 2", showErr);
         Assert.Contains("read their names and burn state", showErr); // FormatTwoUse.Read's text
+    }
+
+    /// <summary>
+    /// Final review minor 4 (ruling): <c>field unset</c> writes no value, so guard rail 1 has nothing to check and an
+    /// unfingerprinted record elsewhere in the vault doesn't refuse it; <c>field set</c> still is refused there.
+    /// </summary>
+    [Fact]
+    public void FieldUnset_OnVaultWithUnfingerprintedRecords_Allowed()
+    {
+        _m.Ok(StoredValue, "ingest", "s");
+        FieldOk("set", "s", "url=https://x.example", "host=db1");
+        _m.Ok("another-value-0123456", "ingest", "old");
+        // As tswap 0.1 wrote it: format 2, no fingerprints.
+        var old = RecordFile(_m, _key, "old");
+        File.WriteAllBytes(old, SecretRecordCodec.Encode(SecretRecordCodec.Decode(File.ReadAllBytes(old), _key), _key,
+            KeyringFormat.RecordFormatVersionV2));
+        Assert.Null(ReadRecord(_m, _key, "old").Fingerprints);
+
+        var (exit, stdout, stderr) = Field("unset", "s", "url");
+
+        Assert.True(exit == 0, stderr);
+        Assert.Equal("✓ Fields of 's' updated (url).\n", stdout);
+        Assert.Equal(new Dictionary<string, string> { ["host"] = "db1" }, ShowJson("s"));
+        var (setExit, _, setErr) = Field("set", "s", "port=5432");
+        Assert.Equal(1, setExit);
+        Assert.Contains("'field set' checks each value against the stored secrets by their fingerprints", setErr);
     }
 
     [Theory]
@@ -579,6 +604,23 @@ public sealed class FieldCommandTests : IDisposable
     {
         var error = Assert.Throws<TswapException>(() => FieldInput.Parse([json]));
         Assert.Contains(message, error.Message);
+    }
+
+    /// <summary>
+    /// Final review minor 2 (ruling): a JSON parse error never echoes the input (System.Text.Json quotes the
+    /// offending character, which could be a secret's first character read from a pipe); it gives the place only.
+    /// </summary>
+    [Fact]
+    public void Parse_Json_SyntaxError_DoesNotEchoTheInput()
+    {
+        var file = _m.PathOf("fields.json");
+        File.WriteAllText(file, "Qx7-not-json");
+
+        var inline = Assert.Throws<TswapException>(() => FieldInput.Parse(["""{"url": "x"} Q"""]));
+        var fromFile = Assert.Throws<TswapException>(() => FieldInput.Parse(["@" + file]));
+
+        Assert.Equal("The fields are not valid JSON (line 1, position 14).", inline.Message);
+        Assert.Equal("The fields are not valid JSON (line 1, position 1).", fromFile.Message);
     }
 
     [Fact]

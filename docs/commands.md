@@ -168,7 +168,8 @@ tswap field show opnsense-root --history    # each field's last changes, removed
   characters), surrogates and private-use characters are refused naming the field and the code point. A secret
   holds at most 64 live fields and 64 KiB of encoded fields (removed-field markers count towards the bytes). A
   merged copy may be over a cap ([multi-machine.md](multi-machine.md#the-merge-rules)); then only a write that
-  shrinks it (`field unset`, or shorter values) is accepted.
+  shrinks it (`field unset`, or shorter values) is accepted. `field unset` brings a secret back under the 64-field
+  cap, but frees few bytes: a removed field's marker keeps its history, so over 64 KiB only shorter values help.
 - **Well-known fields**, checked when set:
 
   | Field | Meaning | Format |
@@ -191,9 +192,10 @@ tswap field show opnsense-root --history    # each field's last changes, removed
   `NAME.FIELD` (never the value) that contains the value they just wrote, **only when the same call gives
   `--field` or `--fields`**: without them a value write reads only its own record, no other record's fields, so it
   can't look. (`field set` refuses the other direction, a field holding a stored value, in every case.)
-- **Not before the reindex.** A field write (`field set`, `field unset`, `field adopt`, or a value command with
+- **Not before the reindex.** A field write that sets a value (`field set`, `field adopt`, or a value command with
   `--field`/`--fields`) on a vault where records have no fingerprints yet (format 2) is refused before anything is
-  written, as `redact` is: the check above can't see a value without fingerprints. Run `sudo tswap vault reindex`
+  written, as `redact` is: the check above can't see a value without fingerprints. `field unset` sets no value, so
+  it works there. Run `sudo tswap vault reindex`
   once ([above](#fingerprints-format-2-records-and-vault-reindex)). `field show` keeps working. A classic vault's
   field commands refuse, like every other command there, and point to `sudo tswap migrate --to-records`.
 - **`field show`** prints the live fields, each value as a JSON string (quoted, escaped), so a value can't pass as

@@ -159,7 +159,9 @@ test like the existing one (my call, DeepSeek I3, MiMo M3). Other extension type
 7. **Caps after a merge** (my call, MiMo r2 N5, r3 N8b): a merge never trims fields. A merged record may exceed the
    64-field or 64 KiB caps (two legal copies with different field names); it stays readable. A write that would leave
    it over a cap is refused (the refusal names the secret and the cap); a write that shrinks it (`field unset`, or a
-   `field set` that replaces values with shorter ones) is allowed, so the owner can bring it back under the caps.
+   `field set` that replaces values with shorter ones) is allowed, so the owner can bring it back under the 64-field
+   cap. Over the 64 KiB cap an unset frees little (its marker keeps the field's history), so only shorter values
+   help there (final review minor 1).
 
 **Mixed versions** (MiMo M3c): a 0.3.x machine keeps the extension's bytes, but merges by its own whole-list rule.
 In a folder shared with 0.3.x machines, field state is decided per record, not per field: a 0.3.x merge can drop a
@@ -263,7 +265,9 @@ write the value into the command.` The broker's templates are unchanged. A test 
    - `field adopt` skips the check against SECRET itself, but refuses when another **live** secret holds the same
      value.
    - `add`, `ingest`, `ingest --rotate`, `rotate` **warn** when the new value appears in a field of any secret,
-     naming the field (never the value).
+     naming the field (never the value). Amended by the Task 7 ruling: only when the same call gives `--field` or
+     `--fields`; without them a value write reads only its own record (T16-S2b), so it can't look. `field set`
+     refuses the other direction in every case.
    - **Merges and imports are not checked** (DeepSeek I2): they carry data from the owner's own machines and
      exports; a peer or export that is not trustworthy can do worse than this. The security model says so. Since
      fields never reach a command, nothing prints them except `field show`.
@@ -308,7 +312,11 @@ a way to pass values into commands. The same framing opens the fields section in
 - A **classic vault** (the JSON store): the field commands refuse and point to `tswap migrate --to-records`.
   (`import` already refuses a classic vault, `ClassicVaultRefusalTests`, so there is no classic import case.)
 - A **format 2 record** is converted to format 3 when a field command writes it, the way the non-sudo `burn`
-  already does (`FingerprintTexts.WarnFormatTwo(..., FormatTwoUse.Write)`).
+  already does (`FingerprintTexts.WarnFormatTwo(..., FormatTwoUse.Write)`). Amended by the Task 4 ruling: a write
+  that sets a field value (`field set`, `field adopt`, a value command with `--field`/`--fields`) is refused on a
+  vault with any record that has no fingerprints yet (guard rail 1 can't check what it can't see), as `redact` is,
+  asking for `sudo tswap vault reindex`; so this conversion is reached only by `field unset` (final review ruling: it
+  sets no value, so nothing is checked) and by records held as plaintext for other reasons.
 
 ### Export and import
 
