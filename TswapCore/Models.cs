@@ -104,8 +104,8 @@ public record Config(List<int> YubiKeySerials,
     // (see VaultUnlocker.Unlock). Null (omitted from config.json) for every vault that predates this
     // field or never opts in — those are completely unaffected.
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Keyring = null,
-    // Phase 6 hand-carried enrollment only (issue #121, 'tswap slot request'/'slot accept'): set
-    // on the NEW, not-yet-enrolled machine between 'slot request' (which enrolls this machine's
+    // Phase 6 hand-carried enrolment only (issue #121, 'tswap slot request'/'slot accept'): set
+    // on the NEW, not-yet-enrolled machine between 'slot request' (which enrols this machine's
     // own hardware immediately — one YubiKey since brief T4, see PendingSlotHwBlob — but
     // has no K_v yet to build a real Keyring above from) and 'slot accept' (which recovers K_v
     // from another machine's 'slot approve' file and finalizes Keyring, clearing these three
@@ -115,8 +115,8 @@ public record Config(List<int> YubiKeySerials,
     // private key, held here in the clear until accept hardware-wraps it into the real keyring —
     // the same plaintext-in-local-config custody model this file already uses for the XOR share
     // above. VaultUnlocker.Unlock refuses ordinary use of a vault with Keyring == null and
-    // PendingSlotId != null (see that type's pending-enrollment guard), so an incomplete
-    // enrollment can never be silently mistaken for a working, derived-key vault. All three are
+    // PendingSlotId != null (see that type's pending-enrolment guard), so an incomplete
+    // enrolment can never be silently mistaken for a working, derived-key vault. All three are
     // omitted from config.json when null — every vault that predates this flow, or completes it,
     // or never uses it, is completely unaffected.
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? PendingSlotId = null,

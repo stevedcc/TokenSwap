@@ -80,7 +80,7 @@ internal static class GuidedInit
         public bool Enrolled { get; set; }
         public YubiKeySlotBlob? Blob { get; set; }
 
-        /// <summary>Brief T31 (#294.3): a FIDO2 slot's key name once enrolled (<see cref="Fido2SlotEnrollment.EnrolledName"/>).</summary>
+        /// <summary>Brief T31 (#294.3): a FIDO2 slot's key name once enrolled (<see cref="Fido2SlotEnrolment.EnrolledName"/>).</summary>
         public string? EnrolledName { get; set; }
 
         /// <summary>The slot's name after its enrolment (the summary, the closing line); before it, the device's.</summary>
@@ -239,14 +239,14 @@ internal static class GuidedInit
             if (chipSlot is not null)
             {
                 // No carry-on offer: the chip is one device. Its TswapException goes to CliRunner's handler.
-                var enrollment = HardwareServices.Enrollment(chipBackend!.Value, ctx.TestKey, ctx.OwnerScope, requirePresence);
+                var enrolment = HardwareServices.Enrolment(chipBackend!.Value, ctx.TestKey, ctx.OwnerScope, requirePresence);
                 c.Out.WriteLine();
                 c.Out.WriteLine(chipBackend == HardwareBackend.Tpm
                     ? "Sealing a new key to this machine's TPM..."
                     : requirePresence
                         ? "Creating a Secure Enclave key (unlocking later will prompt for Touch ID / presence)..."
                         : "Creating a Secure Enclave key with no presence requirement...");
-                var (kekSlot, hwBlob) = enrollment.Enroll(chipSlot.NeedsPassword ? password!.Stretched : null);
+                var (kekSlot, hwBlob) = enrolment.Enrol(chipSlot.NeedsPassword ? password!.Stretched : null);
                 try
                 {
                     var backendConfig = new Config(
@@ -281,7 +281,7 @@ internal static class GuidedInit
                 YubiKeySlotBlob blob;
                 byte[]? kekSlot = null;
                 Slot? added = null;
-                // The carry-on offer covers only this key's enrolment (EnrollSerial / EnrollAsSlot: its
+                // The carry-on offer covers only this key's enrolment (EnrolSerial / EnrolAsSlot: its
                 // device calls, the double challenge, the slot's own wrap), the failures leaving out a key can
                 // fix. Decoding the keyring and AssembleKeyring are outside it: they work on what this run
                 // built in memory, so a failure there is a bug, not a key problem, and propagates (exit 1,
@@ -289,9 +289,9 @@ internal static class GuidedInit
                 try
                 {
                     if (keyring is null)
-                        (blob, kekSlot) = YubiKeySlotEnrollment.EnrollSerial(ctx, slotId, serial, stretched);
+                        (blob, kekSlot) = YubiKeySlotEnrolment.EnrolSerial(ctx, slotId, serial, stretched);
                     else
-                        (added, blob) = YubiKeySlotEnrollment.EnrollAsSlot(ctx, serial, vaultKey, keyring, stretched);
+                        (added, blob) = YubiKeySlotEnrolment.EnrolAsSlot(ctx, serial, vaultKey, keyring, stretched);
                 }
                 catch (TswapException ex)
                 {
@@ -331,7 +331,7 @@ internal static class GuidedInit
                 }
                 slot.Blob = blob;
                 slot.Enrolled = true;
-                YubiKeySlotEnrollment.PrintTouchPolicy(c, blob); // explained here, acknowledged below
+                YubiKeySlotEnrolment.PrintTouchPolicy(c, blob); // explained here, acknowledged below
             }
 
             // Set once a FIDO2 credential was made in this run: a stop then says the key may keep it, unused.
@@ -352,13 +352,13 @@ internal static class GuidedInit
                 try
                 {
                     if (key is null)
-                        c.Out.WriteLine(Fido2SlotEnrollment.WindowsDialogLine);
+                        c.Out.WriteLine(Fido2SlotEnrolment.WindowsDialogLine);
                     else if (!key.PinSet)
-                        key = Fido2SlotEnrollment.OfferPin(ctx, fido2!, key);
+                        key = Fido2SlotEnrolment.OfferPin(ctx, fido2!, key);
                     if (keyring is null)
-                        (blob, kekSlot) = Fido2SlotEnrollment.Enroll(ctx, key, slotId, [], stretched, () => madeCredential = true);
+                        (blob, kekSlot) = Fido2SlotEnrolment.Enrol(ctx, key, slotId, [], stretched, () => madeCredential = true);
                     else
-                        (added, blob) = Fido2SlotEnrollment.EnrollAsSlot(
+                        (added, blob) = Fido2SlotEnrolment.EnrolAsSlot(
                             ctx, key, vaultKey, keyring with { Slots = [.. keyring.Slots, .. addedSlots] }, stretched,
                             () => madeCredential = true);
                 }
@@ -396,8 +396,8 @@ internal static class GuidedInit
                     newSlotIds.Add(Convert.ToBase64String(added!.SlotId));
                 }
                 slot.Enrolled = true;
-                slot.EnrolledName = Fido2SlotEnrollment.EnrolledName(fido2!, key, blob);
-                Fido2SlotEnrollment.PrintResetWarning(c, slot.EnrolledName);
+                slot.EnrolledName = Fido2SlotEnrolment.EnrolledName(fido2!, key, blob);
+                Fido2SlotEnrolment.PrintResetWarning(c, slot.EnrolledName);
             }
 
             if (config is null)

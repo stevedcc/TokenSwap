@@ -59,7 +59,7 @@ internal sealed class SlotAddHardwareScenarios : IDisposable
     /// <summary>The flags as <c>LegacyPairOwnSlotText</c> and <c>OwnSlotUncheckedText</c> name them.</summary>
     public string FlagsText => _backend == HardwareBackend.Tpm ? "--tpm" : "--secure-enclave --with-touch|--no-touch";
 
-    private string EnrollCall => $"{_backend}:Enroll";
+    private string EnrolCall => $"{_backend}:Enrol";
     private string UnlockCall => $"{_backend}:Unlock";
 
     /// <summary>The wrong-password text of the simulated chip's own unlock.</summary>
@@ -234,7 +234,7 @@ internal sealed class SlotAddHardwareScenarios : IDisposable
 
         Assert.NotEqual(0, exit);
         Assert.Contains(VaultPasswordChoice.WrongPasswordText, stderr);
-        Assert.DoesNotContain(EnrollCall, calls);
+        Assert.DoesNotContain(EnrolCall, calls);
         AssertNothingWritten(before);
     }
 
@@ -248,7 +248,7 @@ internal sealed class SlotAddHardwareScenarios : IDisposable
 
         Assert.NotEqual(0, exit);
         Assert.Contains(VaultPasswordMessages.MissingFile, stderr);
-        Assert.DoesNotContain(EnrollCall, calls);
+        Assert.DoesNotContain(EnrolCall, calls);
         Assert.False(File.Exists(VaultPasswordPath));
         AssertNothingWritten(before);
     }
@@ -280,7 +280,7 @@ internal sealed class SlotAddHardwareScenarios : IDisposable
             $"nothing to add. Each machine needs only one {Name} slot.",
             SlotCommand.WorkingHardwareSlotText(Name, ShortId(own)));
         Assert.Contains(UnlockCall, calls);
-        Assert.DoesNotContain(EnrollCall, calls);
+        Assert.DoesNotContain(EnrolCall, calls);
         AssertNothingWritten(before);
     }
 
@@ -368,7 +368,7 @@ internal sealed class SlotAddHardwareScenarios : IDisposable
             $"machine's {Name} was cleared or replaced, sudo tswap recover {FlagsText} --recovery-key-stdin makes it this " +
             "machine's own slot again. Nothing was changed.",
             SlotCommand.OwnSlotUncheckedText(error, Name, ShortId(own), FlagsText));
-        Assert.DoesNotContain(EnrollCall, calls);
+        Assert.DoesNotContain(EnrolCall, calls);
         AssertNothingWritten(before);
     }
 
@@ -389,7 +389,7 @@ internal sealed class SlotAddHardwareScenarios : IDisposable
         Assert.Contains($"This machine's {Name} slot {ShortId(own)} couldn't be checked, so no new slot is added.", stderr);
         Assert.Contains($"sudo tswap recover {FlagsText} --recovery-key-stdin", stderr);
         Assert.Contains(UnlockCall, calls);
-        Assert.DoesNotContain(EnrollCall, calls);
+        Assert.DoesNotContain(EnrolCall, calls);
         AssertNothingWritten(before);
     }
 
@@ -405,7 +405,7 @@ internal sealed class SlotAddHardwareScenarios : IDisposable
         Assert.Contains(VaultPasswordChoice.WrongPasswordText, stderr);
         Assert.DoesNotContain("couldn't be checked", stderr);
         Assert.Contains(UnlockCall, calls); // the check asked the chip
-        Assert.DoesNotContain(EnrollCall, calls);
+        Assert.DoesNotContain(EnrolCall, calls);
         AssertNothingWritten(before);
     }
 
@@ -495,7 +495,7 @@ internal sealed class SlotAddHardwareScenarios : IDisposable
         Assert.NotEqual(0, exit);
         Assert.DoesNotContain("Usage:", stderr); // refused by the unlock, not by the arguments
         Assert.Contains("YubiKey", stderr);
-        Assert.DoesNotContain(EnrollCall, calls);
+        Assert.DoesNotContain(EnrolCall, calls);
         AssertNothingWritten(before);
     }
 

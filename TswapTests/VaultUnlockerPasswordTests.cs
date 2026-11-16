@@ -42,7 +42,7 @@ public class VaultUnlockerPasswordTests
         public byte[] AddTpmSlot(byte[] machineKey, bool password, HardwareBackend backend = HardwareBackend.Tpm)
         {
             using var stretched = password ? StretchedPassword.FromBytes(Password) : null;
-            var (kek, hwBlob) = new SimulatedHardwareService(backend, machineKey).Enroll(stretched);
+            var (kek, hwBlob) = new SimulatedHardwareService(backend, machineKey).Enrol(stretched);
             return AddSlot(kek, hwBlob);
         }
 
@@ -223,7 +223,7 @@ public class VaultUnlockerPasswordTests
         using var _ = TswapCore.Vault.Interop.AppleSecureEnclaveInterop.UseShim(shim);
         using var right = StretchedPassword.FromBytes(Password);
         var service = new SecureEnclaveHardwareService(requirePresence: false);
-        var (_, hwBlob) = service.Enroll(right);
+        var (_, hwBlob) = service.Enrol(right);
         var config = new Config([], "", TestTime.Fixed, Backend: HardwareBackend.SecureEnclave,
             SecureEnclaveWrappedKey: Convert.ToBase64String(hwBlob));
         List<StretchedPassword> given = [];
@@ -722,12 +722,12 @@ public class VaultUnlockerPasswordTests
     // ------------------------------------------------------------------ the services
 
     [Fact]
-    public void SimulatedEnroll_WithPassword_WrapsWithTheBackendsHeader()
+    public void SimulatedEnrol_WithPassword_WrapsWithTheBackendsHeader()
     {
         using var stretched = StretchedPassword.FromBytes(Password);
-        var (_, tpmBlob) = new SimulatedHardwareService(HardwareBackend.Tpm, MachineKey).Enroll(stretched);
-        var (_, seBlob) = new SimulatedHardwareService(HardwareBackend.SecureEnclave, MachineKey).Enroll(stretched);
-        var (_, plainBlob) = new SimulatedHardwareService(HardwareBackend.Tpm, MachineKey).Enroll(null);
+        var (_, tpmBlob) = new SimulatedHardwareService(HardwareBackend.Tpm, MachineKey).Enrol(stretched);
+        var (_, seBlob) = new SimulatedHardwareService(HardwareBackend.SecureEnclave, MachineKey).Enrol(stretched);
+        var (_, plainBlob) = new SimulatedHardwareService(HardwareBackend.Tpm, MachineKey).Enrol(null);
 
         Assert.True(TpmSlotBlob.HasHeader(tpmBlob));
         Assert.True(SecureEnclaveSlotBlob.HasHeader(seBlob));
@@ -743,7 +743,7 @@ public class VaultUnlockerPasswordTests
     {
         // slot accept's path: KEK_slot straight from the hardware, with the password.
         using var stretched = StretchedPassword.FromBytes(Password);
-        var (kek, blob) = new SimulatedHardwareService(HardwareBackend.Tpm, MachineKey).Enroll(stretched);
+        var (kek, blob) = new SimulatedHardwareService(HardwareBackend.Tpm, MachineKey).Enrol(stretched);
         var config = new Config([], "", TestTime.Fixed, RequiresTouch: true, RngMode: RngMode.System, Backend: HardwareBackend.Tpm,
             PendingSlotId: Convert.ToBase64String(new byte[16]), PendingSlotHwBlob: Convert.ToBase64String(blob));
 

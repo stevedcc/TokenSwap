@@ -11,7 +11,7 @@ namespace TswapCore.Vault;
 /// for the design this implements.
 ///
 /// <para><b>Primitive:</b> ECIES wrap/unwrap against a <b>non-extractable P-256 key</b> created
-/// fresh in the Secure Enclave on enrollment, via Apple's CryptoKit <c>SecureEnclave</c> API
+/// fresh in the Secure Enclave on enrolment, via Apple's CryptoKit <c>SecureEnclave</c> API
 /// (through the <see cref="AppleSecureEnclaveInterop"/> Swift shim — see its header comment for
 /// why CryptoKit rather than raw Security.framework <c>SecItem</c> calls). No key material ever
 /// leaves the Enclave; unlock unwraps <c>K_v</c> transiently in memory. The k≥2 threshold
@@ -22,7 +22,7 @@ namespace TswapCore.Vault;
 /// <see cref="Keyring.Slot.HwBlob"/> and protects that slot's <c>KEK_slot</c>; it is versioned by
 /// the keyring's AEAD-bound format version. In a single-slot vault made before keyring vaults it
 /// is the legacy, unversioned <see cref="Config.SecureEnclaveWrappedKey"/> and protects the vault key itself.
-/// <see cref="HardwareBlobLocator"/> picks the right one; <see cref="Enroll"/> produces it.</para>
+/// <see cref="HardwareBlobLocator"/> picks the right one; <see cref="Enrol"/> produces it.</para>
 ///
 /// <para>Built only by <c>TswapCli.HardwareServices</c> (brief T12), on macOS, which always wraps it
 /// so that under sudo its calls run as the vault folder's owner (macOS then asks that user, not
@@ -31,29 +31,29 @@ namespace TswapCore.Vault;
 /// for a secure-enclave vault.</para>
 /// </summary>
 /// <param name="requirePresence">
-/// Brief T11: whether a key this service creates (<see cref="Enroll"/>, <see cref="Wrap"/>)
+/// Brief T11: whether a key this service creates (<see cref="Enrol"/>, <see cref="Wrap"/>)
 /// requires Touch ID or the login password on every unwrap. Defaults to true, so a code path that
 /// forgets it gets the presence-gated key; only <c>--no-touch</c> passes false. Unlock doesn't use
 /// it: the policy lives in the key.
 /// </param>
 [SupportedOSPlatform("macos")]
-public sealed class SecureEnclaveHardwareService(bool requirePresence = true) : IHardwareKeyService, IHardwareEnrollmentService
+public sealed class SecureEnclaveHardwareService(bool requirePresence = true) : IHardwareKeyService, IHardwareEnrolmentService
 {
     /// <summary>Whether this machine can use the chip (a cheap presence check; creates no key). Lets the CLI probe without naming the interop.</summary>
     public static bool IsAvailable() => AppleSecureEnclaveInterop.IsAvailable();
 
     /// <summary>
-    /// Enrollment seam (issue #151): generates a random <c>KEK_slot</c> and ECIES-wraps it to a
+    /// Enrolment seam (issue #151): generates a random <c>KEK_slot</c> and ECIES-wraps it to a
     /// new Secure Enclave key via <see cref="Wrap"/>. The returned blob is useless off this Mac.
     /// </summary>
-    public HardwareEnrollment Enroll(StretchedPassword? password)
+    public HardwareEnrolment Enrol(StretchedPassword? password)
     {
         var kekSlot = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
         // Brief T17 task 13: a password slot's key is made with .applicationPassword and the stretched
         // password as its credential, so the Enclave enforces it (ruling 19); its blob gets the TSSE header.
         return password is null
-            ? new HardwareEnrollment(kekSlot, Wrap(kekSlot))
-            : new HardwareEnrollment(kekSlot,
+            ? new HardwareEnrolment(kekSlot, Wrap(kekSlot))
+            : new HardwareEnrolment(kekSlot,
                 SecureEnclaveSlotBlob.Wrap(AppleSecureEnclaveInterop.WrapWithPassword(kekSlot, requirePresence, password)));
     }
 
@@ -112,7 +112,7 @@ public sealed class SecureEnclaveHardwareService(bool requirePresence = true) : 
     }
 
     /// <summary>
-    /// Enrollment side: creates a new Secure Enclave key pair (presence required or not, as this
+    /// Enrolment side: creates a new Secure Enclave key pair (presence required or not, as this
     /// service was constructed) and ECIES-encrypts <paramref name="plaintextKey"/> (the vault key)
     /// to it. The returned blob is useless off this machine.
     /// </summary>

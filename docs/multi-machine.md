@@ -35,8 +35,8 @@ that already opens the vault.
 
 - **Move the files yourself** (scp, USB, a paste). Don't drop them in a sync folder: a request
   swapped on the way would get the vault key wrapped to someone else's key. Why carrying them is
-  enough: [the design record](design/multi-machine-keying.md#hand-carried-enrollment-v0).
-- **Over SSH**, `tswap slot enroll --via <user@host>` on the new machine runs all four steps, with
+  enough: [the design record](design/multi-machine-keying.md#hand-carried-enrolment-v0).
+- **Over SSH**, `tswap slot enrol --via <user@host>` on the new machine runs all four steps, with
   the host's sudo and vault prompts on its own terminal ([Enrolling over SSH](#enrolling-over-ssh)). Steps 2 and 4 also take `-` for stdin and stdout
   ([below](#remote-enrolment-of-a-yubikey-into-a-tpm-vault-step-by-step)).
 - `tswap slots` lists the slots.
@@ -92,7 +92,7 @@ With SSH from the new machine to a machine that opens the vault, one command on 
 the four steps above: request and accept here, approve and merge on the other machine over SSH.
 
 ```bash
-tswap slot enroll --via <user@host> [--tpm | --secure-enclave --with-touch|--no-touch] [--password|--no-password] \
+tswap slot enrol --via <user@host> [--tpm | --secure-enclave --with-touch|--no-touch] [--password|--no-password] \
     [--vault-dir <folder>] [--remote-tswap <path>] [--no-remote-sudo] [--fresh] [--batch]
 ```
 
@@ -100,7 +100,7 @@ For example, a desk YubiKey joining the TPM vault on the router, with the YubiKe
 desk machine (use a separate config folder if this machine has a vault of its own):
 
 ```bash
-TSWAP_CONFIG_DIR=~/.config/tswap-router tswap slot enroll --via core@router
+TSWAP_CONFIG_DIR=~/.config/tswap-router tswap slot enrol --via core@router
 ```
 
 Repeat with the wallet YubiKey plugged in (answer yes when it asks to overwrite the config): each key
@@ -117,7 +117,7 @@ There are two modes:
   stdout, and nothing on the host may ask anything: its sudo must need no password
   ([Batch mode for scripts](#batch-mode-for-scripts)).
 
-Without a terminal and without `--batch`, `slot enroll` refuses before doing anything. A host such as
+Without a terminal and without `--batch`, `slot enrol` refuses before doing anything. A host such as
 Fedora CoreOS, whose `core` user has passwordless sudo and logs in with a key only, shows no prompts in
 either mode.
 
@@ -182,7 +182,7 @@ Why staging is safe enough:
   and `get`, where another process of the same user on the host could replace it: that is what the two
   fingerprints are for. This is the same exposure as the hand-carried flow, where `approve.json` sits in
   your folder too, and a human check, not a boundary (see
-  [security-model.md](security-model.md#enrolling-over-ssh-what-slot-enroll---via-trusts)).
+  [security-model.md](security-model.md#enrolling-over-ssh-what-slot-enrol---via-trusts)).
 
 The staging folder is removed at the end. After a failure, the message names
 `tswap slot stage <id> clean` for the host, and an enrolment abandoned with `--fresh` may leave one
@@ -250,21 +250,21 @@ only, and on Windows it is inside your config folder, with that folder's access 
 machine's pending private key, never in the working directory, so the approve file can't land in a
 synced folder by accident. The folder is deleted on success.
 
-On a failure, `slot enroll` stops at the failed step, changes nothing more and says what is left, with
+On a failure, `slot enrol` stops at the failed step, changes nothing more and says what is left, with
 the kept files' paths (and, in the interactive mode, the host's `slot stage <id> clean`):
 
-- **Approve failed:** fix the cause and run the same `tswap slot enroll` again: it continues from the
+- **Approve failed:** fix the cause and run the same `tswap slot enrol` again: it continues from the
   kept request (`Continuing the pending enrolment of ...`), against the `--via` host given then. A flag
   that names something else than the pending request (another backend, touch or password choice) is
   refused; `--fresh` starts a new enrolment instead (it asks before overwriting the pending config, and
   deletes the other enrolment folders only once the new request is written).
 - **Merge failed:** this machine already has its copy. Finish it with the kept receipt:
   `sudo tswap slot merge receipt.json` on the host (in batch mode the message names
-  `sudo tswap slot merge - < receipt.json`). Running `slot enroll` again would start a new enrolment.
-- **A pending request `slot enroll` has no files for** (a `slot request` by hand) is refused; finish
+  `sudo tswap slot merge - < receipt.json`). Running `slot enrol` again would start a new enrolment.
+- **A pending request `slot enrol` has no files for** (a `slot request` by hand) is refused; finish
   it by hand, or start over with `--fresh`.
 
-Delete the `<config folder>/enrol/` folders of enrolments you abandon. Two `slot enroll` runs at once
+Delete the `<config folder>/enrol/` folders of enrolments you abandon. Two `slot enrol` runs at once
 on one machine are not supported.
 
 The hand-carried flow ([below](#remote-enrolment-of-a-yubikey-into-a-tpm-vault-step-by-step)) stays
@@ -275,7 +275,7 @@ as the fallback.
 The vault lives on a machine with a TPM (say a router VM), and the YubiKey stays at your desk: no
 USB passthrough. Nothing secret crosses between the machines: you carry three small files that hold
 public keys and wrapped (encrypted) key material, nothing readable
-([the design record](design/multi-machine-keying.md#hand-carried-enrollment-v0)).
+([the design record](design/multi-machine-keying.md#hand-carried-enrolment-v0)).
 
 ```bash
 # 1. Desk machine, YubiKey plugged in (use a separate config folder if this machine has a vault):
@@ -300,7 +300,7 @@ files on another machine opens with the YubiKey too.
 
 Repeat for each key (the one at the desk, the one in the wallet): each becomes its own slot.
 
-With SSH from the desk machine to the router, `tswap slot enroll --via core@router` does all four
+With SSH from the desk machine to the router, `tswap slot enrol --via core@router` does all four
 steps in one command: see [Enrolling over SSH](#enrolling-over-ssh).
 
 **Stdin and stdout instead of files.** `slot approve` takes `-` for either file (`-` as the request

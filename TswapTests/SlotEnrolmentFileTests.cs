@@ -9,7 +9,7 @@ namespace TswapTests;
 /// FIDO2 plan, task 2 row 2: a FIDO2 slot is never requested or approved (its credential is made on a machine that
 /// can open the vault, by <c>slot add --fido2</c>), so a request or approve file carrying one is refused.
 /// </summary>
-public class SlotEnrollmentFileTests
+public class SlotEnrolmentFileTests
 {
     private const string Fido2Refused =
         "A FIDO2 slot isn't requested or approved; add it with 'tswap slot add --fido2' on a machine that can open the vault.";
@@ -23,7 +23,7 @@ public class SlotEnrollmentFileTests
             HwBlob: Convert.ToBase64String(Fido2TestSlots.Blob().Encode()));
 
         var ex = Assert.Throws<TswapException>(() =>
-            SlotEnrollmentFileCodec.DeserializeRequest(SlotEnrollmentFileCodec.SerializeRequest(file)));
+            SlotEnrolmentFileCodec.DeserializeRequest(SlotEnrolmentFileCodec.SerializeRequest(file)));
 
         Assert.Equal(Fido2Refused, ex.Message);
     }
@@ -40,7 +40,7 @@ public class SlotEnrollmentFileTests
             NewSlotHwBlob: Convert.ToBase64String(Fido2TestSlots.Blob().Encode()));
 
         var ex = Assert.Throws<TswapException>(() =>
-            SlotEnrollmentFileCodec.DeserializeApprove(SlotEnrollmentFileCodec.SerializeApprove(file)));
+            SlotEnrolmentFileCodec.DeserializeApprove(SlotEnrolmentFileCodec.SerializeApprove(file)));
 
         Assert.Equal(Fido2Refused, ex.Message);
     }
@@ -57,7 +57,7 @@ public class SlotEnrollmentFileTests
             HwBlob: Convert.ToBase64String(encoded[..20]));
 
         var ex = Assert.Throws<TswapException>(() =>
-            SlotEnrollmentFileCodec.DeserializeRequest(SlotEnrollmentFileCodec.SerializeRequest(file)));
+            SlotEnrolmentFileCodec.DeserializeRequest(SlotEnrolmentFileCodec.SerializeRequest(file)));
 
         Assert.StartsWith("Malformed FIDO2 slot blob", ex.Message);
         Assert.DoesNotContain("newer tswap", ex.Message);
@@ -75,7 +75,7 @@ public class SlotEnrollmentFileTests
             HwBlob: Convert.ToBase64String(encoded));
 
         var ex = Assert.Throws<TswapException>(() =>
-            SlotEnrollmentFileCodec.DeserializeRequest(SlotEnrollmentFileCodec.SerializeRequest(file)));
+            SlotEnrolmentFileCodec.DeserializeRequest(SlotEnrolmentFileCodec.SerializeRequest(file)));
 
         Assert.Equal(Fido2Refused, ex.Message);
     }
@@ -89,7 +89,7 @@ public class SlotEnrollmentFileTests
             Convert.ToBase64String(SlotKeyPair.Generate().PublicKey),
             HwBlob: Convert.ToBase64String(YubiKeySlotBlob.Create(11111111, requiresTouch: true).Encode()));
 
-        var decoded = SlotEnrollmentFileCodec.DeserializeRequest(SlotEnrollmentFileCodec.SerializeRequest(file));
+        var decoded = SlotEnrolmentFileCodec.DeserializeRequest(SlotEnrolmentFileCodec.SerializeRequest(file));
 
         Assert.Equal(file.HwBlob, decoded.HwBlob);
     }

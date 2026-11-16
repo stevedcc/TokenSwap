@@ -1,0 +1,16 @@
+# Brief T33 (#254): lines that may keep a US spelling. One entry per line: path<TAB>exact line text (trimmed)<TAB>reason.
+# An entry matches only while the line is unchanged; UsSpellingAllowlist_HasNoStaleEntries fails on one that matches nothing.
+
+# The enrol family (Task 1)
+HARDWARE_BACKENDS.md	<a id="the-enrollment-seam-issue-151"></a> [the-enrollment-seam-issue-151](docs/design/hardware-backends.md#the-enrolment-seam-issue-151)	released anchor
+MULTI_MACHINE_KEYING.md	<a id="hand-carried-enrollment-v0"></a> [hand-carried-enrollment-v0](docs/design/multi-machine-keying.md#hand-carried-enrolment-v0)	released anchor
+MULTI_MACHINE_KEYING.md	<a id="fleet-enrollment-receipts-merge-and-the-recovery-key-brief-t5-issues-190-152-187"></a> [fleet-enrollment-receipts-merge-and-the-recovery-key-brief-t5-issues-190-152-187](docs/design/multi-machine-keying.md#fleet-enrolment-receipts-merge-and-the-recovery-key-brief-t5-issues-190-152-187)	released anchor
+TswapCli/Commands/SlotCommand.cs	"enroll" => ExecuteEnrol(ctx, rest),	the US synonym of the slot enrol command word, so typing it isn't refused
+TswapTests/Docs/old-design-anchors.txt	MULTI_MACHINE_KEYING.md#hand-carried-enrollment-v0	released anchor
+TswapTests/Docs/old-design-anchors.txt	MULTI_MACHINE_KEYING.md#fleet-enrollment-receipts-merge-and-the-recovery-key-brief-t5-issues-190-152-187	released anchor
+TswapTests/Docs/old-design-anchors.txt	HARDWARE_BACKENDS.md#the-enrollment-seam-issue-151	released anchor
+TswapTests/SlotEnrolTests.cs	var (exit, stdout, stderr) = _joiner.Run("", ["slot", "enroll", "--via", Via, "--batch"]);	the synonym test runs the US command word
+docs/design/hardware-backends.md	<a id="the-enrollment-seam-issue-151"></a>	released anchor
+docs/design/multi-machine-keying.md	<a id="hand-carried-enrollment-v0"></a>	released anchor
+docs/design/multi-machine-keying.md	<a id="fleet-enrollment-receipts-merge-and-the-recovery-key-brief-t5-issues-190-152-187"></a>	released anchor
+docs/design/refactoring-plan.md	<a id="where-shamir-does-earn-its-complexity-the-enrollment-authority"></a>	released anchor

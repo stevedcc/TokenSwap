@@ -7,7 +7,7 @@ namespace TswapTests;
 
 /// <summary>
 /// Tests for the fingerprint display (issue #122): a short, deterministic, human-comparable
-/// digest of an X25519 public key shown on both machines during hand-carried enrollment.
+/// digest of an X25519 public key shown on both machines during hand-carried enrolment.
 /// </summary>
 public class SlotFingerprintTests
 {

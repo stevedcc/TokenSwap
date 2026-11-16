@@ -17,8 +17,8 @@ namespace TswapCore.Keyring;
 /// (the user looks at it, moves it, and discards it) that never itself feeds an AAD computation —
 /// its *fields*, once parsed into plain byte arrays, are what feed <see cref="SlotPayloadWrap"/>'s
 /// AAD, identically regardless of whether they arrived via JSON or a bespoke binary layout. JSON
-/// keeps this format easy to inspect, debug, and hand-edit if something goes wrong mid-enrollment,
-/// at zero cost to the actual cryptographic binding. <see cref="SlotEnrollmentFileCodec"/> still
+/// keeps this format easy to inspect, debug, and hand-edit if something goes wrong mid-enrolment,
+/// at zero cost to the actual cryptographic binding. <see cref="SlotEnrolmentFileCodec"/> still
 /// version-checks this format explicitly (see <see cref="CurrentFormatVersion"/>) — the "add a
 /// version-compatibility check for any new persisted wire format" bar applies regardless of
 /// encoding choice.</para>
@@ -32,9 +32,9 @@ namespace TswapCore.Keyring;
 /// the private half never leaves the requesting machine in this file.</para>
 ///
 /// <para><b>Version 2 (brief T4 decision 6):</b> <see cref="HwBlob"/> is the requested slot's
-/// <see cref="YubiKeySlotBlob"/> (base64): <c>slot request</c> enrolls one YubiKey, <c>slot
+/// <see cref="YubiKeySlotBlob"/> (base64): <c>slot request</c> enrols one YubiKey, <c>slot
 /// approve</c> copies the blob into the approve file and <c>slot accept</c> writes it into the
-/// new machine slot. A version 1 request (an older tswap's YubiKey pair enrollment, no blob) is
+/// new machine slot. A version 1 request (an older tswap's YubiKey pair enrolment, no blob) is
 /// refused with a message saying to run <c>slot request</c> again; it is never treated as a pair
 /// slot. <c>slot approve</c> refuses a version 2 request without a blob.</para>
 ///
@@ -54,7 +54,7 @@ public sealed record SlotRequestFile(int FormatVersion, string SlotId, string Pu
     /// <summary>Current format version this build writes and requires on read.</summary>
     public const int CurrentFormatVersion = 2;
 
-    /// <summary>The pair-enrollment request format made by tswap before brief T4.</summary>
+    /// <summary>The pair-enrolment request format made by tswap before brief T4.</summary>
     public const int PairFormatVersion = 1;
 }
 
@@ -62,7 +62,7 @@ public sealed record SlotRequestFile(int FormatVersion, string SlotId, string Pu
 /// One existing keyring slot, verbatim, as carried inside a <see cref="SlotApproveFile"/> (design
 /// decision: the approve file propagates the *entire* current slot list, not just the new slot's
 /// material — see this issue's PR body). Every field here is the base64/raw form of the
-/// corresponding <see cref="Slot"/> field; <see cref="SlotEnrollmentFileCodec"/> round-trips
+/// corresponding <see cref="Slot"/> field; <see cref="SlotEnrolmentFileCodec"/> round-trips
 /// these back into real <see cref="Slot"/> instances at <c>slot accept</c> time.
 ///
 /// <para><see cref="HwBlob"/> (issue #154): the slot's <see cref="Slot.HwBlob"/>, base64, so a
@@ -132,7 +132,7 @@ public sealed record SlotApproveFile(
 /// <c>docs/design/multi-machine-keying.md</c>'s implementation notes on this module's history of
 /// version-check gaps (never skip this check for a new persisted format).
 /// </summary>
-public static class SlotEnrollmentFileCodec
+public static class SlotEnrolmentFileCodec
 {
     public static string SerializeRequest(SlotRequestFile file) =>
         JsonSerializer.Serialize(file, TswapJsonContext.Default.SlotRequestFile);
@@ -159,8 +159,8 @@ public static class SlotEnrollmentFileCodec
             throw new TswapException("Slot request file is empty or invalid.");
         if (file.FormatVersion == SlotRequestFile.PairFormatVersion)
             throw new TswapException(
-                "This slot request was made by an older tswap, which enrolls a YubiKey pair. Keyring slots now take " +
-                "one YubiKey each, and pair enrollments are no longer accepted. On the requesting machine, update " +
+                "This slot request was made by an older tswap, which enrols a YubiKey pair. Keyring slots now take " +
+                "one YubiKey each, and pair enrolments are no longer accepted. On the requesting machine, update " +
                 "tswap and run 'tswap slot request <file>' again with one YubiKey plugged in.");
         if (file.FormatVersion != SlotRequestFile.CurrentFormatVersion)
             throw new TswapException(
@@ -273,14 +273,14 @@ public static class SlotEnrollmentFileCodec
     /// Decodes a base64 field to exactly <paramref name="expectedLength"/> bytes. Throws
     /// <see cref="TswapException"/> — never a raw <see cref="FormatException"/> or silent
     /// truncation — for invalid base64 or a wrong-length result, naming
-    /// <paramref name="what"/> in the error so a corrupted enrollment file points at the actual
+    /// <paramref name="what"/> in the error so a corrupted enrolment file points at the actual
     /// offending field rather than a generic decode failure.
     /// </summary>
     public static byte[] DecodeFixed(string base64, int expectedLength, string what)
     {
         var bytes = DecodeVariable(base64, what);
         if (bytes.Length != expectedLength)
-            throw new TswapException($"Malformed enrollment file: {what} must be {expectedLength} bytes, got {bytes.Length}.");
+            throw new TswapException($"Malformed enrolment file: {what} must be {expectedLength} bytes, got {bytes.Length}.");
         return bytes;
     }
 
@@ -293,7 +293,7 @@ public static class SlotEnrollmentFileCodec
         }
         catch (FormatException)
         {
-            throw new TswapException($"Malformed enrollment file: {what} is not valid base64.");
+            throw new TswapException($"Malformed enrolment file: {what} is not valid base64.");
         }
     }
 }

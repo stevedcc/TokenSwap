@@ -8,7 +8,7 @@ namespace TswapTests;
 
 /// <summary>
 /// The simulated wrap/unwrap hardware backend (issue #153): it lets the TPM and Secure Enclave
-/// enrollment and keyring paths run in CI without hardware. It proves plumbing only (dispatch,
+/// enrolment and keyring paths run in CI without hardware. It proves plumbing only (dispatch,
 /// config shape, round trips, error paths), never the hardware root-of-trust property; the
 /// trait-gated hardware suites stay as they are.
 /// </summary>
@@ -32,11 +32,11 @@ public class SimulatedHardwareServiceTests
     [Theory]
     [InlineData(HardwareBackend.Tpm)]
     [InlineData(HardwareBackend.SecureEnclave)]
-    public void EnrollThenUnlock_OnTheSameMachine_RecoversTheSameKek(HardwareBackend backend)
+    public void EnrolThenUnlock_OnTheSameMachine_RecoversTheSameKek(HardwareBackend backend)
     {
         var machine = new SimulatedHardwareService(backend, MachineA);
 
-        var (kekSlot, hwBlob) = machine.Enroll(password: null);
+        var (kekSlot, hwBlob) = machine.Enrol(password: null);
         var recovered = machine.Unlock(SingleSlotConfig(backend, hwBlob), NoSelection, password: null);
 
         Assert.Equal(32, kekSlot.Length);
@@ -45,11 +45,11 @@ public class SimulatedHardwareServiceTests
     }
 
     [Fact]
-    public void Enroll_TwiceGivesIndependentKeys()
+    public void Enrol_TwiceGivesIndependentKeys()
     {
         var machine = new SimulatedHardwareService(HardwareBackend.Tpm, MachineA);
 
-        Assert.NotEqual(machine.Enroll(password: null).KekSlot, machine.Enroll(password: null).KekSlot);
+        Assert.NotEqual(machine.Enrol(password: null).KekSlot, machine.Enrol(password: null).KekSlot);
     }
 
     [Theory]
@@ -57,7 +57,7 @@ public class SimulatedHardwareServiceTests
     [InlineData(HardwareBackend.SecureEnclave, "secure-enclave")]
     public void BlobFromAnotherMachine_FailsWithTheBackendsNormalError(HardwareBackend backend, string name)
     {
-        var (_, hwBlob) = new SimulatedHardwareService(backend, MachineA).Enroll(password: null);
+        var (_, hwBlob) = new SimulatedHardwareService(backend, MachineA).Enrol(password: null);
         var otherMachine = new SimulatedHardwareService(backend, MachineB);
 
         // Exactly TswapException, the error type the real backends raise for a failed
@@ -94,7 +94,7 @@ public class SimulatedHardwareServiceTests
         var machine = new SimulatedHardwareService(HardwareBackend.Tpm, MachineA);
 
         Assert.True(((IHardwareKeyService)machine).IsSimulated);
-        Assert.True(((IHardwareEnrollmentService)machine).IsSimulated);
+        Assert.True(((IHardwareEnrolmentService)machine).IsSimulated);
         Assert.Equal(HardwareBackend.Tpm, machine.Backend);
     }
 
@@ -124,12 +124,12 @@ public class SimulatedHardwareServiceTests
     }
 
     [Fact]
-    public void Enrollment_WithTestKey_IsSimulatedAndKeyedByTheTestKey()
+    public void Enrolment_WithTestKey_IsSimulatedAndKeyedByTheTestKey()
     {
-        var enrollment = HardwareServices.Enrollment(HardwareBackend.Tpm, MachineA, SecureEnclaveOwnerScopeTests.NoSwitchScope());
-        var (kekSlot, hwBlob) = enrollment.Enroll(password: null);
+        var enrolment = HardwareServices.Enrolment(HardwareBackend.Tpm, MachineA, SecureEnclaveOwnerScopeTests.NoSwitchScope());
+        var (kekSlot, hwBlob) = enrolment.Enrol(password: null);
 
-        Assert.True(enrollment.IsSimulated);
+        Assert.True(enrolment.IsSimulated);
         // Keyed by the test key: the same machine key unlocks it, another does not.
         Assert.Equal(kekSlot, new SimulatedHardwareService(HardwareBackend.Tpm, MachineA)
             .Unlock(SingleSlotConfig(HardwareBackend.Tpm, hwBlob), NoSelection, password: null));
@@ -138,18 +138,18 @@ public class SimulatedHardwareServiceTests
     }
 
     [Fact]
-    public void Enrollment_WithoutTestKey_IsNeverSimulated()
+    public void Enrolment_WithoutTestKey_IsNeverSimulated()
     {
-        // Constructing a real service touches no hardware (only Enroll/Unlock do).
+        // Constructing a real service touches no hardware (only Enrol/Unlock do).
         if (OperatingSystem.IsMacOS())
         {
-            Assert.False(HardwareServices.Enrollment(HardwareBackend.SecureEnclave, testKey: null, SecureEnclaveOwnerScopeTests.NoSwitchScope()).IsSimulated);
-            Assert.Throws<TswapException>(() => HardwareServices.Enrollment(HardwareBackend.Tpm, testKey: null, SecureEnclaveOwnerScopeTests.NoSwitchScope()));
+            Assert.False(HardwareServices.Enrolment(HardwareBackend.SecureEnclave, testKey: null, SecureEnclaveOwnerScopeTests.NoSwitchScope()).IsSimulated);
+            Assert.Throws<TswapException>(() => HardwareServices.Enrolment(HardwareBackend.Tpm, testKey: null, SecureEnclaveOwnerScopeTests.NoSwitchScope()));
         }
         else
         {
-            Assert.False(HardwareServices.Enrollment(HardwareBackend.Tpm, testKey: null, SecureEnclaveOwnerScopeTests.NoSwitchScope()).IsSimulated);
-            Assert.Throws<TswapException>(() => HardwareServices.Enrollment(HardwareBackend.SecureEnclave, testKey: null, SecureEnclaveOwnerScopeTests.NoSwitchScope()));
+            Assert.False(HardwareServices.Enrolment(HardwareBackend.Tpm, testKey: null, SecureEnclaveOwnerScopeTests.NoSwitchScope()).IsSimulated);
+            Assert.Throws<TswapException>(() => HardwareServices.Enrolment(HardwareBackend.SecureEnclave, testKey: null, SecureEnclaveOwnerScopeTests.NoSwitchScope()));
         }
     }
 

@@ -3,7 +3,7 @@ using TswapCore;
 namespace TswapCli.Ssh;
 
 /// <summary>
-/// Brief T27: how <c>slot enroll --via</c> runs a tswap command on another machine (brief T28: also on a terminal of
+/// Brief T27: how <c>slot enrol --via</c> runs a tswap command on another machine (brief T28: also on a terminal of
 /// its own, <see cref="RunInteractive"/>). <see cref="ProcessSshTransport"/>
 /// starts <c>ssh</c>; tests run the host's commands in process.
 /// </summary>

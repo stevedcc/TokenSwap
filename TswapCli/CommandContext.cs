@@ -113,7 +113,7 @@ public sealed record CommandContext(
 
     /// <summary>
     /// Brief T12: runs a Secure Enclave call as this vault folder's owner (see
-    /// <see cref="VaultOwnerScope"/>); hand it to <see cref="HardwareServices.Enrollment"/>. It reads
+    /// <see cref="VaultOwnerScope"/>); hand it to <see cref="HardwareServices.Enrolment"/>. It reads
     /// <see cref="Storage"/> only when a call runs.
     /// </summary>
     internal VaultOwnerScope OwnerScope => new(() => Storage);
@@ -170,7 +170,7 @@ public sealed record CommandContext(
     public Func<bool>? ElevationLookup { get; init; }
 
     /// <summary>
-    /// Brief T27: how <c>slot enroll --via</c> reaches the other machine (the <c>ssh</c> client from <c>PATH</c>; tests
+    /// Brief T27: how <c>slot enrol --via</c> reaches the other machine (the <c>ssh</c> client from <c>PATH</c>; tests
     /// run the host's commands in process). Brief T28: with connection sharing on, so one enrolment logs in once where
     /// OpenSSH allows it.
     /// </summary>

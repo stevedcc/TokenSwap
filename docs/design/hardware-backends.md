@@ -41,44 +41,46 @@ A rename of the old `IYubiKeyService` would have kept `Challenge(serial, string)
 `IYubiKeyService` stays as the YubiKey *driver*, and `IHardwareKeyService` is the new seam
 one level up that each backend implements in its own terms.
 
-### The enrollment seam (issue #151)
+<a id="the-enrollment-seam-issue-151"></a>
 
-Unlock and enrollment are two seams. Enrollment is a sibling interface,
-`IHardwareEnrollmentService` (`TswapCore/Vault/IHardwareEnrollmentService.cs`):
+### The enrolment seam (issue #151)
+
+Unlock and enrolment are two seams. Enrolment is a sibling interface,
+`IHardwareEnrolmentService` (`TswapCore/Vault/IHardwareEnrolmentService.cs`):
 
 ```csharp
-public sealed record HardwareEnrollment(byte[] KekSlot, byte[] HwBlob);
+public sealed record HardwareEnrolment(byte[] KekSlot, byte[] HwBlob);
 
-public interface IHardwareEnrollmentService
+public interface IHardwareEnrolmentService
 {
     HardwareBackend Backend { get; }
     bool IsSimulated { get; }
-    HardwareEnrollment Enroll();   // random KEK_slot + this backend's blob that recovers it
+    HardwareEnrolment Enrol();   // random KEK_slot + this backend's blob that recovers it
 }
 ```
 
 **Decision (brief T2, option (b) of #151).** The Secure Enclave, Linux TPM and Windows TPM
 services implement it, and so does the simulated test backend. Each one generates `KEK_slot`
-randomly inside `Enroll`, wraps or seals it, and returns the key with its own blob. It never
+randomly inside `Enrol`, wraps or seals it, and returns the key with its own blob. It never
 builds a `Config`: the caller decides where the blob is stored. **YubiKey does not implement
 it**: a YubiKey cannot wrap caller-supplied bytes, it *derives* `KEK_slot` from a challenge, so
-the CLI derives it (since brief T4, `TswapCli/YubiKeySlotEnrollment.cs`, from one key per slot;
+the CLI derives it (since brief T4, `TswapCli/YubiKeySlotEnrolment.cs`, from one key per slot;
 see "YubiKey keyring slots" below) and passes it in. Why a sibling
-interface rather than an `Enroll` method on `IHardwareKeyService` (option (a)):
+interface rather than an `Enrol` method on `IHardwareKeyService` (option (a)):
 `IHardwareKeyService` stays a pure unlock seam (a backend can be unlock-only), and no console
 I/O moves behind an interface, which option (a) would have forced for YubiKey.
 
 ### The simulated backend (issue #153)
 
 `SimulatedHardwareService` (`TswapCore/Vault/`, next to `TestKeyYubiKeyService`) implements
-both seams for a TPM or Secure Enclave vault without hardware: `Enroll` AES-GCM-wraps a random
+both seams for a TPM or Secure Enclave vault without hardware: `Enrol` AES-GCM-wraps a random
 `KEK_slot` under a 32-byte "machine" key, and `Unlock` reads the blob from where the real
 backend would and unwraps it. A blob from one simulated machine fails on another with a
 `TswapException`, as a sealed blob fails on a different TPM. It is selected only in test mode:
 `TswapCli/HardwareServices.cs` reads `TSWAP_TEST_KEY` in Debug builds only (in Release
 `ReadTestKey` always returns null, which `ReleaseBuildGateTests` checks against a real Release
 build), and only a non-null test key selects the simulated TPM and Secure Enclave, keyed by
-that test key. It proves the keyring and enrollment plumbing, never the hardware
+that test key. It proves the keyring and enrolment plumbing, never the hardware
 root-of-trust property; the trait-gated hardware suites stay as they are.
 
 ### TPM and Secure Enclave vaults are keyring vaults (brief T2, decisions 2 and 4)
@@ -105,7 +107,7 @@ Decisions made in brief T4 (the design reasoning is in `MULTI_MACHINE_KEYING.md`
    slotId)`, 32 bytes (`TswapCore/Keyring/YubiKeySlotKek.cs`). Challenge and salt are 32 random
    bytes each, per slot, from the CSPRNG. HKDF rather than PBKDF2 because the response is a
    uniformly random 160-bit MAC; stretching adds nothing. The response bytes are zeroed after
-   use. At enrollment the key is challenged twice and the responses compared in constant time;
+   use. At enrolment the key is challenged twice and the responses compared in constant time;
    a key that answers differently is refused before anything is written. The key is challenged
    through the unchanged `IYubiKeyService.Challenge(serial, string)`
    with the challenge's 64 hex characters, the same 64-byte shape a pair vault's
@@ -123,16 +125,16 @@ Decisions made in brief T4 (the design reasoning is in `MULTI_MACHINE_KEYING.md`
    with the vault files and that key, without `KeyringSlotId`. With no key plugged in the error
    says "No plugged-in YubiKey matches a slot of this vault" and lists the slot serials. A slot
    whose blob fails to decode is skipped, and named in the error only if nothing else unlocks.
-4. **`init --yubikey`** (until v0.2.0 `init --keyring`) enrolls one plugged-in key (the serial prompt when several are plugged
+4. **`init --yubikey`** (until v0.2.0 `init --keyring`) enrols one plugged-in key (the serial prompt when several are plugged
    in): one YubiKey machine slot plus the recovery slot unless `--no-recovery`;
    `YubiKeySerials = []`, `RedundancyXor = ""`, no `UnlockChallenge`/`MasterKeySalt` (the
-   convention for non-pair vaults); `Backend` stays YubiKey (null). The XOR vault can no longer be created. No command makes new pair enrollments.
-5. **`slot add --yubikey`** (sudo) unlocks this machine's vault by any slot, enrolls a plugged-in
+   convention for non-pair vaults); `Backend` stays YubiKey (null). The XOR vault can no longer be created. No command makes new pair enrolments.
+5. **`slot add --yubikey`** (sudo) unlocks this machine's vault by any slot, enrols a plugged-in
    key that has no slot yet (it refuses a key that has one, including a legacy pair slot's
    keys; a version 2 keyring is refused first, before sudo and any unlock), appends the new slot (its own slot id and X25519 keypair) to this machine's keyring,
    backs up `config.json` first and prints the slot's fingerprint. This is how a TPM vault on
    the router gets the owner's keys: plug each key into the router and run it.
-6. **`slot request`** enrolls one key and its request file (format version 2) carries the slot's
+6. **`slot request`** enrols one key and its request file (format version 2) carries the slot's
    blob; `slot approve` copies it into the approve file (format version 2), and `slot accept`
    checks it against its own pending copy (`Config.PendingSlotHwBlob`), re-derives `KEK_slot`
    from the key and writes the blob into the new slot. A version 1 request (an older tswap's
@@ -306,9 +308,9 @@ slots, and `broker serve` refuses a FIDO2 own slot.
 
 ### A TPM or Secure Enclave machine joins a fleet (brief T5, issue #152)
 
-`slot request --tpm` and `slot request --secure-enclave` enroll the joining machine's own hardware
-through the enrollment seam, exactly as `init --tpm` / `--secure-enclave` do:
-`HardwareServices.Enrollment(backend, testKey, requirePresence).Enroll()` returns a random `KEK_slot` and the
+`slot request --tpm` and `slot request --secure-enclave` enrol the joining machine's own hardware
+through the enrolment seam, exactly as `init --tpm` / `--secure-enclave` do:
+`HardwareServices.Enrolment(backend, testKey, requirePresence).Enrol()` returns a random `KEK_slot` and the
 backend's blob. `KEK_slot` is zeroed at once; the blob is kept as the pending slot's blob
 (`Config.PendingSlotHwBlob`) with `Config.Backend` set, and travels in the request file next to
 an optional `Backend` field (`"tpm"` / `"secure-enclave"`; omitted for a YubiKey request, which is
@@ -324,7 +326,7 @@ the two flags are mutually exclusive.
   `PendingSlotHwBlob` for a pending config (no keyring yet), so each backend's unchanged `Unlock`
   unseals or unwraps it. `VaultUnlocker.Unlock` still refuses a pending config before that, so
   the pending blob never opens a vault. Accept writes the receipt that `slot merge` takes back to
-  the approver (see `MULTI_MACHINE_KEYING.md` §Fleet enrollment).
+  the approver (see `MULTI_MACHINE_KEYING.md` §Fleet enrolment).
 - **One config per machine.** Each machine keeps its own config (its own `KeyringSlotId`); `slot
   merge` brings the keyrings together. `VaultUnlocker` opens a TPM / Secure Enclave slot only as
   the config's own slot and never offers another machine's blob to local hardware (security
@@ -342,7 +344,7 @@ the two flags are mutually exclusive.
   truth and unlock is unaffected).
   (A posture field would only be the requester's claim anyway: the key's policy can't be read back
   from its blob.)
-- **Recovery.** `recover --tpm` / `--secure-enclave` enroll the same way after the recovery key
+- **Recovery.** `recover --tpm` / `--secure-enclave` enrol the same way after the recovery key
   opened the vault, and make the new slot this machine's own (`Backend`, `KeyringSlotId`).
 
 ## Config discriminator
@@ -415,7 +417,7 @@ but three things are still open before this should be trusted as a primary vault
   `Config.SecureEnclaveWrappedKey` is unversioned; vaults that use it still unlock but are not
   migrated (re-create with `tswap init --secure-enclave` and re-add your secrets).
 - `tswap init --secure-enclave` makes a keyring vault (machine slot + recovery slot), the same
-  enrollment shape as the other backends; see "TPM and Secure Enclave vaults are keyring vaults".
+  enrolment shape as the other backends; see "TPM and Secure Enclave vaults are keyring vaults".
 
 ### Touch or no touch: an explicit choice (brief T11)
 
@@ -424,7 +426,7 @@ one of `--with-touch` or `--no-touch` next to `--secure-enclave`, in any order; 
 either twice, or either without `--secure-enclave` is a usage error raised before anything is read,
 prompted for or written. No config setting, environment variable or prompt chooses it. Below the
 CLI every parameter defaults to presence required
-(`HardwareServices.Enrollment(..., requirePresence = true)`, `SecureEnclaveHardwareService(bool
+(`HardwareServices.Enrolment(..., requirePresence = true)`, `SecureEnclaveHardwareService(bool
 requirePresence = true)`), and any other backend with `requirePresence: false` throws.
 
 - `--with-touch`: the key is created with `[.privateKeyUsage, .userPresence]`; every unwrap
@@ -1069,12 +1071,12 @@ Never point these tests at the machine's real TPM: the lockout test locks the TP
        additionalBackends: [ new TpmHardwareService(...) ]);
    ```
    Guard by platform (`OperatingSystem.IsWindows()` / `IsLinux()` / `IsMacOS()`) as needed.
-5. **Enrollment.** A backend that wraps or seals caller-generated bytes also implements
-   `IHardwareEnrollmentService` (see "The enrollment seam" above): `Enroll` generates a random
+5. **Enrolment.** A backend that wraps or seals caller-generated bytes also implements
+   `IHardwareEnrolmentService` (see "The enrolment seam" above): `Enrol` generates a random
    `KEK_slot`, protects it with the hardware and returns it with the backend's blob. `init`
    calls it and never touches the backend's own primitives. A derive-style backend like
    YubiKey does not implement it; the CLI derives its `KEK_slot` itself
-   (`YubiKeySlotEnrollment`), and `create`'s hardware-entropy path stays YubiKey-specific.
+   (`YubiKeySlotEnrolment`), and `create`'s hardware-entropy path stays YubiKey-specific.
 6. **AOT:** implementations are native P/Invoke (Security.framework, or — as the Secure Enclave
    backend shows — a small native shim in another language exposing a C ABI), managed-only CNG
    APIs (Windows TPM's `System.Security.Cryptography.Cng` — no P/Invoke needed there at all), or
@@ -1105,7 +1107,7 @@ shares, why every alternative (escrow / XOR / Shamir / config-share) collapses i
 Secure Enclave forces wrap/unwrap, and why `k ≥ 2` unlock is demoted to a rationale note (no
 independent zero-friction second factor exists on any target platform today — TPM PIN/PCR
 policy stays on the backlog on its own merits as standalone hardening, not as a threshold
-ingredient). Read it before implementing further TPM/SE/YubiKey enrollment work.
+ingredient). Read it before implementing further TPM/SE/YubiKey enrolment work.
 See also `REFACTORING_PLAN.md` §Phase 6 for the mergeable on-disk format and threat model.
 
 **The "unversioned wire format" caveat is resolved for keyring vaults (issue #154, brief T2

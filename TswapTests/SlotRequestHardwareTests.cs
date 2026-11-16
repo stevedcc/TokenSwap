@@ -7,8 +7,8 @@ namespace TswapTests;
 
 /// <summary>
 /// Brief T5 item 3 (decision 2, issue #152): <c>slot request --tpm</c> and
-/// <c>slot request --secure-enclave</c> enroll the joining machine's own hardware through
-/// <c>IHardwareEnrollmentService</c> and send the slot's hardware blob in the request; accept builds
+/// <c>slot request --secure-enclave</c> enrol the joining machine's own hardware through
+/// <c>IHardwareEnrolmentService</c> and send the slot's hardware blob in the request; accept builds
 /// the slot with that blob. Every machine here is a <see cref="FleetMachine"/> with its own
 /// simulated TPM or Secure Enclave key, so a blob sealed on one machine fails on another.
 /// </summary>
@@ -118,7 +118,7 @@ public class SlotRequestHardwareTests : IDisposable
 
         var stdout = server.Ok("", "slot", "request", "--tpm", requestPath);
 
-        var request = SlotEnrollmentFileCodec.DeserializeRequest(File.ReadAllText(requestPath));
+        var request = SlotEnrolmentFileCodec.DeserializeRequest(File.ReadAllText(requestPath));
         Assert.Equal(HardwareBackend.Tpm, request.Backend);
         Assert.Equal(server.Config.PendingSlotHwBlob, request.HwBlob);
         Assert.Equal(HardwareBackend.Tpm, server.Config.Backend);
@@ -127,7 +127,7 @@ public class SlotRequestHardwareTests : IDisposable
 
         var approveOut = _router.Ok("", "slot", "approve", requestPath, server.PathOf("approve.json"));
         Assert.Contains("TPM", approveOut);
-        var approve = SlotEnrollmentFileCodec.DeserializeApprove(File.ReadAllText(server.PathOf("approve.json")));
+        var approve = SlotEnrolmentFileCodec.DeserializeApprove(File.ReadAllText(server.PathOf("approve.json")));
         Assert.Equal(HardwareBackend.Tpm, approve.NewSlotBackend);
         Assert.Equal(request.HwBlob, approve.NewSlotHwBlob);
     }
@@ -258,9 +258,9 @@ public class SlotRequestHardwareTests : IDisposable
         server.Ok("", "slot", "request", "--tpm", request);
         other.Ok("", "slot", "request", "--tpm", other.PathOf("request.json"));
         _router.Ok("", "slot", "approve", request, approve);
-        var file = SlotEnrollmentFileCodec.DeserializeApprove(File.ReadAllText(approve));
-        var otherBlob = SlotEnrollmentFileCodec.DeserializeRequest(File.ReadAllText(other.PathOf("request.json"))).HwBlob;
-        File.WriteAllText(approve, SlotEnrollmentFileCodec.SerializeApprove(file with { NewSlotHwBlob = otherBlob }));
+        var file = SlotEnrolmentFileCodec.DeserializeApprove(File.ReadAllText(approve));
+        var otherBlob = SlotEnrolmentFileCodec.DeserializeRequest(File.ReadAllText(other.PathOf("request.json"))).HwBlob;
+        File.WriteAllText(approve, SlotEnrolmentFileCodec.SerializeApprove(file with { NewSlotHwBlob = otherBlob }));
         var pending = server.ConfigText;
 
         var (exit, _, stderr) = server.Run("", "slot", "accept", approve);
@@ -278,7 +278,7 @@ public class SlotRequestHardwareTests : IDisposable
             Convert.ToBase64String(YubiKeySlotBlob.Create(SerialA, true).Encode()), HardwareBackend.Tpm);
 
         var ex = Assert.Throws<TswapException>(() =>
-            SlotEnrollmentFileCodec.DeserializeRequest(SlotEnrollmentFileCodec.SerializeRequest(request)));
+            SlotEnrolmentFileCodec.DeserializeRequest(SlotEnrolmentFileCodec.SerializeRequest(request)));
         Assert.Contains("YubiKey", ex.Message);
     }
 
@@ -290,7 +290,7 @@ public class SlotRequestHardwareTests : IDisposable
             Convert.ToBase64String(new byte[KeyringFormat.MaxHwBlobSize + 1]), HardwareBackend.Tpm);
 
         var ex = Assert.Throws<TswapException>(() =>
-            SlotEnrollmentFileCodec.DeserializeRequest(SlotEnrollmentFileCodec.SerializeRequest(request)));
+            SlotEnrolmentFileCodec.DeserializeRequest(SlotEnrolmentFileCodec.SerializeRequest(request)));
         Assert.Contains($"{KeyringFormat.MaxHwBlobSize}-byte limit", ex.Message);
     }
 
@@ -299,7 +299,7 @@ public class SlotRequestHardwareTests : IDisposable
     {
         RouterVault();
         var request = _router.PathOf("request.json");
-        File.WriteAllText(request, SlotEnrollmentFileCodec.SerializeRequest(new SlotRequestFile(
+        File.WriteAllText(request, SlotEnrolmentFileCodec.SerializeRequest(new SlotRequestFile(
             SlotRequestFile.CurrentFormatVersion, Convert.ToBase64String(new byte[16]),
             Convert.ToBase64String(new byte[32]), HwBlob: null, Backend: HardwareBackend.Tpm)));
 

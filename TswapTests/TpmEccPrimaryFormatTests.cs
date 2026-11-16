@@ -184,7 +184,7 @@ public class TpmEccPrimaryFormatTests
     public void SimulatedTpm_PasswordFree_IsEccHeader_AndNeverAsksForThePassword()
     {
         var machine = new SimulatedHardwareService(HardwareBackend.Tpm, MachineKey);
-        var (kek, hwBlob) = machine.Enroll(password: null);
+        var (kek, hwBlob) = machine.Enrol(password: null);
         var calls = 0;
 
         var recovered = machine.Unlock(TpmConfig(hwBlob), NoSelection, () =>
@@ -204,7 +204,7 @@ public class TpmEccPrimaryFormatTests
     {
         using var stretched = StretchedPassword.FromBytes(Enumerable.Range(7, 32).Select(i => (byte)i).ToArray());
         var machine = new SimulatedHardwareService(HardwareBackend.Tpm, MachineKey);
-        var (kek, hwBlob) = machine.Enroll(stretched);
+        var (kek, hwBlob) = machine.Enrol(stretched);
         var calls = 0;
 
         var recovered = machine.Unlock(TpmConfig(hwBlob), NoSelection, () => { calls++; return stretched.Clone(); });
@@ -220,8 +220,8 @@ public class TpmEccPrimaryFormatTests
         using var stretched = StretchedPassword.FromBytes(Enumerable.Range(7, 32).Select(i => (byte)i).ToArray());
         var machine = new SimulatedHardwareService(HardwareBackend.SecureEnclave, MachineKey);
 
-        Assert.False(SecureEnclaveSlotBlob.HasHeader(machine.Enroll(password: null).HwBlob));
-        Assert.Equal([.. "TSSE"u8, 1, 0x01], machine.Enroll(stretched).HwBlob[..6]);
+        Assert.False(SecureEnclaveSlotBlob.HasHeader(machine.Enrol(password: null).HwBlob));
+        Assert.Equal([.. "TSSE"u8, 1, 0x01], machine.Enrol(stretched).HwBlob[..6]);
     }
 
     /// <summary>

@@ -341,8 +341,8 @@ public class Tpm2ArgvTests
         var tpm = new FakeTpm2Tools();
         using var _ = Tpm2ToolsInterop.UseRunner(tpm.Run);
         using var password = Password();
-        IHardwareEnrollmentService enrollment = new LinuxTpmHardwareService();
-        var (kek, hwBlob) = enrollment.Enroll(password);
+        IHardwareEnrolmentService enrolment = new LinuxTpmHardwareService();
+        var (kek, hwBlob) = enrolment.Enrol(password);
         var config = new Config([], "", TestTime.Fixed, Backend: HardwareBackend.Tpm, TpmSealedKey: Convert.ToBase64String(hwBlob));
         var provided = 0;
 

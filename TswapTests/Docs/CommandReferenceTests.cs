@@ -199,7 +199,7 @@ public class CommandReferenceTests
     [Fact]
     public void Subcommands_TokenisesBothUsageShapes()
     {
-        Assert.Equal(["request", "approve", "accept", "merge", "enroll", "stage", "add"],
+        Assert.Equal(["request", "approve", "accept", "merge", "enrol", "stage", "add"],
             CommandReference.Subcommands(CommandRegistry.All.Single(c => c.Name == "slot")));
         Assert.Equal(["serve", "unlock", "lock", "status", "forward", "call", "route", "socket", "template"],
             CommandReference.Subcommands(CommandRegistry.All.Single(c => c.Name == "broker")));
@@ -357,7 +357,7 @@ internal static class SudoTableDrive
             return task.GetAwaiter().GetResult(); // a faulted run rethrows its own exception, not an AggregateException
         }
 
-        // ---- slot: an enrolled machine (A) and a new one (B) that enrolls into it.
+        // ---- slot: an enrolled machine (A) and a new one (B) that enrols into it.
         using var a = new FleetMachine("sudo-a", SimulatedYubiKeyService.WithKeys(11111111));
         using var b = new FleetMachine("sudo-b", SimulatedYubiKeyService.WithKeys(22222222)) { Sudo = false };
         a.Ok("", "init", "--yubikey");
@@ -371,13 +371,13 @@ internal static class SudoTableDrive
         var acc = b.Run("", "slot", "accept", approve);
         results["slot accept"] = R(acc, acc.Exit == 0 && b.Run("", "names").Exit == 0);
 
-        // slot enroll (brief T27): a third machine (G) enrols into A over the loopback SSH double, without sudo here;
+        // slot enrol (brief T27): a third machine (G) enrols into A over the loopback SSH double, without sudo here;
         // the double runs A's approve and merge as sudo would there. Its job: G joined and A's keyring has G's slot.
         using (var g = new FleetMachine("sudo-g", SimulatedYubiKeyService.WithKeys(44444444)) { Sudo = false })
         {
             g.Ssh = new LoopbackSshTransport(a, "sudo", "-n", "tswap");
-            var enroll = g.Run("", "slot", "enroll", "--via", "me@host", "--batch");
-            results["slot enroll"] = R(enroll, enroll.Exit == 0 && g.Config.PendingSlotId is null
+            var enrol = g.Run("", "slot", "enrol", "--via", "me@host", "--batch");
+            results["slot enrol"] = R(enrol, enrol.Exit == 0 && g.Config.PendingSlotId is null
                 && a.Keyring.Slots.Any(s => Convert.ToBase64String(s.SlotId) == g.Config.KeyringSlotId));
         }
 

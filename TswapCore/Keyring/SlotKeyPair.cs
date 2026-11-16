@@ -15,7 +15,7 @@ namespace TswapCore.Keyring;
 /// In exchange, any holder of <c>K_v</c> can write a fresh slot for any enrolled device
 /// offline — including YubiKey slots, which otherwise have no public key to encrypt to
 /// (challenge-response yields only a symmetric KEK, never a keypair). This is also what the
-/// hand-carried enrollment exchange (<c>slot request</c>/<c>approve</c>/<c>accept</c>, issue
+/// hand-carried enrolment exchange (<c>slot request</c>/<c>approve</c>/<c>accept</c>, issue
 /// #121, a later wave) trades between machines.
 ///
 /// <para><b>Why this gates v0 specifically</b> (see <c>docs/design/multi-machine-keying.md</c> §Per-slot

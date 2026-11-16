@@ -10,7 +10,7 @@ namespace TswapTests;
 
 /// <summary>
 /// Brief T4 item 4 (decision 5): <c>slot add --yubikey</c> unlocks this machine's vault by any
-/// slot, enrolls a plugged-in YubiKey that has no slot yet as a one-key slot, appends it to this
+/// slot, enrols a plugged-in YubiKey that has no slot yet as a one-key slot, appends it to this
 /// machine's keyring and backs up <c>config.json</c> first. "Machines" are config dirs; the
 /// TPM is <see cref="SimulatedHardwareService"/>, the keys <see cref="SimulatedYubiKeyService"/>.
 /// </summary>
@@ -35,7 +35,7 @@ public class SlotAddYubiKeyTests : IDisposable
 
     /// <summary>
     /// A context on this test's "machine". <paramref name="tpm"/> is its simulated TPM (also the
-    /// test key, so <c>init --tpm</c> enrolls with it), or null for a machine with no TPM backend.
+    /// test key, so <c>init --tpm</c> enrols with it), or null for a machine with no TPM backend.
     /// </summary>
     private CommandContext Context(FakeConsole console, string[] args, byte[]? tpm = null, bool sudo = true)
     {

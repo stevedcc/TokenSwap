@@ -41,10 +41,10 @@ internal static class NewSlotWrite
     }
 
     /// <summary>Enrols this machine's TPM or Secure Enclave (with the stretched vault password, or none) and wraps the new slot.</summary>
-    public static Slot EnrolOwnSlot(IHardwareEnrollmentService enrollment, byte[] vaultKey, TswapCore.Keyring.Keyring keyring,
+    public static Slot EnrolOwnSlot(IHardwareEnrolmentService enrolment, byte[] vaultKey, TswapCore.Keyring.Keyring keyring,
         byte[] slotId, StretchedPassword? password)
     {
-        var (kekSlot, hwBlob) = enrollment.Enroll(password);
+        var (kekSlot, hwBlob) = enrolment.Enrol(password);
         return Wrap(vaultKey, keyring, slotId, kekSlot, hwBlob);
     }
 

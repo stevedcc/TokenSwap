@@ -73,9 +73,9 @@ public sealed class LinuxTpmPasswordTests
     [Fact]
     public void SealUnseal_WithPassword_RoundTrips()
     {
-        IHardwareEnrollmentService enrollment = new LinuxTpmHardwareService();
+        IHardwareEnrolmentService enrolment = new LinuxTpmHardwareService();
         using var password = Password(0x00); // a leading zero byte: raw bytes would have truncated to an empty auth
-        var (kek, hwBlob) = enrollment.Enroll(password);
+        var (kek, hwBlob) = enrolment.Enrol(password);
 
         Assert.True(TpmSlotBlob.HasHeader(hwBlob));
         Assert.Equal(kek, new LinuxTpmHardwareService().Unlock(ConfigWith(hwBlob), _ => 0, () => password.Clone()));
@@ -114,8 +114,8 @@ public sealed class LinuxTpmPasswordTests
     {
         using var right = Password(0x11);
         using var wrong = Password(0x22);
-        IHardwareEnrollmentService enrollment = new LinuxTpmHardwareService();
-        var (_, hwBlob) = enrollment.Enroll(right);
+        IHardwareEnrolmentService enrolment = new LinuxTpmHardwareService();
+        var (_, hwBlob) = enrolment.Enrol(right);
         List<string> calls = [];
         List<string> stderrs = [];
         TpmToolRunner real = Tpm2ToolsInterop.RunProcess;
@@ -171,9 +171,9 @@ public sealed class LinuxTpmPasswordTests
         // TPM refuses (TPM_RC_AUTH_FAIL), which tswap reports as the stripped header. Issue #261: the password bit
         // is cleared and the ECC bit kept, so the right primary is rebuilt (the whole header removed is
         // LinuxTpmEccPrimaryTests.EccPackage_ThroughTheRsaPath_Fails; a v0.2.0 RSA slot below).
-        IHardwareEnrollmentService enrollment = new LinuxTpmHardwareService();
+        IHardwareEnrolmentService enrolment = new LinuxTpmHardwareService();
         using var password = Password(0x44);
-        var (_, hwBlob) = enrollment.Enroll(password);
+        var (_, hwBlob) = enrolment.Enrol(password);
         var (_, _, package) = TpmSlotBlob.Split(hwBlob);
 
         var ex = Assert.Throws<VaultPasswordRefusedException>(() =>
@@ -215,8 +215,8 @@ public sealed class LinuxTpmPasswordTests
         }
         using var right = Password(0x55);
         using var wrong = Password(0x66);
-        IHardwareEnrollmentService enrollment = new LinuxTpmHardwareService();
-        var (_, hwBlob) = enrollment.Enroll(right);
+        IHardwareEnrolmentService enrolment = new LinuxTpmHardwareService();
+        var (_, hwBlob) = enrolment.Enrol(right);
         var config = ConfigWith(hwBlob);
 
         VaultPasswordRefusedException? last = null;

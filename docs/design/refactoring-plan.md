@@ -379,11 +379,11 @@ key-management model and a mergeable on-disk format.
 **A 2026-07-27 design review split this phase into v0 / v1 / v2** (full reasoning in
 `multi-machine-keying.md` §Scope) — the short version, from the format side:
 
-- **v0**: per-secret records with tombstones, a keyring at `k = 1`, hand-carried enrollment.
+- **v0**: per-secret records with tombstones, a keyring at `k = 1`, hand-carried enrolment.
   No revocation, no `K_v` rotation, no merge engine.
-- **v1**: revocation, rotation, and automating the enrollment exchange over the sync transport.
+- **v1**: revocation, rotation, and automating the enrolment exchange over the sync transport.
 - **v2**: the merge engine (HLC, commutativity/idempotence fuzz tests) and threshold
-  enrollment governance.
+  enrolment governance.
 
 Everything below is written against that split; steps and open questions are labeled v0/v1/v2
 so it's clear what's gating and what can be revised later under a format-version bump.
@@ -500,18 +500,20 @@ exactly who can decrypt. An attacker who copies the vault plus keyring off-fleet
 ciphertext and wrapped keys they cannot unwrap without an enrolled machine's YubiKeys —
 which is the exfiltration-resistance property, stated precisely below.
 
-#### Where Shamir *does* earn its complexity: the enrollment authority
+<a id="where-shamir-does-earn-its-complexity-the-enrollment-authority"></a>
+
+#### Where Shamir *does* earn its complexity: the enrolment authority
 
 Threshold sharing is the right tool one level up, for **who may change the fleet**. If
-any single enrolled machine can add a keyslot, one compromised machine silently enrolls
-an attacker's machine. Splitting an **enrollment key** k-of-n across the fleet (Shamir)
+any single enrolled machine can add a keyslot, one compromised machine silently enrols
+an attacker's machine. Splitting an **enrolment key** k-of-n across the fleet (Shamir)
 means admitting or revoking a machine requires k machines to cooperate — the strong form
 of "the set of machines is fixed at init."
 
-Recommendation: **v1 uses 1-of-n enrollment** (any enrolled machine can enroll another)
+Recommendation: **v1 uses 1-of-n enrolment** (any enrolled machine can enrol another)
 plus a tamper-evident audit trail in the keyring (`enrolledBy`, `enrolledAt`, a signed
-enrollment log, and a `tswap fleet machines` listing). **v2 adds k-of-n threshold
-enrollment** as hardening — deferred because Shamir enrollment ceremonies carry real
+enrolment log, and a `tswap fleet machines` listing). **v2 adds k-of-n threshold
+enrolment** as hardening — deferred because Shamir enrolment ceremonies carry real
 usability cost for a personal fleet and should not gate the feature.
 
 #### Threat model (state it plainly)
@@ -632,7 +634,7 @@ format is written — they are painful to retrofit once vaults exist on disk.
 
 #### Implementation ordering (each independently shippable)
 
-**v0** — per-secret records + keyring at `k = 1` + hand-carried enrollment. No revocation, no
+**v0** — per-secret records + keyring at `k = 1` + hand-carried enrolment. No revocation, no
 rotation, no merge engine.
 
 1. **`IVaultStore` extraction** (the Phase 5 backlog item) — ✅ **done**, shipped in Phase 5.
@@ -647,14 +649,14 @@ rotation, no merge engine.
    retrofitted once vaults exist. Still one machine, one `KEK` — no keyring, no merge engine,
    no HLC yet; last-writer-wins by the write counter is enough for a single machine, since
    there's nothing to merge against.
-3. **Keyring + hand-carried enrollment** (multi-machine, `k = 1`): the keyring format,
+3. **Keyring + hand-carried enrolment** (multi-machine, `k = 1`): the keyring format,
    `K_v` + per-machine wrapped slots (see `multi-machine-keying.md`'s two-layer wrap and
-   per-slot X25519 keypair), and `slot request`/`approve`/`accept` for hand-carried enrollment
+   per-slot X25519 keypair), and `slot request`/`approve`/`accept` for hand-carried enrolment
    (files moved by the user themselves — scp, USB, paste — not over the sync transport).
    **Fingerprint display on both sides is an explicit deliverable of this step, not an
    afterthought detail** — even though it's defense-in-depth rather than load-bearing in v0
-   (see `multi-machine-keying.md` §Hand-carried enrollment), it's the seam v1's transport-borne
-   enrollment builds on, and it's a couple dozen lines of code that are much cheaper to add now
+   (see `multi-machine-keying.md` §Hand-carried enrolment), it's the seam v1's transport-borne
+   enrolment builds on, and it's a couple dozen lines of code that are much cheaper to add now
    than to retrofit once `slot approve` output format is settled.
 
 **v0 exit criterion:** a vault usable across machines with zero shared secrets over the
@@ -662,7 +664,7 @@ network and zero extra hardware beyond what v0's backends already support (YubiK
 shippable and useful on its own, without waiting for v1/v2. "To remove a machine, re-init" is
 an acceptable v0 answer for a tool with no deployed fleets yet.
 
-**v1** — revocation, rotation, transport-borne enrollment.
+**v1** — revocation, rotation, transport-borne enrolment.
 
 4. **Revocation + rotation:** slot removal, `K_v` rotation, re-encrypt all records, bump a
    keyring generation counter so stale copies are detectably outdated. This is the step that
@@ -671,20 +673,20 @@ an acceptable v0 answer for a tool with no deployed fleets yet.
    keypair) — without it, re-wrapping every slot during rotation needs every enrolled device
    physically present again, which for a token in a drawer in another country is a migration
    that never actually happens.
-5. **Transport-borne enrollment:** automate the step-3 file exchange over the sync folder,
-   which reinstates the enrollment fingerprint from step 3 as the *primary* defense against a
+5. **Transport-borne enrolment:** automate the step-3 file exchange over the sync folder,
+   which reinstates the enrolment fingerprint from step 3 as the *primary* defense against a
    MITM substituting their own key, not defense-in-depth. Rotation atomicity (see "Open
    questions" below) must be fully resolved before this step, not concurrently with it.
 
-**v2** — the merge engine and threshold enrollment.
+**v2** — the merge engine and threshold enrolment.
 
 6. **HLC + merge engine:** ✅ **pulled into v0 by brief T6** (owner decision on #132): the HLC
    replaced the write counter before the record format shipped, and the merge rules (last action
    wins, a burn marks a version, bounded burn history) are tested for commutativity and
    idempotence pairwise. Property/fuzz testing beyond the pairwise table remains for later.
-7. **k-of-n threshold enrollment:** Shamir-split enrollment key; extending the fleet requires
+7. **k-of-n threshold enrolment:** Shamir-split enrolment key; extending the fleet requires
    k approvals. Distinct from `k`-of-`n` *unlock*, which `multi-machine-keying.md` demotes to a
-   rationale note rather than a roadmap item — this is enrollment governance, a different
+   rationale note rather than a roadmap item — this is enrolment governance, a different
    property.
 
 #### Shipping posture

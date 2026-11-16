@@ -78,14 +78,14 @@ public sealed class InitCommand : ICliCommand
         // before anything else (the reinitialise prompt, any hardware), so a typo such as
         // 'init --tmp' never falls through to a YubiKey initialisation. Brief T11: --secure-enclave
         // needs --with-touch or --no-touch, taken out (and checked) first.
-        var usage = $"{ctx.Prefix} init [{YubiKeyFlag}|{Fido2Flag} [{Fido2SlotEnrollment.SerialFlag} <n>]|--tpm|{SecureEnclaveTouchChoice.Flags}] {VaultPasswordChoice.Flags} [--no-recovery|{RecoveryKeyFile.Flag} <file>] [{FolderFlag} <dir>] " +
-                    $"(valid flags: {string.Join(", ", KnownFlags)}, {FolderFlag} <dir>, {RecoveryKeyFile.Flag} <file>, {Fido2SlotEnrollment.SerialFlag} <n>, {SecureEnclaveTouchChoice.WithTouch}, " +
+        var usage = $"{ctx.Prefix} init [{YubiKeyFlag}|{Fido2Flag} [{Fido2SlotEnrolment.SerialFlag} <n>]|--tpm|{SecureEnclaveTouchChoice.Flags}] {VaultPasswordChoice.Flags} [--no-recovery|{RecoveryKeyFile.Flag} <file>] [{FolderFlag} <dir>] " +
+                    $"(valid flags: {string.Join(", ", KnownFlags)}, {FolderFlag} <dir>, {RecoveryKeyFile.Flag} <file>, {Fido2SlotEnrolment.SerialFlag} <n>, {SecureEnclaveTouchChoice.WithTouch}, " +
                     $"{SecureEnclaveTouchChoice.NoTouch}, {VaultPasswordChoice.PasswordFlag}, {VaultPasswordChoice.NoPasswordFlag}; " +
                     $"{YubiKeyFlag}, {Fido2Flag}, --tpm and --secure-enclave are mutually exclusive, and so are --password and --no-password; " +
-                    $"{Fido2SlotEnrollment.SerialFlag} only with {Fido2Flag}, {RecoveryKeyFile.Flag} not with --no-recovery)";
+                    $"{Fido2SlotEnrolment.SerialFlag} only with {Fido2Flag}, {RecoveryKeyFile.Flag} not with --no-recovery)";
         (args, var newFolder) = SplitValue(args, FolderFlag, usage);
         (args, var recoveryKeyOut) = SplitValue(args, RecoveryKeyFile.Flag, usage);
-        (args, var serial) = Fido2SlotEnrollment.SplitSerial(args, usage);
+        (args, var serial) = Fido2SlotEnrolment.SplitSerial(args, usage);
         if (args.Contains(Fido2Flag) && args.Any(a => a is SecureEnclaveTouchChoice.WithTouch or SecureEnclaveTouchChoice.NoTouch))
             throw new UsageException($"{usage}\n{Fido2TouchFlagRefusal}");
         (args, var requirePresence) = SecureEnclaveTouchChoice.Split(args, usage);
@@ -123,7 +123,7 @@ public sealed class InitCommand : ICliCommand
         var fileStore = ctx.Storage as IFileVaultStore
             ?? throw new TswapException("'init' needs a file-based config.");
 
-        // Checked before anything is printed or any hardware is touched, so a refusal enrolls nothing.
+        // Checked before anything is printed or any hardware is touched, so a refusal enrols nothing.
         var vaultDir = Path.GetFullPath(newFolder ?? Path.Combine(fileStore.ConfigDir, "vault"));
         var keyFile = recoveryKeyOut is null ? null : RecoveryKeyFile.Check(recoveryKeyOut, vaultDir, fileStore.ConfigDir);
         RefuseExistingVault(ctx, fileStore, vaultDir);
@@ -131,7 +131,7 @@ public sealed class InitCommand : ICliCommand
         // FIDO2 plan, task 6: no terminal (the PIN is typed there), or --serial on Windows: refused before any prompt
         // or key call.
         if (fido2)
-            Fido2SlotEnrollment.Require(ctx, serial);
+            Fido2SlotEnrolment.Require(ctx, serial);
 
         // Ruling 4: any other config.json (a pending 'slot request', say) gets what init always did:
         // ask, back it up. Read through GuidedPrompts so a stray Yubico OTP line is not an answer.
@@ -313,7 +313,7 @@ public sealed class InitCommand : ICliCommand
     /// <c>YubiKeySerials = []</c>, <c>RedundancyXor = ""</c> and no
     /// <c>UnlockChallenge</c>/<c>MasterKeySalt</c>, the convention for non-pair vaults, and
     /// <see cref="Config.Backend"/> stays null (YubiKey). More keys join with <c>slot add
-    /// --yubikey</c>, each as its own slot; there are no new pair enrollments.
+    /// --yubikey</c>, each as its own slot; there are no new pair enrolments.
     ///
     /// <para>No test-mode branch: in test mode <see cref="TestKeyYubiKeyService"/> answers the
     /// challenge, and unlock challenges it again the same way.</para>
@@ -334,12 +334,12 @@ public sealed class InitCommand : ICliCommand
         var testMode = ctx.TestKey is not null;
         // Brief T17 ruling 15: the password is chosen before the key is enrolled (it goes into KEK_slot).
         using var password = NewVaultPassword(ctx, passwordFlag, HardwareBackend.YubiKey);
-        c.Out.WriteLine("Insert the YubiKey to enroll and press Enter...");
+        c.Out.WriteLine("Insert the YubiKey to enrol and press Enter...");
         if (!c.IsInputRedirected && !testMode)
             c.ReadLine();
 
         var slotId = RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize);
-        var (blob, kekSlot) = YubiKeySlotEnrollment.Enroll(ctx, slotId, password: password?.Stretched);
+        var (blob, kekSlot) = YubiKeySlotEnrolment.Enrol(ctx, slotId, password: password?.Stretched);
         try
         {
             c.Out.WriteLine("\nPassword generation entropy source:");
@@ -376,10 +376,10 @@ public sealed class InitCommand : ICliCommand
             c.Out.WriteLine(includeRecovery
                 ? "Backend: YubiKey keyring (k = 1, 2 slots: this key + recovery)"
                 : "Backend: YubiKey keyring (k = 1, 1 slot: this key only)");
-            YubiKeySlotEnrollment.PrintTouchPolicy(c, blob);
+            YubiKeySlotEnrolment.PrintTouchPolicy(c, blob);
             PrintPasswordLine(c, password);
             c.Out.WriteLine($"Entropy mode:    {(rngMode == RngMode.YubiKey ? "YubiKey hardware (two touches per create)" : "System RNG (one touch per create)")}");
-            c.Out.WriteLine("\nThis key alone opens the vault. To enroll a spare key as its own slot, plug it in and run:");
+            c.Out.WriteLine("\nThis key alone opens the vault. To enrol a spare key as its own slot, plug it in and run:");
             c.Out.WriteLine($"  sudo {ctx.Prefix} slot add --yubikey");
             PrintRecoveryKeyBackupWarning(c, ctx.Prefix, recoveryPrivateKey, $"YubiKey {blob.Serial} and every key added later", keyFile);
             PrintVaultFolder(c, fileStore, vaultDir);
@@ -393,7 +393,7 @@ public sealed class InitCommand : ICliCommand
 
     /// <summary>
     /// FIDO2 plan, task 6: <c>init --fido2</c>, a keyring vault whose machine slot is one YubiKey's FIDO2 credential
-    /// (<see cref="Fido2SlotEnrollment"/>: make-credential, then one assertion whose output gives <c>KEK_slot</c>),
+    /// (<see cref="Fido2SlotEnrolment"/>: make-credential, then one assertion whose output gives <c>KEK_slot</c>),
     /// plus the recovery slot unless <c>--no-recovery</c>. <see cref="Config.Backend"/> is written as YubiKey, not left
     /// null, so tswap 0.2.x reads the slot as needing a newer tswap. The password is chosen first, as
     /// <c>init --yubikey</c> does; the key is chosen like <c>slot add --fido2</c>'s; nothing is written before both
@@ -403,7 +403,7 @@ public sealed class InitCommand : ICliCommand
         bool includeRecovery, bool? passwordFlag, string? keyFile)
     {
         var c = ctx.Console;
-        var fido2 = Fido2SlotEnrollment.Require(ctx, serial);
+        var fido2 = Fido2SlotEnrolment.Require(ctx, serial);
 
         c.Out.WriteLine("\n╔════════════════════════════════════════╗");
         c.Out.WriteLine("║  tswap - FIDO2 Keyring Initialization  ║");
@@ -413,9 +413,9 @@ public sealed class InitCommand : ICliCommand
         c.Out.WriteLine($"each as its own slot that opens the vault alone: {ctx.Prefix} slot add --fido2 (with sudo, or from an elevated prompt on Windows)\n");
 
         using var password = NewVaultPassword(ctx, passwordFlag, HardwareBackend.YubiKey);
-        var key = Fido2SlotEnrollment.ChooseKey(ctx, serial);
+        var key = Fido2SlotEnrolment.ChooseKey(ctx, serial);
         var slotId = RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize);
-        var (blob, kekSlot) = Fido2SlotEnrollment.Enroll(ctx, key, slotId, [], password?.Stretched);
+        var (blob, kekSlot) = Fido2SlotEnrolment.Enrol(ctx, key, slotId, [], password?.Stretched);
         try
         {
             var backendConfig = new Config(
@@ -436,7 +436,7 @@ public sealed class InitCommand : ICliCommand
                 CryptographicOperations.ZeroMemory(vaultKey);
             }
 
-            var name = Fido2SlotEnrollment.EnrolledName(fido2, key, blob);
+            var name = Fido2SlotEnrolment.EnrolledName(fido2, key, blob);
             c.Out.WriteLine("\n╔════════════════════════════════════════╗");
             c.Out.WriteLine("║  ✓ INITIALIZATION COMPLETE            ║");
             c.Out.WriteLine("╚════════════════════════════════════════╝\n");
@@ -445,7 +445,7 @@ public sealed class InitCommand : ICliCommand
                 ? "Backend: FIDO2 keyring (k = 1, 2 slots: this key + recovery)"
                 : "Backend: FIDO2 keyring (k = 1, 1 slot: this key only)");
             PrintPasswordLine(c, password);
-            Fido2SlotEnrollment.PrintResetWarning(c, name);
+            Fido2SlotEnrolment.PrintResetWarning(c, name);
             c.Out.WriteLine("\nThis key alone opens the vault. To enrol a spare key as its own slot, plug it in and run:");
             c.Out.WriteLine($"  {ctx.Prefix} slot add --fido2 (with sudo, or from an elevated prompt on Windows)");
             PrintRecoveryKeyBackupWarning(c, ctx.Prefix, recoveryPrivateKey, $"{name} and every key added later", keyFile);
@@ -542,7 +542,7 @@ public sealed class InitCommand : ICliCommand
             c.Out.WriteLine("its only copy until you move it. If that copy is lost too, this recovery");
         }
         c.Out.WriteLine("option is gone for good; your normal hardware unlock is unaffected either way.");
-        c.Out.WriteLine("\nTo use it, pipe it in on stdin, never on the command line: to enroll new hardware, run");
+        c.Out.WriteLine("\nTo use it, pipe it in on stdin, never on the command line: to enrol new hardware, run");
         if (keyFile is null)
             c.Out.WriteLine($"  <command printing the key> | sudo {prefix} recover --yubikey   (or --tpm / --secure-enclave)");
         else if (OperatingSystem.IsWindows())
@@ -566,7 +566,7 @@ public sealed class InitCommand : ICliCommand
     }
 
     /// <summary>
-    /// <b>Legacy pair layout, written by no command since brief T4</b> (<c>init</c> enrolls one
+    /// <b>Legacy pair layout, written by no command since brief T4</b> (<c>init</c> enrols one
     /// key per slot); kept so tests can still build pair keyrings exactly as they
     /// were made. Was: the YubiKey-shaped wrapper shared by both the interactive and test-mode
     /// keyring paths (issue #119, extended by #120; split by #151 into this wrapper, which fills the
@@ -655,7 +655,7 @@ public sealed class InitCommand : ICliCommand
         const byte k = 1;
 
         // Issue #121: extracted into MachineSlotWrap so 'slot accept' (functionally "the
-        // enrollment half of a keyring init" for a second machine) builds its own final slot with
+        // enrolment half of a keyring init" for a second machine) builds its own final slot with
         // the exact same construction, not a re-derived copy.
         var machineSlot = MachineSlotWrap.Wrap(
             vaultKey, slotKeyPair.PrivateKey, slotKeyPair.PublicKey, slotId, kekSlot,
@@ -694,7 +694,7 @@ public sealed class InitCommand : ICliCommand
 
     /// <summary>
     /// Keyring init on this machine's TPM or Secure Enclave (issue #151, brief T2 decision 2):
-    /// the backend's enrollment service (<see cref="HardwareServices.Enrollment"/>: real
+    /// the backend's enrolment service (<see cref="HardwareServices.Enrolment"/>: real
     /// hardware, or the simulated backend in test mode) generates <c>KEK_slot</c> and its blob;
     /// <see cref="AssembleKeyring"/> wraps a random <c>K_v</c> under it in a machine slot plus,
     /// unless <c>--no-recovery</c>, a recovery slot. One machine, <c>k = 1</c>; more machines join
@@ -709,7 +709,7 @@ public sealed class InitCommand : ICliCommand
     {
         var c = ctx.Console;
         // Throws a clear TswapException on an OS without this hardware, before any output.
-        var enrollment = HardwareServices.Enrollment(backend, ctx.TestKey, ctx.OwnerScope, requirePresence);
+        var enrolment = HardwareServices.Enrolment(backend, ctx.TestKey, ctx.OwnerScope, requirePresence);
         var hardware = backend == HardwareBackend.Tpm ? "TPM" : "Secure Enclave";
 
         c.Out.WriteLine("\n╔════════════════════════════════════════╗");
@@ -727,7 +727,7 @@ public sealed class InitCommand : ICliCommand
                 ? "Creating a Secure Enclave key (unlocking later will prompt for Touch ID / presence)..."
                 : "Creating a Secure Enclave key with no presence requirement (--no-touch)...");
 
-        var (kekSlot, hwBlob) = enrollment.Enroll(password?.Stretched);
+        var (kekSlot, hwBlob) = enrolment.Enrol(password?.Stretched);
 
         // The backend's own fields. YubiKeySerials = [] and RedundancyXor = "" as every
         // non-YubiKey vault has always written (issue #151's note: no on-disk change). The blob

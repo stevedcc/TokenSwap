@@ -27,7 +27,7 @@ public class SecureEnclavePasswordHardwareTests
         using var password = StretchedPassword.FromBytes(RandomNumberGenerator.GetBytes(32));
         using var wrong = StretchedPassword.FromBytes(RandomNumberGenerator.GetBytes(32));
         var service = new SecureEnclaveHardwareService(requirePresence: true);
-        var (kek, hwBlob) = service.Enroll(password);
+        var (kek, hwBlob) = service.Enrol(password);
         var config = new Config([], "", TestTime.Fixed, Backend: HardwareBackend.SecureEnclave,
             SecureEnclaveWrappedKey: Convert.ToBase64String(hwBlob));
         Assert.True(SecureEnclaveSlotBlob.HasHeader(hwBlob));

@@ -10,7 +10,7 @@ namespace TswapTests;
 /// <summary>
 /// Brief T4 item 2 (decision 3): <see cref="VaultUnlocker"/> tries the vault's own backend first,
 /// then every one-key YubiKey slot (a slot whose hwBlob is a <see cref="YubiKeySlotBlob"/>) whose
-/// key is plugged in. Keyrings are built here the way the enrollment code builds them, with
+/// key is plugged in. Keyrings are built here the way the enrolment code builds them, with
 /// <see cref="SimulatedYubiKeyService"/> answering real per-key HMAC-SHA1 challenges.
 /// </summary>
 public class YubiKeySlotUnlockTests
@@ -42,7 +42,7 @@ public class YubiKeySlotUnlockTests
 
         public byte[] AddTpmSlot(byte[] machineKey)
         {
-            var (kek, hwBlob) = new SimulatedHardwareService(HardwareBackend.Tpm, machineKey).Enroll(password: null);
+            var (kek, hwBlob) = new SimulatedHardwareService(HardwareBackend.Tpm, machineKey).Enrol(password: null);
             var slotId = RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize);
             AddMachineSlot(slotId, kek, hwBlob);
             return slotId;

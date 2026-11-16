@@ -30,7 +30,12 @@ internal static partial class MarkdownLinks
     public static string ReadText(string path) => File.ReadAllText(path).Replace("\r\n", "\n").Replace('\r', '\n');
 
     /// <summary>Repo-relative paths (forward slashes) of every Markdown file git tracks or would track.</summary>
-    public static IReadOnlyList<string> AllMarkdown()
+    public static IReadOnlyList<string> AllMarkdown() => GitFiles("*.md");
+
+    /// <summary>Repo-relative paths (forward slashes) of every file git tracks or would track (brief T33's spelling guards).</summary>
+    public static IReadOnlyList<string> AllTracked() => GitFiles(null);
+
+    private static IReadOnlyList<string> GitFiles(string? pathspec)
     {
         var psi = new ProcessStartInfo("git")
         {
@@ -38,8 +43,13 @@ internal static partial class MarkdownLinks
             RedirectStandardOutput = true,
             RedirectStandardError = true,
         };
-        foreach (var arg in new[] { "-c", "core.quotepath=off", "ls-files", "--cached", "--others", "--exclude-standard", "--", "*.md" })
+        foreach (var arg in new[] { "-c", "core.quotepath=off", "ls-files", "--cached", "--others", "--exclude-standard" })
             psi.ArgumentList.Add(arg);
+        if (pathspec is not null)
+        {
+            psi.ArgumentList.Add("--");
+            psi.ArgumentList.Add(pathspec);
+        }
         using var p = Process.Start(psi)!;
         var stdout = p.StandardOutput.ReadToEnd();
         var stderr = p.StandardError.ReadToEnd();

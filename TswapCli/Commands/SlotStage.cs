@@ -20,7 +20,7 @@ public sealed class StagedFileSeams
 }
 
 /// <summary>
-/// Brief T28: the host's staging folder of an interactive <c>slot enroll --via</c>, <c>&lt;config dir&gt;/enrol-staged/&lt;id&gt;/</c>
+/// Brief T28: the host's staging folder of an interactive <c>slot enrol --via</c>, <c>&lt;config dir&gt;/enrol-staged/&lt;id&gt;/</c>
 /// (the SSH user's; under sudo <see cref="CliEnvironment"/> resolves the same folder from <c>SUDO_USER</c>). The files
 /// travel through it on batch-form SSH calls (<c>slot stage &lt;id&gt; put|get|clean</c>, never under sudo, so they stay
 /// the user's), while approve and merge run on a terminal of their own (<c>ssh -t</c>), so sudo and the vault can ask

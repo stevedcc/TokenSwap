@@ -149,7 +149,7 @@ public sealed class GuidedInitFido2Tests : IDisposable
         Assert.True(exit == 0, stderr + stdout);
         Assert.Equal([WindowsFido2Entry], Entries(stdout));
         Assert.Contains($"  {Fido2TestSlots.ModelName}, FIDO2: no password", stdout);
-        Assert.Contains(Fido2SlotEnrollment.ResetWarning(Fido2TestSlots.ModelName), stdout);
+        Assert.Contains(Fido2SlotEnrolment.ResetWarning(Fido2TestSlots.ModelName), stdout);
         Assert.Contains($"total hardware loss ({Fido2TestSlots.ModelName}, FIDO2", stdout);
         Assert.DoesNotContain("a security key's FIDO2 slot: ", stdout);
     }
@@ -165,7 +165,7 @@ public sealed class GuidedInitFido2Tests : IDisposable
         var (exit, stdout, stderr) = m.RunOnTerminal("\n1\n\nn\n", "init", "--no-password");
 
         Assert.True(exit == 0, stderr + stdout);
-        Assert.Contains(Fido2SlotEnrollment.ResetWarning(product), stdout);
+        Assert.Contains(Fido2SlotEnrolment.ResetWarning(product), stdout);
         Assert.Contains($"  {product}, FIDO2: no password", stdout);
         Assert.DoesNotContain("the security key this slot was made with", stdout + stderr);
     }

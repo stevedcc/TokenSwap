@@ -10,7 +10,7 @@ using Xunit;
 namespace TswapTests;
 
 /// <summary>
-/// Brief T4 item 5 (decision 6): <c>slot request</c> enrolls <b>one</b> YubiKey; the request file
+/// Brief T4 item 5 (decision 6): <c>slot request</c> enrols <b>one</b> YubiKey; the request file
 /// carries the slot's <see cref="YubiKeySlotBlob"/>, <c>slot approve</c> puts it into the approve
 /// file, and <c>slot accept</c> writes it into the new machine slot. Two "machines" with separate
 /// config dirs: a router with a simulated TPM, and a desktop with simulated YubiKeys.
@@ -91,7 +91,7 @@ public class SlotRequestOneKeyTests : IDisposable
         RouterVaultWithASecret();
 
         Request(SerialA);
-        var request = SlotEnrollmentFileCodec.DeserializeRequest(File.ReadAllText(RequestFile));
+        var request = SlotEnrolmentFileCodec.DeserializeRequest(File.ReadAllText(RequestFile));
         Assert.Equal(2, request.FormatVersion);
         var requestBlob = Convert.FromBase64String(request.HwBlob!);
         Assert.Equal(SerialA, YubiKeySlotBlob.Decode(requestBlob).Serial);
@@ -100,7 +100,7 @@ public class SlotRequestOneKeyTests : IDisposable
         Assert.True(approveExit == 0, approveErr);
         Assert.Contains($"YubiKey {SerialA}", approveOut);
         Assert.Contains("unchanged", approveOut); // the approver's own keyring is not touched (v0)
-        Assert.Equal(request.HwBlob, SlotEnrollmentFileCodec.DeserializeApprove(File.ReadAllText(ApproveFile)).NewSlotHwBlob);
+        Assert.Equal(request.HwBlob, SlotEnrolmentFileCodec.DeserializeApprove(File.ReadAllText(ApproveFile)).NewSlotHwBlob);
 
         var (acceptExit, _, acceptErr) = OnDesktop("", "slot", "accept", ApproveFile);
         Assert.True(acceptExit == 0, acceptErr);
@@ -137,7 +137,7 @@ public class SlotRequestOneKeyTests : IDisposable
     }
 
     [Fact]
-    public void Request_EnrollsOneKey_NoPairFieldsInThePendingConfig()
+    public void Request_EnrolsOneKey_NoPairFieldsInThePendingConfig()
     {
         _desktopKeys.PluggedIn = [SerialA, SerialB];
 
@@ -154,7 +154,7 @@ public class SlotRequestOneKeyTests : IDisposable
         Assert.Null(pending.Keyring);
         Assert.NotNull(pending.PendingSlotId);
         Assert.Equal(SerialB, YubiKeySlotBlob.Decode(Convert.FromBase64String(pending.PendingSlotHwBlob!)).Serial);
-        Assert.Equal([SerialB, SerialB], _desktopKeys.Challenges.Select(c => c.Serial)); // enrollment asks twice
+        Assert.Equal([SerialB, SerialB], _desktopKeys.Challenges.Select(c => c.Serial)); // enrolment asks twice
     }
 
     [Fact]
@@ -245,9 +245,9 @@ public class SlotRequestOneKeyTests : IDisposable
         RouterVaultWithASecret();
         Request(SerialA);
         Approve();
-        var approve = SlotEnrollmentFileCodec.DeserializeApprove(File.ReadAllText(ApproveFile));
+        var approve = SlotEnrolmentFileCodec.DeserializeApprove(File.ReadAllText(ApproveFile));
         var other = YubiKeySlotBlob.Create(SerialA, requiresTouch: true).Encode();
-        File.WriteAllText(ApproveFile, SlotEnrollmentFileCodec.SerializeApprove(approve with { NewSlotHwBlob = Convert.ToBase64String(other) }));
+        File.WriteAllText(ApproveFile, SlotEnrolmentFileCodec.SerializeApprove(approve with { NewSlotHwBlob = Convert.ToBase64String(other) }));
 
         var (exit, _, stderr) = OnDesktop("", "slot", "accept", ApproveFile);
 

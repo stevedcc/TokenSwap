@@ -782,7 +782,7 @@ public sealed class GuidedInitTests : IDisposable
         string stderr;
         using (SimulatedHardwareService.ObserveCalls((_, call) =>
                {
-                   if (call == "Enroll")
+                   if (call == "Enrol")
                        throw new TswapException("simulated chip failure");
                }))
             (exit, _, stderr) = m.RunOnTerminal("\n1 2\ny\n\nn\n", "init", "--no-password");

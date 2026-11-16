@@ -15,7 +15,7 @@ namespace TswapCli;
 /// output gives <c>KEK_slot = Fido2SlotKek.Derive(output, blob.PrfInput, slotId)</c> (or <c>DeriveV2</c> with the
 /// vault password). The output is zeroed after the derivation; the caller writes only after both calls succeeded.
 /// </summary>
-internal static class Fido2SlotEnrollment
+internal static class Fido2SlotEnrolment
 {
     public const string SerialFlag = "--serial";
 
@@ -38,7 +38,7 @@ internal static class Fido2SlotEnrollment
         "No slot was added and nothing was written. The key may keep an unused credential (non-discoverable: most keys, " +
         "YubiKeys included, store nothing for it), so running this again is safe.";
 
-    /// <summary>The closing line of every OTP enrolment, on every OS (<see cref="YubiKeySlotEnrollment.PrintTouchPolicy"/>).</summary>
+    /// <summary>The closing line of every OTP enrolment, on every OS (<see cref="YubiKeySlotEnrolment.PrintTouchPolicy"/>).</summary>
     public const string MultiOsHint =
         "Note: an OTP slot needs Input Monitoring on a Mac and Yubico's udev rule on Linux. If this key will be used on a " +
         "Mac, give it a FIDO2 slot too: `tswap slot add --fido2` (with sudo, or from an elevated prompt on Windows).";
@@ -173,12 +173,12 @@ internal static class Fido2SlotEnrollment
     /// enrols <paramref name="key"/> with the keyring's FIDO2 credentials as the exclude list, wraps
     /// <paramref name="vaultKey"/> (K_v) for it and zeroes <c>KEK_slot</c>.
     /// </summary>
-    public static (Slot Slot, Fido2SlotBlob Blob) EnrollAsSlot(
+    public static (Slot Slot, Fido2SlotBlob Blob) EnrolAsSlot(
         CommandContext ctx, Fido2KeyInfo? key, byte[] vaultKey, Keyring keyring, StretchedPassword? password,
         Action? credentialMade = null)
     {
         var slotId = RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize);
-        var (blob, kekSlot) = Enroll(ctx, key, slotId, VaultFido2Slots(keyring), password, credentialMade);
+        var (blob, kekSlot) = Enrol(ctx, key, slotId, VaultFido2Slots(keyring), password, credentialMade);
         try
         {
             var slotKeyPair = SlotKeyPair.Generate();
@@ -199,7 +199,7 @@ internal static class Fido2SlotEnrollment
     /// the second says <see cref="RetrySafeText"/>. <paramref name="credentialMade"/> runs once make-credential
     /// succeeded (guided init's stop note).
     /// </summary>
-    public static (Fido2SlotBlob Blob, byte[] KekSlot) Enroll(
+    public static (Fido2SlotBlob Blob, byte[] KekSlot) Enrol(
         CommandContext ctx, Fido2KeyInfo? key, byte[] slotId, IReadOnlyList<Fido2SlotBlob> vaultFido2Slots, StretchedPassword? password,
         Action? credentialMade = null)
     {

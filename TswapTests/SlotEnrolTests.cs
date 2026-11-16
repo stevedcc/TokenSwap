@@ -10,12 +10,12 @@ using Xunit;
 namespace TswapTests;
 
 /// <summary>
-/// Brief T27 task 2: <c>slot enroll --via &lt;destination&gt;</c>, the four enrolment steps with approve and merge carried
+/// Brief T27 task 2: <c>slot enrol --via &lt;destination&gt;</c>, the four enrolment steps with approve and merge carried
 /// over SSH. The joining machine (<see cref="_joiner"/>, YubiKey B) and the host (<see cref="_host"/>, a vault opened by
 /// YubiKey A) each have their own config folder and keys; <see cref="LoopbackSshTransport"/> runs the host's side in
 /// process, as <c>sudo -n tswap ...</c> would there.
 /// </summary>
-public class SlotEnrollTests : IDisposable
+public class SlotEnrolTests : IDisposable
 {
     private const int SerialA = 11111111;
     private const int SerialB = 22222222;
@@ -32,12 +32,12 @@ public class SlotEnrollTests : IDisposable
     private readonly LoopbackSshTransport _ssh;
     private readonly string _hostInitOutput;
 
-    public SlotEnrollTests()
+    public SlotEnrolTests()
     {
-        _host = new FleetMachine("enroll-host", SimulatedYubiKeyService.WithKeys(SerialA));
+        _host = new FleetMachine("enrol-host", SimulatedYubiKeyService.WithKeys(SerialA));
         _hostInitOutput = _host.Ok("", "init", "--yubikey");
         _host.Ok(HostSecret, "ingest", "on-host");
-        _joiner = new FleetMachine("enroll-joiner", SimulatedYubiKeyService.WithKeys(SerialB));
+        _joiner = new FleetMachine("enrol-joiner", SimulatedYubiKeyService.WithKeys(SerialB));
         _ssh = new LoopbackSshTransport(_host, "sudo", "-n", "tswap");
         _joiner.Ssh = _ssh;
     }
@@ -59,8 +59,8 @@ public class SlotEnrollTests : IDisposable
     private string[] CallLines => [.. _ssh.Calls.Select(c => string.Join(' ', c.Args))];
 
     /// <summary>Brief T28: T27's flow is <c>--batch</c> now (the sanctioned input change: every T27 test runs it).</summary>
-    private (int Exit, string Out, string Err) Enroll(string stdin, params string[] flags) =>
-        _joiner.Run(stdin, ["slot", "enroll", "--via", Via, "--batch", .. flags]);
+    private (int Exit, string Out, string Err) Enrol(string stdin, params string[] flags) =>
+        _joiner.Run(stdin, ["slot", "enrol", "--via", Via, "--batch", .. flags]);
 
     /// <summary>The joiner's own copy opens with the vault key: the host's records, copied as a sync would, read back.</summary>
     private void AssertJoinerReadsTheHostsSecret()
@@ -90,7 +90,7 @@ public class SlotEnrollTests : IDisposable
     [Fact]
     public void YubiKey_EnrolsOverSsh_BothMachinesKnowTheSlot()
     {
-        var (exit, stdout, stderr) = Enroll("");
+        var (exit, stdout, stderr) = Enrol("");
 
         Assert.True(exit == 0, stderr + stdout);
         AssertEnrolled(stdout, $"YubiKey {SerialB}");
@@ -101,12 +101,50 @@ public class SlotEnrollTests : IDisposable
         Assert.Null(_host.Config.ApprovedSlots); // the approval was used by the merge
     }
 
+    /// <summary>
+    /// Brief T33 (#254): the command word is <c>enrol</c>; the US form stays a synonym that runs the same command, so
+    /// someone typing it isn't refused. The same outcome as the batch happy path above.
+    /// </summary>
+    [Fact]
+    public void SlotEnrol_UsSpelling_RunsTheSameCommand()
+    {
+        var (exit, stdout, stderr) = _joiner.Run("", ["slot", "enroll", "--via", Via, "--batch"]);
+
+        Assert.True(exit == 0, stderr + stdout);
+        AssertEnrolled(stdout, $"YubiKey {SerialB}");
+        AssertJoinerReadsTheHostsSecret();
+        Assert.Equal(["sudo -n tswap --version", "sudo -n tswap slot approve - -", "sudo -n tswap slot merge -"], CallLines);
+        Assert.All(_ssh.Calls, c => Assert.Equal(Via, c.Destination));
+        Assert.DoesNotContain(_ssh.Calls, c => c.Args.Contains("--yes"));
+        Assert.Null(_host.Config.ApprovedSlots); // the approval was used by the merge
+    }
+
+    /// <summary>Brief T33 (#254): the usage and the help name the command <c>slot enrol</c> only; the synonym is not shown.</summary>
+    [Fact]
+    public void SlotHelp_NamesOnlyEnrol()
+    {
+        var (usageExit, usageOut, usageErr) = _joiner.Run("", "slot");
+        var (helpExit, helpOut, helpErr) = _joiner.Run("", "help", "slot");
+        var (commandHelpExit, commandHelpOut, commandHelpErr) = _joiner.Run("", "slot", "--help");
+
+        Assert.Equal(1, usageExit);
+        Assert.Equal(0, helpExit);
+        Assert.Equal(0, commandHelpExit);
+        foreach (var text in new[] { usageOut + usageErr, helpOut + helpErr, commandHelpOut + commandHelpErr })
+        {
+            Assert.Contains("slot enrol --via <user@host>", text);
+            var us = Docs.SpellingTests.UsEnrolForm().Match(text);
+            Assert.False(us.Success,
+                us.Success ? $"a US form: ...{text[Math.Max(0, us.Index - 40)..Math.Min(text.Length, us.Index + 40)]}..." : "");
+        }
+    }
+
     [Fact]
     public void Tpm_EnrolsOverSsh()
     {
         _joiner.Tpm = RandomNumberGenerator.GetBytes(32);
 
-        var (exit, stdout, stderr) = Enroll("", "--tpm");
+        var (exit, stdout, stderr) = Enrol("", "--tpm");
 
         Assert.True(exit == 0, stderr + stdout);
         AssertEnrolled(stdout, "this machine's TPM");
@@ -119,7 +157,7 @@ public class SlotEnrollTests : IDisposable
     {
         var folder = _host.VaultDir!;
 
-        var (exit, stdout, stderr) = Enroll("", "--vault-dir", folder);
+        var (exit, stdout, stderr) = Enrol("", "--vault-dir", folder);
 
         // slot request refuses --vault-dir without --password, so success shows the request didn't get it.
         Assert.True(exit == 0, stderr + stdout);
@@ -141,7 +179,7 @@ public class SlotEnrollTests : IDisposable
         var folder = _host.VaultDir!;
 
         // stdin: request's entropy question (default), then accept's vault password.
-        var (exit, stdout, stderr) = Enroll("\n" + Password + "\n", "--password", "--vault-dir", folder);
+        var (exit, stdout, stderr) = Enrol("\n" + Password + "\n", "--password", "--vault-dir", folder);
 
         Assert.True(exit == 0, stderr + stdout);
         AssertEnrolled(stdout, $"YubiKey {SerialB}");
@@ -159,7 +197,7 @@ public class SlotEnrollTests : IDisposable
         _joiner.Ssh = new LoopbackSshTransport(_host, "tswap");
         var ssh = (LoopbackSshTransport)_joiner.Ssh;
 
-        var (exit, stdout, stderr) = Enroll("", "--no-remote-sudo");
+        var (exit, stdout, stderr) = Enrol("", "--no-remote-sudo");
 
         Assert.True(exit == 0, stderr + stdout);
         Assert.Equal(["tswap --version", "tswap slot approve - -", "tswap slot merge -"],
@@ -172,7 +210,7 @@ public class SlotEnrollTests : IDisposable
         _joiner.Ssh = new LoopbackSshTransport(_host, "sudo", "-n", "/opt/tswap/tswap");
         var ssh = (LoopbackSshTransport)_joiner.Ssh;
 
-        var (exit, stdout, stderr) = Enroll("", "--remote-tswap", "/opt/tswap/tswap");
+        var (exit, stdout, stderr) = Enrol("", "--remote-tswap", "/opt/tswap/tswap");
 
         Assert.True(exit == 0, stderr + stdout);
         Assert.Equal(["sudo -n /opt/tswap/tswap --version", "sudo -n /opt/tswap/tswap slot approve - -", "sudo -n /opt/tswap/tswap slot merge -"],
@@ -182,7 +220,7 @@ public class SlotEnrollTests : IDisposable
     [Fact]
     public void TheHostsLines_ArriveLabelled()
     {
-        var (exit, stdout, stderr) = Enroll("");
+        var (exit, stdout, stderr) = Enrol("");
 
         Assert.True(exit == 0, stderr + stdout);
         var publicKey = _joiner.Keyring.Slots.Single(s => Convert.ToBase64String(s.SlotId) == _joiner.Config.KeyringSlotId).PublicKey;
@@ -200,7 +238,7 @@ public class SlotEnrollTests : IDisposable
         _joiner.Ok("", "init", "--yubikey");
         var config = _joiner.ConfigText;
 
-        var (exit, stdout, stderr) = Enroll("no\n");
+        var (exit, stdout, stderr) = Enrol("no\n");
 
         Assert.Equal(1, exit);
         Assert.Contains("This machine already has a config. Overwrite and start a new slot request?", stdout);
@@ -216,13 +254,13 @@ public class SlotEnrollTests : IDisposable
         _joiner.Ok("", "slot", "request", _joiner.PathOf("by-hand.json"));
         var config = _joiner.ConfigText;
 
-        var (exit, _, stderr) = Enroll("");
+        var (exit, _, stderr) = Enrol("");
 
         Assert.NotEqual(0, exit);
         Assert.Contains(
-            "This machine has a pending slot request that 'slot enroll' has no files for. If you still have its request file, " +
+            "This machine has a pending slot request that 'slot enrol' has no files for. If you still have its request file, " +
             "finish it by hand (slot approve on the vault's machine, then slot accept here); otherwise, or to start over, run " +
-            "'tswap slot enroll ... --fresh'.", stderr);
+            "'tswap slot enrol ... --fresh'.", stderr);
         Assert.Empty(_ssh.Calls);
         Assert.Equal(config, _joiner.ConfigText);
     }
@@ -233,18 +271,18 @@ public class SlotEnrollTests : IDisposable
         _joiner.Ok("", "slot", "request", _joiner.PathOf("by-hand.json"));
         var handMade = _joiner.Config.PendingSlotId;
 
-        var (exit, stdout, stderr) = Enroll("yes\n", "--fresh");
+        var (exit, stdout, stderr) = Enrol("yes\n", "--fresh");
 
         Assert.True(exit == 0, stderr + stdout);
         Assert.NotEqual(handMade, _joiner.Config.KeyringSlotId);
         AssertEnrolled(stdout, $"YubiKey {SerialB}");
     }
 
-    /// <summary>A first enroll whose approve the host refuses (exit 1): the pending request and its folder are kept.</summary>
+    /// <summary>A first enrol whose approve the host refuses (exit 1): the pending request and its folder are kept.</summary>
     private string FailedApprove()
     {
         _ssh.Override = rest => rest is ["slot", "approve", ..] ? new SshResult(1, []) : null;
-        var (exit, _, _) = Enroll("");
+        var (exit, _, _) = Enrol("");
         Assert.NotEqual(0, exit);
         _ssh.Override = null;
         _ssh.Calls.Clear();
@@ -258,7 +296,7 @@ public class SlotEnrollTests : IDisposable
         var config = _joiner.ConfigText;
         _joiner.Tpm = RandomNumberGenerator.GetBytes(32);
 
-        var (exit, _, stderr) = Enroll("", "--tpm");
+        var (exit, _, stderr) = Enrol("", "--tpm");
 
         Assert.NotEqual(0, exit);
         Assert.Contains($"This machine's pending enrolment is for YubiKey {SerialB}, without the vault password, not what this command " +
@@ -272,7 +310,7 @@ public class SlotEnrollTests : IDisposable
     {
         FailedApprove();
 
-        var (exit, _, stderr) = Enroll("", "--password");
+        var (exit, _, stderr) = Enrol("", "--password");
 
         Assert.NotEqual(0, exit);
         Assert.Contains("This machine's pending enrolment is for", stderr);
@@ -285,7 +323,7 @@ public class SlotEnrollTests : IDisposable
         var folder = FailedApprove();
         var pending = _joiner.Config.PendingSlotId;
 
-        var (exit, stdout, stderr) = Enroll("");
+        var (exit, stdout, stderr) = Enrol("");
 
         Assert.True(exit == 0, stderr + stdout);
         Assert.Contains($"Continuing the pending enrolment of YubiKey {SerialB} kept in {folder} (run with --fresh to start over).", stdout);
@@ -301,7 +339,7 @@ public class SlotEnrollTests : IDisposable
     {
         var old = FailedApprove();
 
-        var (exit, stdout, stderr) = Enroll("yes\n", "--fresh");
+        var (exit, stdout, stderr) = Enrol("yes\n", "--fresh");
 
         Assert.True(exit == 0, stderr + stdout);
         Assert.Contains("This machine already has a config. Overwrite and start a new slot request?", stdout);
@@ -315,7 +353,7 @@ public class SlotEnrollTests : IDisposable
         var old = FailedApprove();
         var config = _joiner.ConfigText;
 
-        var (exit, _, stderr) = Enroll("no\n", "--fresh");
+        var (exit, _, stderr) = Enrol("no\n", "--fresh");
 
         Assert.Equal(1, exit);
         Assert.Contains("Nothing was changed.", stderr);
@@ -330,11 +368,11 @@ public class SlotEnrollTests : IDisposable
     {
         File.WriteAllText(EnrolRoot, "not a folder"); // the enrolment folder can't be made: the request file isn't written
 
-        var (exit, stdout, stderr) = Enroll("");
+        var (exit, stdout, stderr) = Enrol("");
 
         Assert.NotEqual(0, exit);
         Assert.Contains("The pending request was saved but its request file was not written (", stderr);
-        Assert.Contains("). Run 'tswap slot enroll ... --fresh' to start over, or 'tswap slot request <file>' by hand.", stderr);
+        Assert.Contains("). Run 'tswap slot enrol ... --fresh' to start over, or 'tswap slot request <file>' by hand.", stderr);
         Assert.DoesNotContain("backed up", stderr);
         Assert.DoesNotContain("Nothing was changed", stdout + stderr);
         Assert.NotNull(_joiner.Config.PendingSlotId);
@@ -347,11 +385,11 @@ public class SlotEnrollTests : IDisposable
         _joiner.Ok("", "init", "--yubikey");
         File.WriteAllText(EnrolRoot, "not a folder");
 
-        var (exit, stdout, stderr) = Enroll("yes\n");
+        var (exit, stdout, stderr) = Enrol("yes\n");
 
         Assert.NotEqual(0, exit);
         var backup = Assert.Single(_joiner.Backups);
-        Assert.Contains($"; the previous config was backed up to {backup}. Run 'tswap slot enroll ... --fresh' to start over", stderr);
+        Assert.Contains($"; the previous config was backed up to {backup}. Run 'tswap slot enrol ... --fresh' to start over", stderr);
         Assert.DoesNotContain("Nothing was changed", stdout + stderr);
         Assert.NotNull(_joiner.Config.PendingSlotId);
     }
@@ -372,11 +410,11 @@ public class SlotEnrollTests : IDisposable
         ReceiptPathIsAFolder();
         var hostKeyring = HostKeyringBytes();
 
-        var (exit, _, stderr) = Enroll("");
+        var (exit, _, stderr) = Enrol("");
 
         Assert.NotEqual(0, exit);
         Assert.Contains($"This machine has joined the vault but no receipt was written, so {Via} doesn't know the slot. Run 'tswap " +
-                        "slot enroll ... --fresh' for a new enrolment (the simplest way), or have the host merge this machine's vault " +
+                        "slot enrol ... --fresh' for a new enrolment (the simplest way), or have the host merge this machine's vault " +
                         "folder with 'sudo tswap vault merge <folder>' (that needs sudo beyond the three-command rule).", stderr);
         Assert.Null(_joiner.Config.PendingSlotId);
         Assert.NotNull(_joiner.Config.KeyringSlotId);
@@ -391,7 +429,7 @@ public class SlotEnrollTests : IDisposable
         ReceiptPathIsAFolder();
         var folder = Path.GetFullPath(_host.VaultDir!);
 
-        var (exit, stdout, stderr) = Enroll("", "--vault-dir", folder);
+        var (exit, stdout, stderr) = Enrol("", "--vault-dir", folder);
 
         Assert.True(exit == 0, stderr + stdout);
         Assert.Contains($"This machine has joined the shared vault folder {folder}; its keyring already has the new slot, so nothing " +
@@ -408,7 +446,7 @@ public class SlotEnrollTests : IDisposable
     {
         _ssh.Override = rest => rest is ["--version"] ? new SshResult(255, Encoding.UTF8.GetBytes(Marker)) : null;
 
-        var (exit, stdout, stderr) = Enroll("");
+        var (exit, stdout, stderr) = Enrol("");
 
         Assert.NotEqual(0, exit);
         Assert.Contains($"Couldn't run tswap on {Via} over SSH (`sudo -n tswap --version` exited 255). Nothing was changed. Check that " +
@@ -425,7 +463,7 @@ public class SlotEnrollTests : IDisposable
     {
         _ssh.Override = rest => rest is ["--version"] ? new SshResult(0, []) : null;
 
-        var (exit, _, stderr) = Enroll("");
+        var (exit, _, stderr) = Enrol("");
 
         Assert.NotEqual(0, exit);
         Assert.Contains($"Couldn't run tswap on {Via} over SSH (`sudo -n tswap --version` printed nothing). Nothing was changed.", stderr);
@@ -446,7 +484,7 @@ public class SlotEnrollTests : IDisposable
         _ssh.Override = rest => rest is ["slot", "approve", ..] ? new SshResult(code, Encoding.UTF8.GetBytes(output)) : null;
         var hostKeyring = HostKeyringBytes();
 
-        var (exit, stdout, stderr) = Enroll("");
+        var (exit, stdout, stderr) = Enrol("");
 
         Assert.NotEqual(0, exit);
         var folder = Assert.Single(EnrolFolders);
@@ -455,7 +493,7 @@ public class SlotEnrollTests : IDisposable
         Assert.False(File.Exists(Path.Combine(folder, "approve.json")));
         Assert.NotNull(_joiner.Config.PendingSlotId);
         Assert.Contains($"The host didn't approve the request ({reason}). This machine's pending request is kept; nothing was added on " +
-                        $"{Via}. Fix the cause above and run the same 'tswap slot enroll' again (it continues from the kept request), or " +
+                        $"{Via}. Fix the cause above and run the same 'tswap slot enrol' again (it continues from the kept request), or " +
                         $"carry {request} to the host and run 'sudo tswap slot approve - - < request.json > approve.json' there, then " +
                         "'tswap slot accept approve.json' here.", stderr);
         Assert.Equal(hostKeyring, HostKeyringBytes());
@@ -471,7 +509,7 @@ public class SlotEnrollTests : IDisposable
             Override = rest => rest is ["slot", "approve", ..] ? new SshResult(1, []) : null,
         };
 
-        var (exit, _, stderr) = Enroll("", "--no-remote-sudo", "--remote-tswap", "/opt/tswap/tswap");
+        var (exit, _, stderr) = Enrol("", "--no-remote-sudo", "--remote-tswap", "/opt/tswap/tswap");
 
         Assert.NotEqual(0, exit);
         Assert.Contains("run '/opt/tswap/tswap slot approve - - < request.json > approve.json' there", stderr);
@@ -480,14 +518,14 @@ public class SlotEnrollTests : IDisposable
     [Fact]
     public void AcceptFails_OnAnApproveFileForAnotherRequest_ThePendingRequestSurvives()
     {
-        var other = new FleetMachine("enroll-other", SimulatedYubiKeyService.WithKeys(SerialC));
+        var other = new FleetMachine("enrol-other", SimulatedYubiKeyService.WithKeys(SerialC));
         _others.Add(other);
         other.Ok("", "slot", "request", other.PathOf("request.json"));
         var otherApprove = _host.Ok("", "slot", "approve", other.PathOf("request.json"), "-");
         var hostKeyring = HostKeyringBytes();
         _ssh.Override = rest => rest is ["slot", "approve", ..] ? new SshResult(0, Encoding.UTF8.GetBytes(otherApprove)) : null;
 
-        var (exit, _, stderr) = Enroll("");
+        var (exit, _, stderr) = Enrol("");
 
         Assert.NotEqual(0, exit);
         var approve = Path.Combine(Assert.Single(EnrolFolders), "approve.json");
@@ -505,14 +543,14 @@ public class SlotEnrollTests : IDisposable
         _ssh.Override = rest => rest is ["slot", "merge", ..] ? new SshResult(1, Encoding.UTF8.GetBytes(Marker)) : null;
         var hostKeyring = HostKeyringBytes();
 
-        var (exit, stdout, stderr) = Enroll("");
+        var (exit, stdout, stderr) = Enrol("");
 
         Assert.NotEqual(0, exit);
         var receipt = Path.Combine(Assert.Single(EnrolFolders), "receipt.json");
         Assert.True(File.Exists(receipt));
         Assert.Contains($"This machine has its copy of the vault, but {Via} didn't add the slot (exit code 1), so the host's own keyring " +
                         $"doesn't know it yet. Carry {receipt} to the host and run 'sudo tswap slot merge - < receipt.json' there. " +
-                        "Running 'slot enroll' again would start a new enrolment; the kept receipt is the way to finish this one.", stderr);
+                        "Running 'slot enrol' again would start a new enrolment; the kept receipt is the way to finish this one.", stderr);
         Assert.Equal(hostKeyring, HostKeyringBytes());
         Assert.DoesNotContain(Marker, stdout + stderr);
         AssertJoinerReadsTheHostsSecret();
@@ -526,7 +564,7 @@ public class SlotEnrollTests : IDisposable
     {
         _ssh.Override = rest => rest is ["slot", "merge", ..] ? throw new SshTransportException("its output was larger than 1 MiB, so ssh was stopped") : null;
 
-        var (exit, _, stderr) = Enroll("");
+        var (exit, _, stderr) = Enrol("");
 
         Assert.NotEqual(0, exit);
         Assert.Contains($"didn't add the slot (its output was larger than 1 MiB, so ssh was stopped)", stderr);
@@ -536,21 +574,21 @@ public class SlotEnrollTests : IDisposable
 
     public static TheoryData<string[]> UsageErrors => new()
     {
-        new[] { "slot", "enroll", "--via", "-oProxyCommand=x" },
-        new[] { "slot", "enroll", "--via", "a b" },
-        new[] { "slot", "enroll", "--via", "a\tb" },
-        new[] { "slot", "enroll", "--via", "a\u001bb" },
-        new[] { "slot", "enroll", "--via", "" },
-        new[] { "slot", "enroll", "--via", Via, "--remote-tswap", "tswap; rm" },
-        new[] { "slot", "enroll", "--via", Via, "--remote-tswap", "-x" },
-        new[] { "slot", "enroll", "--via", Via, "--bogus" },
-        new[] { "slot", "enroll", "--via", Via, "extra" },
-        new[] { "slot", "enroll", "--via", Via, "--via", Via },
-        new[] { "slot", "enroll", "--via", Via, "--tpm", "--secure-enclave", "--no-touch" },
-        new[] { "slot", "enroll", "--via", Via, "--secure-enclave" },
-        new[] { "slot", "enroll", "--via", Via, "--vault-dir" },
-        new[] { "slot", "enroll", "--via" },
-        new[] { "slot", "enroll" },
+        new[] { "slot", "enrol", "--via", "-oProxyCommand=x" },
+        new[] { "slot", "enrol", "--via", "a b" },
+        new[] { "slot", "enrol", "--via", "a\tb" },
+        new[] { "slot", "enrol", "--via", "a\u001bb" },
+        new[] { "slot", "enrol", "--via", "" },
+        new[] { "slot", "enrol", "--via", Via, "--remote-tswap", "tswap; rm" },
+        new[] { "slot", "enrol", "--via", Via, "--remote-tswap", "-x" },
+        new[] { "slot", "enrol", "--via", Via, "--bogus" },
+        new[] { "slot", "enrol", "--via", Via, "extra" },
+        new[] { "slot", "enrol", "--via", Via, "--via", Via },
+        new[] { "slot", "enrol", "--via", Via, "--tpm", "--secure-enclave", "--no-touch" },
+        new[] { "slot", "enrol", "--via", Via, "--secure-enclave" },
+        new[] { "slot", "enrol", "--via", Via, "--vault-dir" },
+        new[] { "slot", "enrol", "--via" },
+        new[] { "slot", "enrol" },
     };
 
     [Theory]
@@ -560,7 +598,7 @@ public class SlotEnrollTests : IDisposable
         var (exit, _, stderr) = _joiner.Run("", args);
 
         Assert.Equal(1, exit);
-        Assert.Contains("Usage: tswap slot enroll --via <user@host>", stderr);
+        Assert.Contains("Usage: tswap slot enrol --via <user@host>", stderr);
         Assert.Empty(_ssh.Calls);
         Assert.False(File.Exists(_joiner.ConfigPath));
     }
@@ -572,8 +610,8 @@ public class SlotEnrollTests : IDisposable
         new(host ?? _host, program) { InteractivePrefix = noSudo ? [program] : ["sudo", program], BareCallsPrivileged = noSudo };
 
     /// <summary>Enrols with the joiner's stdin and stdout a terminal (no <c>--batch</c>).</summary>
-    private (int Exit, string Out, string Err) EnrollOnTerminal(string stdin, params string[] flags) =>
-        _joiner.RunOnTerminal(stdin, ["slot", "enroll", "--via", Via, .. flags]);
+    private (int Exit, string Out, string Err) EnrolOnTerminal(string stdin, params string[] flags) =>
+        _joiner.RunOnTerminal(stdin, ["slot", "enrol", "--via", Via, .. flags]);
 
     private static string Sha256Hex(byte[] bytes) => Convert.ToHexStringLower(SHA256.HashData(bytes));
 
@@ -608,7 +646,7 @@ public class SlotEnrollTests : IDisposable
         _joiner.Ssh = ssh;
         var (requestHash, receiptHash) = RecordLocalHashes(ssh);
 
-        var (exit, stdout, stderr) = EnrollOnTerminal(TerminalAnswers);
+        var (exit, stdout, stderr) = EnrolOnTerminal(TerminalAnswers);
 
         Assert.True(exit == 0, stderr + stdout);
         AssertEnrolled(stdout, $"YubiKey {SerialB}");
@@ -635,7 +673,7 @@ public class SlotEnrollTests : IDisposable
         var ssh = InteractiveSsh();
         _joiner.Ssh = ssh;
 
-        var (exit, stdout, stderr) = EnrollOnTerminal(TerminalAnswers);
+        var (exit, stdout, stderr) = EnrolOnTerminal(TerminalAnswers);
 
         Assert.True(exit == 0, stderr + stdout);
         var hostLine = Assert.Single(ssh.InteractiveOutput.ToString().Split('\n'), l => l.StartsWith("Approve file fingerprint: ")).TrimEnd('\r');
@@ -651,7 +689,7 @@ public class SlotEnrollTests : IDisposable
     public void Interactive_AnApproveFileSwappedOnTheHost_ShowsAnotherFingerprint_AndEofAtTheEnterKeepsTheRequest()
     {
         // A3: a same-user process on the host swaps approve.json between approve and get, for a valid approve file of its own.
-        var other = new FleetMachine("enroll-other", SimulatedYubiKeyService.WithKeys(SerialC));
+        var other = new FleetMachine("enrol-other", SimulatedYubiKeyService.WithKeys(SerialC));
         _others.Add(other);
         other.Ok("", "slot", "request", other.PathOf("request.json"));
         var crafted = _host.Ok("", "slot", "approve", other.PathOf("request.json"), "-");
@@ -660,7 +698,7 @@ public class SlotEnrollTests : IDisposable
         _joiner.Ssh = ssh;
         var hostKeyring = HostKeyringBytes();
 
-        var (exit, stdout, stderr) = EnrollOnTerminal("\n\n\n"); // request's answers; then EOF at the Enter
+        var (exit, stdout, stderr) = EnrolOnTerminal("\n\n\n"); // request's answers; then EOF at the Enter
 
         Assert.NotEqual(0, exit);
         var hostLine = Assert.Single(ssh.InteractiveOutput.ToString().Split('\n'), l => l.StartsWith("Approve file fingerprint: ")).TrimEnd('\r');
@@ -682,14 +720,14 @@ public class SlotEnrollTests : IDisposable
     [Fact]
     public void Interactive_OnAHostWhoseVaultNeedsItsPassword_Enrols_WhereBatchFailsAtApprove()
     {
-        var host = new FleetMachine("enroll-pw-host", SimulatedYubiKeyService.WithKeys(SerialA)) { Tpm = RandomNumberGenerator.GetBytes(32) };
+        var host = new FleetMachine("enrol-pw-host", SimulatedYubiKeyService.WithKeys(SerialA)) { Tpm = RandomNumberGenerator.GetBytes(32) };
         _others.Add(host);
         PasswordVaultTestSupport.InitTpmPasswordVault(host, Password);
         var batch = new LoopbackSshTransport(host, "sudo", "-n", "tswap");
         _joiner.Ssh = batch;
 
         // --batch: the host's approve can't ask for its vault password.
-        var (batchExit, _, batchErr) = Enroll("");
+        var (batchExit, _, batchErr) = Enrol("");
         Assert.NotEqual(0, batchExit);
         Assert.Contains("The host didn't approve the request (exit code ", batchErr);
         Assert.Contains($"[{Via}] ", batchErr);
@@ -698,7 +736,7 @@ public class SlotEnrollTests : IDisposable
         var ssh = InteractiveSsh(host);
         ssh.HostTerminalInput = Password + "\n";
         _joiner.Ssh = ssh;
-        var (exit, stdout, stderr) = EnrollOnTerminal(TerminalAnswers);
+        var (exit, stdout, stderr) = EnrolOnTerminal(TerminalAnswers);
 
         Assert.True(exit == 0, stderr + stdout);
         Assert.Contains("Continuing the pending enrolment", stdout);
@@ -713,7 +751,7 @@ public class SlotEnrollTests : IDisposable
         var ssh = InteractiveSsh(program: "/opt/tswap/tswap", noSudo: true);
         _joiner.Ssh = ssh;
 
-        var (exit, stdout, stderr) = EnrollOnTerminal(TerminalAnswers, "--no-remote-sudo", "--remote-tswap", "/opt/tswap/tswap");
+        var (exit, stdout, stderr) = EnrolOnTerminal(TerminalAnswers, "--no-remote-sudo", "--remote-tswap", "/opt/tswap/tswap");
 
         Assert.True(exit == 0, stderr + stdout);
         Assert.All(ssh.Calls, c => Assert.Equal("/opt/tswap/tswap", c.Args[0]));
@@ -732,7 +770,7 @@ public class SlotEnrollTests : IDisposable
                 before.Add(_joiner.LastConsole!.OutText);
         };
 
-        var (exit, stdout, stderr) = EnrollOnTerminal(TerminalAnswers);
+        var (exit, stdout, stderr) = EnrolOnTerminal(TerminalAnswers);
 
         Assert.True(exit == 0, stderr + stdout);
         var id = ShortIdOf(_joiner.Config.KeyringSlotId!);
@@ -757,11 +795,11 @@ public class SlotEnrollTests : IDisposable
     [Fact]
     public void Interactive_WithoutATerminal_AndWithoutBatch_IsRefusedBeforeAnything()
     {
-        var (exit, stdout, stderr) = _joiner.Run("", "slot", "enroll", "--via", Via);
+        var (exit, stdout, stderr) = _joiner.Run("", "slot", "enrol", "--via", Via);
 
         Assert.Equal(1, exit);
         Assert.Contains(
-            "slot enroll needs a terminal here, because the host's sudo and vault may ask for a password. In a script, add --batch " +
+            "slot enrol needs a terminal here, because the host's sudo and vault may ask for a password. In a script, add --batch " +
             "(the host then must need no password: docs/multi-machine.md#enrolling-over-ssh). Nothing was changed.", stderr);
         Assert.Empty(_ssh.Calls);
         Assert.Empty(_ssh.Ended);
@@ -777,7 +815,7 @@ public class SlotEnrollTests : IDisposable
         ssh.Override = rest => rest is ["--version"] ? new SshResult(255, Encoding.UTF8.GetBytes(Marker)) : null;
         _joiner.Ssh = ssh;
 
-        var (exit, stdout, stderr) = EnrollOnTerminal(TerminalAnswers);
+        var (exit, stdout, stderr) = EnrolOnTerminal(TerminalAnswers);
 
         Assert.NotEqual(0, exit);
         Assert.Contains($"Couldn't run tswap on {Via} over SSH (`tswap --version` exited 255). Nothing was changed. Check that ssh {Via} " +
@@ -790,7 +828,7 @@ public class SlotEnrollTests : IDisposable
     /// <summary>The interactive approve-failed message for <paramref name="reason"/>, as the joiner prints it.</summary>
     private string InteractiveApproveFailed(string reason, string folder, string extra = "") =>
         $"The host didn't approve the request ({reason}){extra}. This machine's pending request is kept; nothing was added on {Via}. Fix " +
-        "the cause above and run the same 'tswap slot enroll' again (it continues from the kept request), or carry " +
+        "the cause above and run the same 'tswap slot enrol' again (it continues from the kept request), or carry " +
         $"{Path.Combine(folder, "request.json")} to the host and run 'sudo tswap slot approve request.json approve.json' there, then " +
         "'tswap slot accept approve.json' here. The host's staging folder may be left; remove it with " +
         $"'tswap slot stage {Path.GetFileName(folder)} clean' there.";
@@ -819,7 +857,7 @@ public class SlotEnrollTests : IDisposable
         _joiner.Ssh = ssh;
         var hostKeyring = HostKeyringBytes();
 
-        var (exit, stdout, stderr) = EnrollOnTerminal(TerminalAnswers);
+        var (exit, stdout, stderr) = EnrolOnTerminal(TerminalAnswers);
 
         Assert.NotEqual(0, exit);
         var folder = Assert.Single(EnrolFolders);
@@ -841,10 +879,10 @@ public class SlotEnrollTests : IDisposable
         var ssh = InteractiveSsh();
         ssh.InteractiveOverride = rest => rest is ["slot", "approve", ..] ? 1 : null;
         _joiner.Ssh = ssh;
-        Assert.NotEqual(0, EnrollOnTerminal(TerminalAnswers).Exit);
+        Assert.NotEqual(0, EnrolOnTerminal(TerminalAnswers).Exit);
         ssh.InteractiveOverride = null;
 
-        var (exit, stdout, stderr) = EnrollOnTerminal("\n");
+        var (exit, stdout, stderr) = EnrolOnTerminal("\n");
 
         Assert.True(exit == 0, stderr + stdout);
         Assert.Contains("Continuing the pending enrolment", stdout);
@@ -863,7 +901,7 @@ public class SlotEnrollTests : IDisposable
         _joiner.Ssh = ssh;
         var hostKeyring = HostKeyringBytes();
 
-        var (exit, stdout, stderr) = EnrollOnTerminal(TerminalAnswers);
+        var (exit, stdout, stderr) = EnrolOnTerminal(TerminalAnswers);
 
         Assert.NotEqual(0, exit);
         var folder = Assert.Single(EnrolFolders);
@@ -871,7 +909,7 @@ public class SlotEnrollTests : IDisposable
         Assert.True(File.Exists(receipt));
         Assert.Contains(
             $"This machine has its copy of the vault, but {Via} didn't add the slot (exit code 1), so the host's own keyring doesn't know " +
-            $"it yet. Carry {receipt} to the host and run 'sudo tswap slot merge receipt.json' there. Running 'slot enroll' again would " +
+            $"it yet. Carry {receipt} to the host and run 'sudo tswap slot merge receipt.json' there. Running 'slot enrol' again would " +
             "start a new enrolment; the kept receipt is the way to finish this one. The host's staging folder may be left; remove it with " +
             $"'tswap slot stage {Path.GetFileName(folder)} clean' there.", stderr);
         Assert.Equal(hostKeyring, HostKeyringBytes());
@@ -887,7 +925,7 @@ public class SlotEnrollTests : IDisposable
         ssh.Override = rest => rest is ["slot", "stage", _, "clean"] ? new SshResult(1, []) : null;
         _joiner.Ssh = ssh;
 
-        var (exit, stdout, stderr) = EnrollOnTerminal(TerminalAnswers);
+        var (exit, stdout, stderr) = EnrolOnTerminal(TerminalAnswers);
 
         Assert.True(exit == 0, stderr + stdout);
         var id = ShortIdOf(_joiner.Config.KeyringSlotId!);
@@ -903,7 +941,7 @@ public class SlotEnrollTests : IDisposable
         ssh.InteractiveOverride = rest => rest is ["slot", "approve", ..] ? 1 : null;
         _joiner.Ssh = ssh;
 
-        var (exit, _, stderr) = EnrollOnTerminal(TerminalAnswers);
+        var (exit, _, stderr) = EnrolOnTerminal(TerminalAnswers);
 
         Assert.NotEqual(0, exit);
         Assert.Contains(InteractiveApproveFailed("exit code 1", Assert.Single(EnrolFolders),
@@ -918,7 +956,7 @@ public class SlotEnrollTests : IDisposable
         ssh.InteractiveOverride = rest => rest is ["slot", "approve", ..] ? 1 : null;
         _joiner.Ssh = ssh;
 
-        var (_, _, stderr) = EnrollOnTerminal(TerminalAnswers);
+        var (_, _, stderr) = EnrolOnTerminal(TerminalAnswers);
 
         Assert.Contains(InteractiveApproveFailed("exit code 1", Assert.Single(EnrolFolders)), stderr);
         Assert.DoesNotContain("the host runs tswap", stderr);
@@ -927,7 +965,7 @@ public class SlotEnrollTests : IDisposable
     [Fact]
     public void Batch_EndsTheSessionToo()
     {
-        var (exit, stdout, stderr) = Enroll("");
+        var (exit, stdout, stderr) = Enrol("");
 
         Assert.True(exit == 0, stderr + stdout);
         Assert.Equal([Via], _ssh.Ended);

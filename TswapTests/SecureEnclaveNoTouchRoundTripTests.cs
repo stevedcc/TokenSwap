@@ -104,7 +104,7 @@ public class SecureEnclaveNoTouchRoundTripTests(ITestOutputHelper output)
     private static void NoTouchSlotUnlocks()
     {
         var service = new SecureEnclaveHardwareService(requirePresence: false);
-        var (kek, hwBlob) = service.Enroll(password: null);
+        var (kek, hwBlob) = service.Enrol(password: null);
         var config = new Config([], "", TestTime.Fixed, Backend: HardwareBackend.SecureEnclave,
             SecureEnclaveWrappedKey: Convert.ToBase64String(hwBlob), RequiresTouch: false);
 

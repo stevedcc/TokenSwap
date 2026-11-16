@@ -25,7 +25,7 @@ namespace TswapCore.Vault;
 /// <see cref="Keyring.Slot.HwBlob"/> and protects that slot's <c>KEK_slot</c>; it is versioned by
 /// the keyring's AEAD-bound format version. In a single-slot vault made before keyring vaults it
 /// is the legacy, unversioned <see cref="Config.TpmSealedKey"/> and protects the vault key itself.
-/// <see cref="HardwareBlobLocator"/> picks the right one; <see cref="Enroll"/> produces it.</para>
+/// <see cref="HardwareBlobLocator"/> picks the right one; <see cref="Enrol"/> produces it.</para>
 ///
 /// <para><b>Status:</b> verified on two physical TPMs (an Intel PTT, #155, and an Infineon SLB 9665,
 /// #261), with RSA-2048 slots made by v0.2.0 and with new slots, which seal under an ECC P-256 primary
@@ -38,7 +38,7 @@ namespace TswapCore.Vault;
 /// tpm vault.</para>
 /// </summary>
 [SupportedOSPlatform("linux")]
-public sealed class LinuxTpmHardwareService : TpmHardwareServiceBase, IHardwareEnrollmentService
+public sealed class LinuxTpmHardwareService : TpmHardwareServiceBase, IHardwareEnrolmentService
 {
     /// <summary>Whether this machine can use the chip (a cheap presence check; creates no key). Lets the CLI probe without naming the interop.</summary>
     public static bool IsAvailable() => Tpm2ToolsInterop.IsAvailable();
@@ -47,22 +47,22 @@ public sealed class LinuxTpmHardwareService : TpmHardwareServiceBase, IHardwareE
     public static (bool Available, string? Reason) Probe() => Tpm2ToolsInterop.Probe();
 
     /// <summary>
-    /// Enrollment seam (issue #151): generates a random <c>KEK_slot</c> and seals it to this
+    /// Enrolment seam (issue #151): generates a random <c>KEK_slot</c> and seals it to this
     /// machine's TPM via <see cref="Seal"/>. The returned blob is useless off this machine. Issue #261: the package is
     /// sealed under the ECC P-256 primary, so the blob always has the <c>TSTP</c> header with
     /// <see cref="TpmSlotBlob.EccPrimary"/> (and <see cref="TpmSlotBlob.Password"/> for a password slot).
     /// </summary>
-    public HardwareEnrollment Enroll(StretchedPassword? password)
+    public HardwareEnrolment Enrol(StretchedPassword? password)
     {
         var kekSlot = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
         return password is null
-            ? new HardwareEnrollment(kekSlot, TpmSlotBlob.Wrap(Seal(kekSlot), TpmSlotBlob.EccPrimary))
-            : new HardwareEnrollment(kekSlot,
+            ? new HardwareEnrolment(kekSlot, TpmSlotBlob.Wrap(Seal(kekSlot), TpmSlotBlob.EccPrimary))
+            : new HardwareEnrolment(kekSlot,
                 TpmSlotBlob.Wrap(Tpm2ToolsInterop.Seal(kekSlot, password), TpmSlotBlob.EccPrimary | TpmSlotBlob.Password));
     }
 
     /// <summary>
-    /// Enrollment side: seals <paramref name="plaintextKey"/> (the vault key) under a fresh ECC P-256 storage
+    /// Enrolment side: seals <paramref name="plaintextKey"/> (the vault key) under a fresh ECC P-256 storage
     /// primary. Returns the bare package (no <c>TSTP</c> header); the blob is useless off this machine.
     /// </summary>
     public byte[] Seal(byte[] plaintextKey) => Tpm2ToolsInterop.Seal(plaintextKey);

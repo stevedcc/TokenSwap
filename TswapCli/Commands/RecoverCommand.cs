@@ -9,7 +9,7 @@ namespace TswapCli.Commands;
 /// <c>recover --yubikey|--tpm|--secure-enclave</c> (brief T5 decision 3, issue #187): the
 /// break-glass path. Opens the vault with the recovery private key, read from stdin only (the
 /// optional <c>--recovery-key-stdin</c> flag says so explicitly; the key is never taken from argv,
-/// the environment or a file path), and enrolls this machine's hardware as a new slot. The recovery
+/// the environment or a file path), and enrols this machine's hardware as a new slot. The recovery
 /// slot stays.
 ///
 /// <list type="bullet">
@@ -31,7 +31,7 @@ public sealed class RecoverCommand : ICliCommand
 {
     public string Name => "recover";
     public string HelpUsage => $"recover --yubikey|--tpm|{SecureEnclaveTouchChoice.Flags} {VaultPasswordChoice.Flags} [--recovery-key-stdin]  (recovery key on stdin)";
-    public string Description => "Break glass: open the vault with the recovery private key (piped on stdin) and enroll this machine's YubiKey, TPM or Secure Enclave as a new slot (--secure-enclave needs --with-touch or --no-touch)";
+    public string Description => "Break glass: open the vault with the recovery private key (piped on stdin) and enrol this machine's YubiKey, TPM or Secure Enclave as a new slot (--secure-enclave needs --with-touch or --no-touch)";
     public bool RequiresSudo => true;
 
     private static readonly string[] Devices = ["--yubikey", "--tpm", "--secure-enclave"];
@@ -72,7 +72,7 @@ public sealed class RecoverCommand : ICliCommand
         ctx.RequireSudo("recover");
 
         // Throws a clear TswapException on an OS without this hardware, before the key is read.
-        var enrollment = hardware is null ? null : HardwareServices.Enrollment(hardware.Value, ctx.TestKey, ctx.OwnerScope, requirePresence ?? true);
+        var enrolment = hardware is null ? null : HardwareServices.Enrolment(hardware.Value, ctx.TestKey, ctx.OwnerScope, requirePresence ?? true);
 
         var vaultKey = SlotCommand.UnlockWithRecoveryKey(ctx, keyring, keyOnFirstLine: passwordFlag == true);
         Slot newSlot;
@@ -85,10 +85,10 @@ public sealed class RecoverCommand : ICliCommand
             // Brief T17 ruling 15: the vault's password (checked with K_v), or the first one (asked twice).
             password = VaultPasswordChoice.Resolve(ctx, passwordFlag, hardware ?? HardwareBackend.YubiKey,
                 ctx.Storage as RecordVaultStore, vaultKey, keyring, "recover");
-            if (enrollment is null)
+            if (enrolment is null)
             {
                 c.Out.WriteLine("Recovery key accepted. Enrolling a YubiKey as a new slot.");
-                (yubiKey, var kekSlot) = YubiKeySlotEnrollment.Enroll(ctx, slotId, password: password?.Stretched);
+                (yubiKey, var kekSlot) = YubiKeySlotEnrolment.Enrol(ctx, slotId, password: password?.Stretched);
                 deviceName = $"YubiKey {yubiKey.Serial}";
                 newSlot = NewSlotWrite.Wrap(vaultKey, keyring, slotId, kekSlot, yubiKey.Encode());
             }
@@ -96,7 +96,7 @@ public sealed class RecoverCommand : ICliCommand
             {
                 deviceName = hardware == HardwareBackend.Tpm ? "this machine's TPM" : "this machine's Secure Enclave";
                 c.Out.WriteLine($"Recovery key accepted. Enrolling {deviceName} as a new slot.");
-                newSlot = NewSlotWrite.EnrolOwnSlot(enrollment, vaultKey, keyring, slotId, password?.Stretched);
+                newSlot = NewSlotWrite.EnrolOwnSlot(enrolment, vaultKey, keyring, slotId, password?.Stretched);
             }
         }
         finally
@@ -113,7 +113,7 @@ public sealed class RecoverCommand : ICliCommand
         if (yubiKey is not null)
         {
             // Brief T7 item 5 / fix round 1: explained first, then acknowledged with the config write.
-            YubiKeySlotEnrollment.PrintTouchPolicy(c, yubiKey);
+            YubiKeySlotEnrolment.PrintTouchPolicy(c, yubiKey);
             newConfig = SecurityWarnings.Acknowledge(newConfig, [Convert.ToBase64String(slotId)]);
         }
 

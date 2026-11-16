@@ -65,12 +65,12 @@ public class WindowsTpmHardwareServiceTests
     }
 
     [Fact]
-    public void Enroll_ThenUnlock_RecoversTheEnrolledKekSlot()
+    public void Enrol_ThenUnlock_RecoversTheEnrolledKekSlot()
     {
-        // Enrollment seam (issue #151): Enroll generates KEK_slot itself and returns the blob;
+        // Enrolment seam (issue #151): Enrol generates KEK_slot itself and returns the blob;
         // the unlock seam must recover exactly that KEK_slot from the blob on this machine.
-        IHardwareEnrollmentService enrollment = new WindowsTpmHardwareService();
-        var (kekSlot, hwBlob) = enrollment.Enroll(password: null);
+        IHardwareEnrolmentService enrolment = new WindowsTpmHardwareService();
+        var (kekSlot, hwBlob) = enrolment.Enrol(password: null);
 
         var config = new Config([], "", TestTime.Fixed,
             Backend: HardwareBackend.Tpm,
@@ -88,7 +88,7 @@ public class WindowsTpmHardwareServiceTests
         // Issue #154: what 'tswap init' writes now. The blob is the machine slot's hwBlob in a
         // version 3 keyring; the real backend finds it there and VaultUnlocker unwraps K_v.
         var service = new WindowsTpmHardwareService();
-        var (kekSlot, hwBlob) = ((IHardwareEnrollmentService)service).Enroll(password: null);
+        var (kekSlot, hwBlob) = ((IHardwareEnrolmentService)service).Enrol(password: null);
         var backendConfig = new Config([], "", TestTime.Fixed, Backend: HardwareBackend.Tpm);
         var (config, vaultKey, _) = TswapCli.Commands.InitCommand.AssembleKeyring(kekSlot, backendConfig, includeRecovery: true, hwBlob);
 

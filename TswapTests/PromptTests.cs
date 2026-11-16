@@ -67,13 +67,13 @@ public class PromptTests
     }
 
     [Fact]
-    public void Template_ListsSlotEnrollUnderNever()
+    public void Template_ListsSlotEnrolUnderNever()
     {
-        // Brief T27: slot enroll needs no sudo here, but it adds a way into a vault on another machine: human use only.
+        // Brief T27: slot enrol needs no sudo here, but it adds a way into a vault on another machine: human use only.
         var text = Prompt.GetText("tswap");
         var never = text[text.IndexOf("## Commands you must NEVER use", StringComparison.Ordinal)..text.IndexOf("## Key rules", StringComparison.Ordinal)];
         Assert.Contains(
-            "- `tswap slot enroll --via <user@host>` — Adds this machine's key or chip to the vault on another machine over SSH (human use only)",
+            "- `tswap slot enrol --via <user@host>` — Adds this machine's key or chip to the vault on another machine over SSH (human use only)",
             never);
     }
 

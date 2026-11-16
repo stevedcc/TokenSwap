@@ -18,7 +18,7 @@ namespace TswapCli.Ssh;
 /// requirement: any doubt about the socket folder means no sharing, with a one-line note.</para>
 /// </summary>
 /// <param name="program">The ssh program (default <c>ssh</c>, found on <c>PATH</c>); tests name a stub.</param>
-/// <param name="shareConnection">Brief T28: pass the connection-sharing options (off by default; <c>slot enroll</c>'s
+/// <param name="shareConnection">Brief T28: pass the connection-sharing options (off by default; <c>slot enrol</c>'s
 /// composition turns it on).</param>
 public sealed class ProcessSshTransport(string program = "ssh", bool shareConnection = false) : ISshTransport
 {

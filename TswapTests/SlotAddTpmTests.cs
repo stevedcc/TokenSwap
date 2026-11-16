@@ -6,7 +6,7 @@ namespace TswapTests;
 /// <summary>
 /// Brief T24 task 1 (issue #309): <c>sudo tswap slot add --tpm</c> makes this machine's TPM its own slot in the vault
 /// it already opens, with no request, approve or accept. The scenarios are <see cref="SlotAddHardwareScenarios"/>'s.
-/// No test for <c>--tpm</c> on macOS: with a test key <c>HardwareServices.Enrollment</c> returns the simulated TPM on
+/// No test for <c>--tpm</c> on macOS: with a test key <c>HardwareServices.Enrolment</c> returns the simulated TPM on
 /// every OS, the same call <c>slot request --tpm</c> and <c>recover --tpm</c> make.
 /// </summary>
 [Collection(StaticSeamCollection.Name)]

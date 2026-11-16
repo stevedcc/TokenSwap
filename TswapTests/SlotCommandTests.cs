@@ -9,7 +9,7 @@ using Xunit;
 namespace TswapTests;
 
 /// <summary>
-/// In-process tests for hand-carried multi-machine enrollment (issues #121/#122): 'slot request'
+/// In-process tests for hand-carried multi-machine enrolment (issues #121/#122): 'slot request'
 /// on a fresh, independently-configured "machine B", 'slot approve' on an already-enrolled
 /// "machine A", 'slot accept' back on B. Each machine is its own (temp config dir, TestKeyYubiKeyService)
 /// pair with a *different* test key, so their hardware-recovered KEK_slot values genuinely
@@ -177,7 +177,7 @@ public class SlotCommandTests : IDisposable
         var apprFile = Path.Combine(dirA, "approve.json");
         var (_, apprStdout, _) = Run(dirA, _keyA, "", "slot", "approve", reqFile, apprFile);
 
-        var request = SlotEnrollmentFileCodec.DeserializeRequest(File.ReadAllText(reqFile));
+        var request = SlotEnrolmentFileCodec.DeserializeRequest(File.ReadAllText(reqFile));
         var expectedFingerprint = SlotFingerprint.Compute(Convert.FromBase64String(request.PublicKey));
 
         Assert.Contains(expectedFingerprint, reqStdout);
@@ -242,7 +242,7 @@ public class SlotCommandTests : IDisposable
     [Fact]
     public void PendingConfig_RefusesOrdinaryUnlockBeforeAccept()
     {
-        // VaultUnlocker's pending-enrollment guard: a machine that has requested but not yet
+        // VaultUnlocker's pending-enrolment guard: a machine that has requested but not yet
         // accepted must not be usable as if it were an ordinary vault.
         var dirB = NewTempDir();
         var reqFile = Path.Combine(dirB, "request.json");
@@ -268,11 +268,11 @@ public class SlotCommandTests : IDisposable
         var apprFile = Path.Combine(dirA, "approve.json");
         Run(dirA, _keyA, "", "slot", "approve", reqFile, apprFile);
 
-        var approve = SlotEnrollmentFileCodec.DeserializeApprove(File.ReadAllText(apprFile));
+        var approve = SlotEnrolmentFileCodec.DeserializeApprove(File.ReadAllText(apprFile));
         var wrapped = Convert.FromBase64String(approve.NewSlotWrapped);
         wrapped[^1] ^= 0xFF;
         var tampered = approve with { NewSlotWrapped = Convert.ToBase64String(wrapped) };
-        File.WriteAllText(apprFile, SlotEnrollmentFileCodec.SerializeApprove(tampered));
+        File.WriteAllText(apprFile, SlotEnrolmentFileCodec.SerializeApprove(tampered));
 
         var (exit, _, stderr) = Run(dirB, _keyB, "", "slot", "accept", apprFile);
 
@@ -295,10 +295,10 @@ public class SlotCommandTests : IDisposable
         var apprFile = Path.Combine(dirA, "approve.json");
         Run(dirA, _keyA, "", "slot", "approve", reqFile, apprFile);
 
-        var approve = SlotEnrollmentFileCodec.DeserializeApprove(File.ReadAllText(apprFile));
+        var approve = SlotEnrolmentFileCodec.DeserializeApprove(File.ReadAllText(apprFile));
         var wrongSlotId = Convert.ToBase64String(new byte[TswapCore.Keyring.KeyringFormat.SlotIdSize]);
         var tampered = approve with { NewSlotId = wrongSlotId };
-        File.WriteAllText(apprFile, SlotEnrollmentFileCodec.SerializeApprove(tampered));
+        File.WriteAllText(apprFile, SlotEnrolmentFileCodec.SerializeApprove(tampered));
 
         var (exit, _, stderr) = Run(dirB, _keyB, "", "slot", "accept", apprFile);
 
@@ -319,8 +319,8 @@ public class SlotCommandTests : IDisposable
         Run(dirA, _keyA, "", "init", "--yubikey");
         var reqFile = Path.Combine(dirB, "request.json");
         Run(dirB, _keyB, "", "slot", "request", reqFile);
-        var request = SlotEnrollmentFileCodec.DeserializeRequest(File.ReadAllText(reqFile));
-        File.WriteAllText(reqFile, SlotEnrollmentFileCodec.SerializeRequest(request with { PublicKey = LowOrderPoint }));
+        var request = SlotEnrolmentFileCodec.DeserializeRequest(File.ReadAllText(reqFile));
+        File.WriteAllText(reqFile, SlotEnrolmentFileCodec.SerializeRequest(request with { PublicKey = LowOrderPoint }));
         var apprFile = Path.Combine(dirA, "approve.json");
 
         var (exit, _, stderr) = Run(dirA, _keyA, "", "slot", "approve", reqFile, apprFile);
@@ -340,8 +340,8 @@ public class SlotCommandTests : IDisposable
         Run(dirB, _keyB, "", "slot", "request", reqFile);
         var apprFile = Path.Combine(dirA, "approve.json");
         Run(dirA, _keyA, "", "slot", "approve", reqFile, apprFile);
-        var approve = SlotEnrollmentFileCodec.DeserializeApprove(File.ReadAllText(apprFile));
-        File.WriteAllText(apprFile, SlotEnrollmentFileCodec.SerializeApprove(approve with { NewSlotEphemeralPublicKey = LowOrderPoint }));
+        var approve = SlotEnrolmentFileCodec.DeserializeApprove(File.ReadAllText(apprFile));
+        File.WriteAllText(apprFile, SlotEnrolmentFileCodec.SerializeApprove(approve with { NewSlotEphemeralPublicKey = LowOrderPoint }));
 
         var (exit, _, stderr) = Run(dirB, _keyB, "", "slot", "accept", apprFile);
 

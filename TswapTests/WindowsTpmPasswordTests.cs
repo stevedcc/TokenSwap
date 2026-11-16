@@ -30,9 +30,9 @@ public class WindowsTpmPasswordTests
     [Fact]
     public void WrapUnwrap_WithPassword_RoundTrips()
     {
-        IHardwareEnrollmentService enrollment = new WindowsTpmHardwareService();
+        IHardwareEnrolmentService enrolment = new WindowsTpmHardwareService();
         using var password = Password(0x5A);
-        var (kekSlot, hwBlob) = enrollment.Enroll(password);
+        var (kekSlot, hwBlob) = enrolment.Enrol(password);
 
         Assert.True(TpmSlotBlob.HasHeader(hwBlob));
         var recovered = new WindowsTpmHardwareService().Unlock(ConfigWith(hwBlob), _ => 0, () => password.Clone());
@@ -43,10 +43,10 @@ public class WindowsTpmPasswordTests
     [Fact]
     public void WrongPassword_RightMessage()
     {
-        IHardwareEnrollmentService enrollment = new WindowsTpmHardwareService();
+        IHardwareEnrolmentService enrolment = new WindowsTpmHardwareService();
         using var right = Password(0x11);
         using var wrong = Password(0x22);
-        var (_, hwBlob) = enrollment.Enroll(right);
+        var (_, hwBlob) = enrolment.Enrol(right);
 
         var ex = Assert.Throws<VaultPasswordRefusedException>(() =>
             new WindowsTpmHardwareService().Unlock(ConfigWith(hwBlob), _ => 0, () => wrong.Clone()));
@@ -59,9 +59,9 @@ public class WindowsTpmPasswordTests
     {
         // Ruling 3: removing the TSTP header doesn't remove the usage auth; the silent open then fails
         // with NTE_SILENT_CONTEXT, which is the stripped-header text. Costs no failed-password attempt.
-        IHardwareEnrollmentService enrollment = new WindowsTpmHardwareService();
+        IHardwareEnrolmentService enrolment = new WindowsTpmHardwareService();
         using var password = Password(0x33);
-        var (_, hwBlob) = enrollment.Enroll(password);
+        var (_, hwBlob) = enrolment.Enrol(password);
         var (_, _, package) = TpmSlotBlob.Split(hwBlob);
 
         var ex = Assert.Throws<VaultPasswordRefusedException>(() =>

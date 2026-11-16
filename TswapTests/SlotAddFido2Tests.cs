@@ -144,8 +144,8 @@ public class SlotAddFido2Tests : IDisposable
         // Each operation: a PIN at the terminal and a touch.
         Assert.Equal([(true, PinPrompt(SerialA)), (true, PinPrompt(SerialA))], _terminal.Reads);
         // The touch line is a notice: stderr (final review, task 7 ruling).
-        Assert.Equal(2, CountOf(stderr, Fido2SlotEnrollment.TouchLine));
-        Assert.DoesNotContain(Fido2SlotEnrollment.TouchLine, stdout);
+        Assert.Equal(2, CountOf(stderr, Fido2SlotEnrolment.TouchLine));
+        Assert.DoesNotContain(Fido2SlotEnrolment.TouchLine, stdout);
         Assert.Equal(2, _fido2.DevicePinCalls.Count);
     }
 
@@ -158,14 +158,14 @@ public class SlotAddFido2Tests : IDisposable
         _terminal = new FakeTerminal(Pin, Pin);
         var console = new FakeConsole("");
         List<int> touchLinesAtEachRead = [];
-        _terminal.OnRead = () => touchLinesAtEachRead.Add(CountOf(console.ErrorText, Fido2SlotEnrollment.TouchLine));
+        _terminal.OnRead = () => touchLinesAtEachRead.Add(CountOf(console.ErrorText, Fido2SlotEnrolment.TouchLine));
         string[] args = ["slot", "add", "--fido2"];
 
         var exit = CliRunner.Run(Context(console, args), args);
 
         Assert.True(exit == 0, console.ErrorText);
         Assert.Equal([0, 1], touchLinesAtEachRead);
-        Assert.Equal(2, CountOf(console.ErrorText, Fido2SlotEnrollment.TouchLine));
+        Assert.Equal(2, CountOf(console.ErrorText, Fido2SlotEnrolment.TouchLine));
     }
 
     [Fact]
@@ -179,7 +179,7 @@ public class SlotAddFido2Tests : IDisposable
 
         Assert.NotEqual(0, exit);
         Assert.Contains(Fido2Texts.Cancelled($"YubiKey {SerialA}"), stderr);
-        Assert.DoesNotContain(Fido2SlotEnrollment.TouchLine, stdout + stderr);
+        Assert.DoesNotContain(Fido2SlotEnrolment.TouchLine, stdout + stderr);
     }
 
     [Fact]
@@ -300,7 +300,7 @@ public class SlotAddFido2Tests : IDisposable
     // Final review (MiMo p6a): the second key operation's failure keeps its type and kind, with the device failure
     // inside, when the retry-safe text is added.
     [Fact]
-    public void Enroll_SecondOperationFails_KeepsTheFido2ExceptionAndItsCause()
+    public void Enrol_SecondOperationFails_KeepsTheFido2ExceptionAndItsCause()
     {
         _fido2.AddKey(SerialA, Fido2TestSlots.Aaguid);
         _fido2.FailNext(FakeFido2Op.GetHmacSecret, Fido2Failure.TimedOut, afterPin: true);
@@ -309,18 +309,18 @@ public class SlotAddFido2Tests : IDisposable
         var key = Assert.Single(ctx.Fido2!.ListKeys());
 
         var e = Assert.Throws<Fido2Exception>(() =>
-            Fido2SlotEnrollment.Enroll(ctx, key, RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize), [], null));
+            Fido2SlotEnrolment.Enrol(ctx, key, RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize), [], null));
 
         Assert.Equal(Fido2Failure.TimedOut, e.Kind);
         Assert.Equal(SerialA, e.Serial);
-        Assert.EndsWith(" " + Fido2SlotEnrollment.RetrySafeText, e.Message);
+        Assert.EndsWith(" " + Fido2SlotEnrolment.RetrySafeText, e.Message);
         var cause = Assert.IsType<Fido2Exception>(e.InnerException);
         Assert.Equal(Fido2Texts.TimedOut($"YubiKey {SerialA}"), cause.Message);
     }
 
     // Follow-up review: the re-wrap keeps the failure's exit code too.
     [Fact]
-    public void Enroll_SecondOperationFails_KeepsTheExitCode()
+    public void Enrol_SecondOperationFails_KeepsTheExitCode()
     {
         _fido2.AddKey(SerialA, Fido2TestSlots.Aaguid);
         _terminal = new FakeTerminal(Pin, Pin);
@@ -331,7 +331,7 @@ public class SlotAddFido2Tests : IDisposable
         var key = Assert.Single(ctx.Fido2!.ListKeys());
 
         var e = Assert.Throws<Fido2Exception>(() =>
-            Fido2SlotEnrollment.Enroll(ctx, key, RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize), [], null));
+            Fido2SlotEnrolment.Enrol(ctx, key, RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize), [], null));
 
         Assert.Equal(7, e.ExitCode);
         Assert.Equal(Fido2Failure.Busy, e.Kind);
@@ -356,7 +356,7 @@ public class SlotAddFido2Tests : IDisposable
     public void RetrySafeText_SaysTheKeyMayKeepAnUnusedCredential() =>
         Assert.Equal("No slot was added and nothing was written. The key may keep an unused credential (non-discoverable: " +
                      "most keys, YubiKeys included, store nothing for it), so running this again is safe.",
-            Fido2SlotEnrollment.RetrySafeText);
+            Fido2SlotEnrolment.RetrySafeText);
 
     // Final review (MiMo p6a): a new PIN longer than CTAP2's 63 bytes is asked again before anything is sent.
     // 64 ASCII characters, and 32 two-byte characters (64 UTF-8 bytes, 32 characters): the limit is bytes.
@@ -477,7 +477,7 @@ public class SlotAddFido2Tests : IDisposable
 
         Assert.True(exit == 0, stderr);
         Assert.Contains($"✓ {Token2Product} added as a FIDO2 slot — it now opens this vault alone, with its PIN and a touch.", stdout);
-        Assert.Contains(Fido2SlotEnrollment.ResetWarning(Token2Product), stdout);
+        Assert.Contains(Fido2SlotEnrolment.ResetWarning(Token2Product), stdout);
         Assert.DoesNotContain("the security key this slot was made with", stdout + stderr);
     }
 
@@ -661,7 +661,7 @@ public class SlotAddFido2Tests : IDisposable
 
         Assert.NotEqual(0, exit);
         Assert.Contains(Fido2Texts.Cancelled($"YubiKey {SerialA}"), stderr);
-        Assert.Contains(Fido2SlotEnrollment.RetrySafeText, stderr);
+        Assert.Contains(Fido2SlotEnrolment.RetrySafeText, stderr);
         Assert.Equal(before, Snapshot());
         Assert.Equal([FakeFido2Op.MakeCredential, FakeFido2Op.GetHmacSecret], Ops().Where(op => op != FakeFido2Op.Find));
 
@@ -683,14 +683,14 @@ public class SlotAddFido2Tests : IDisposable
         var (exit, stdout, stderr) = Run("", "slot", "add", "--fido2");
 
         Assert.True(exit == 0, stderr);
-        Assert.Contains(Fido2SlotEnrollment.WindowsDialogLine, stdout);
-        Assert.Contains("create one", Fido2SlotEnrollment.WindowsDialogLine);
+        Assert.Contains(Fido2SlotEnrolment.WindowsDialogLine, stdout);
+        Assert.Contains("create one", Fido2SlotEnrolment.WindowsDialogLine);
         Assert.Empty(_terminal.Reads); // no set-PIN question, no PIN prompt: Windows' dialog asks
         Assert.Equal([FakeFido2Op.MakeCredential, FakeFido2Op.GetHmacSecret], Ops());
         Assert.All(_fido2.Calls, c => Assert.Null(c.Key));
-        Assert.Equal(2, CountOf(stderr, Fido2SlotEnrollment.WindowsTouchLine));
-        Assert.DoesNotContain(Fido2SlotEnrollment.WindowsTouchLine, stdout);
-        Assert.DoesNotContain(Fido2SlotEnrollment.TouchLine, stdout + stderr);
+        Assert.Equal(2, CountOf(stderr, Fido2SlotEnrolment.WindowsTouchLine));
+        Assert.DoesNotContain(Fido2SlotEnrolment.WindowsTouchLine, stdout);
+        Assert.DoesNotContain(Fido2SlotEnrolment.TouchLine, stdout + stderr);
         var (slot, blob) = Fido2Slot();
         var output = _fido2.UvOutput(blob.CredentialId, blob.PrfInput);
         Assert.Equal(VaultKey(), Unwrap(Keyring(), slot, Fido2SlotKek.Derive(output, blob.PrfInput, slot.SlotId)));
@@ -766,13 +766,13 @@ public class SlotAddFido2Tests : IDisposable
         var (exit, stdout, stderr) = Run("", "slot", "add", "--fido2");
 
         Assert.True(exit == 0, stderr);
-        var warning = Fido2SlotEnrollment.ResetWarning($"YubiKey {SerialA}");
+        var warning = Fido2SlotEnrolment.ResetWarning($"YubiKey {SerialA}");
         Assert.Contains(warning, stdout);
         Assert.Contains("FIDO2 reset", warning);
         Assert.Contains("deletes", warning);
         Assert.Contains("tswap slot add --fido2", warning);
         // A FIDO2 enrolment gets no OTP hint.
-        Assert.DoesNotContain(Fido2SlotEnrollment.MultiOsHint, stdout + stderr);
+        Assert.DoesNotContain(Fido2SlotEnrolment.MultiOsHint, stdout + stderr);
     }
 
     [Fact]
@@ -788,7 +788,7 @@ public class SlotAddFido2Tests : IDisposable
     [Fact]
     public void OtpEnrolment_EndsWithMultiOsHint()
     {
-        var hint = Fido2SlotEnrollment.MultiOsHint;
+        var hint = Fido2SlotEnrolment.MultiOsHint;
         Assert.Contains("Input Monitoring", hint);
         Assert.Contains("Mac", hint);
         Assert.Contains("udev rule", hint);
