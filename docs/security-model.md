@@ -292,7 +292,7 @@ exits; `run` keeps working (owner decision).
 |---|---|
 | A substituted value's forms (raw, escaped in a file, base64/base64url padded and unpadded, the `\r\n`, `\n` and PTY-printed forms of a multi-line value and their encodings) | yes¹ |
 | Any other vault value, current or previous, burned included: verbatim, whitespace-stripped, base64 padded, base64url unpadded | yes¹ (a value made only of whitespace: when it arrives in one read, see below) |
-| … base64url with padding | the unpadded core; the `=` stay visible |
+| … base64url with padding | the unpadded core¹; the `=` stay visible |
 | … base64 with its padding removed; a `\r\n` value printed with `\n` only; wrapped base64; a re-indented PEM (YAML block); JSON, URL or hex encodings; inside a larger base64 blob | no (a later variant-set version) |
 | … multi-line, through a pipe (line endings as stored) or a PTY (`\n` printed as `\r\n`) | yes¹ |
 | Records not fully fingerprinted, or unreadable | no; warned before and after the child |
@@ -345,7 +345,9 @@ Limits:
   (RedactingPty's pipe runner redacts each stream on its own).
 - **Held output at a prompt.** To catch a value split across reads, the redactor holds back the end
   of the output: for single-line secrets only the trailing word, but a multi-line secret (a PEM key)
-  could start anywhere, so up to its length is held on every pause. A pending point inside a word is
+  could start anywhere, so up to its length is held on every pause. When `run` substitutes a value
+  under 8 characters (in an argument, `--env` or a `{{@file}}`), at least the last 255 characters are
+  held on every pause, whatever they are, so streamed output (`logs -f`) then arrives in batches. A pending point inside a word is
   moved back to the word's start, so the trailing word may be held up to 256 characters further back
   (brief T30). `run` releases held output
   (masking complete occurrences first) when the child waits for terminal input. **Linux:** when no
@@ -355,10 +357,12 @@ Limits:
   a plain `y/N` prompt stays held until more output or exit. **Windows, and redirected output:**
   never; held output waits for more output or exit. Time alone never releases held output.
 - **The hold-back is observable.** A child (or the agent reading the output) can see when output
-  appears, so how much is held. What is held depends on the text and on two vault-wide figures
-  only, each rounded up to a multiple of 256 characters: the longest value per character class, and
-  the largest whitespace count of a multi-line value. So it reveals a 256-character bucket of those
-  and whether the vault holds a secret with whitespace, nothing finer than the vault folder's
+  appears, so how much is held. What is held depends on the text, on the constant 256-character word
+  hold, and on figures each rounded up to a multiple of 256 characters: two vault-wide ones (the
+  longest value per character class, and the largest whitespace count of a multi-line value) and, when
+  `run` substitutes a value under 8 characters, one bucket that says only that such a value was
+  substituted. So it reveals a 256-character bucket of those, whether the vault holds a secret with
+  whitespace and whether this run substituted a short value, nothing finer than the vault folder's
   256-byte record buckets already show, and nothing about a guess's prefix.
 - **A guessing oracle, as `redact` already is:** a child can test a guess against every vault value
   by printing it and watching for a label; the labels show secret names, which `names` lists anyway.
