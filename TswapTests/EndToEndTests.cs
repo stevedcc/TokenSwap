@@ -137,7 +137,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
 
         var names = RunIn(otherFolder, "names");
         Assert.True(names.exit == 0, $"names from another folder failed: {names.stdout}{names.stderr}");
-        Assert.DoesNotContain("Not initialized", names.stdout + names.stderr);
+        Assert.DoesNotContain("Not initialised", names.stdout + names.stderr);
     }
 
     /// <summary>

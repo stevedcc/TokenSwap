@@ -33,7 +33,7 @@ public class CreateCommandEntropyTests
     [Fact]
     public void DeriveYubiKeyChars_IsDeterministicGivenFixedInputs()
     {
-        // Not a claim about production behavior (the real `challenge` is fresh RNG on every
+        // Not a claim about production behaviour (the real `challenge` is fresh RNG on every
         // `create` call) - this just confirms the derivation itself has no hidden randomness
         // (e.g. no accidental use of the ambient RNG instead of the HKDF-derived buffer).
         var first = CreateCommand.DeriveYubiKeyChars(FixedIkm, 300);

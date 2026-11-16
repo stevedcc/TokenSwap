@@ -151,7 +151,7 @@ public sealed class VaultUnlocker
     {
         // Issue #121 pending-enrolment guard: a machine that has run 'slot request' but not yet
         // 'slot accept' has real, working hardware fields (YubiKeySerials/RedundancyXor/etc.) but
-        // no finalized Keyring — its hardware-recovered bytes are a KEK_slot with nothing real to
+        // no finalised Keyring — its hardware-recovered bytes are a KEK_slot with nothing real to
         // unwrap yet, not a usable vault key. Without this check that KEK_slot would silently be
         // treated as the vault master key directly (the same code path a legacy non-keyring vault
         // uses), letting a command write secrets under a key that 'slot accept' is about to make

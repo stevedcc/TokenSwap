@@ -51,7 +51,7 @@ public sealed partial class VaultCommand
             throw new UsageException(usage);
 
         // A classic vault is refused when the store opens (WorksOnClassicVault is false); no config.json at all is
-        // LoadConfig's "Not initialized".
+        // LoadConfig's "Not initialised".
         var storage = ctx.Storage;
         if (storage is not RecordVaultStore store)
         {

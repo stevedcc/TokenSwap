@@ -747,7 +747,7 @@ public class ReleasePackagingTests : IDisposable
     public void MacOsSmoke_NotarisationVisibleAfterRetries_Passes()
     {
         ExpectTeam();
-        _mac.Write("notarization-tswap", "3\n3\n0\n");
+        _mac.Write("notarisation-tswap", "3\n3\n0\n");
 
         var (exitCode, output) = MacOsSmoke();
 
@@ -761,7 +761,7 @@ public class ReleasePackagingTests : IDisposable
     {
         ExpectTeam();
         Env["TSWAP_NOTARY_CHECK_TRIES"] = "4";
-        _mac.Write("notarization-tswap", "3\n");
+        _mac.Write("notarisation-tswap", "3\n");
 
         var (exitCode, output) = MacOsSmoke();
 
@@ -776,7 +776,7 @@ public class ReleasePackagingTests : IDisposable
     {
         ExpectTeam(gated: false);
         Env["TSWAP_NOTARY_CHECK_TRIES"] = "4";
-        _mac.Write("notarization-tswap", "3\n");
+        _mac.Write("notarisation-tswap", "3\n");
 
         var (exitCode, output) = MacOsSmoke();
 
@@ -790,7 +790,7 @@ public class ReleasePackagingTests : IDisposable
     public void MacOsSmoke_NotarisationBadSignature_FailsAtOnce()
     {
         ExpectTeam();
-        _mac.Write("notarization-libtswapse.dylib", "1\n");
+        _mac.Write("notarisation-libtswapse.dylib", "1\n");
 
         var (exitCode, output) = MacOsSmoke();
 
@@ -803,7 +803,7 @@ public class ReleasePackagingTests : IDisposable
     public void MacOsSmoke_ControlPasses_Gated_Fails()
     {
         ExpectTeam();
-        _mac.Write("notarization-control", "0\n");
+        _mac.Write("notarisation-control", "0\n");
 
         var (exitCode, output) = MacOsSmoke();
 
@@ -815,7 +815,7 @@ public class ReleasePackagingTests : IDisposable
     public void MacOsSmoke_ControlPasses_ReportOnly_SaysItProvesNothing()
     {
         ExpectTeam(gated: false);
-        _mac.Write("notarization-control", "0\n");
+        _mac.Write("notarisation-control", "0\n");
 
         var (exitCode, output) = MacOsSmoke();
 

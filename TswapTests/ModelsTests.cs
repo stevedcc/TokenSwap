@@ -57,7 +57,7 @@ public class ModelsTests
     [Fact]
     public void Config_NullBackend_IsOmittedFromJson()
     {
-        // Backward-compat guarantee: a YubiKey vault (Backend unset) must serialize with
+        // Backward-compat guarantee: a YubiKey vault (Backend unset) must serialise with
         // no Backend field at all, so existing config.json files are byte-for-byte unchanged.
         var config = new Config([1, 2], "aabb", TestTime.Fixed, RngMode: RngMode.System);
         var json = JsonSerializer.Serialize(config, TswapJsonContext.Default.Config);
@@ -100,7 +100,7 @@ public class ModelsTests
     public void Config_NullTpmSealedKey_IsOmittedFromJson()
     {
         // Same backward-compat guarantee as SecureEnclaveWrappedKey: a non-TPM vault must
-        // serialize with no TpmSealedKey field at all.
+        // serialise with no TpmSealedKey field at all.
         var config = new Config([1, 2], "aabb", TestTime.Fixed, RngMode: RngMode.System);
         var json = JsonSerializer.Serialize(config, TswapJsonContext.Default.Config);
         Assert.DoesNotContain("TpmSealedKey", json);
@@ -120,7 +120,7 @@ public class ModelsTests
     public void Config_NullMasterKeySalt_IsOmittedFromJson()
     {
         // Same backward-compat guarantee as TpmSealedKey/SecureEnclaveWrappedKey: a vault
-        // that hasn't opted into a per-vault salt must serialize with no MasterKeySalt field
+        // that hasn't opted into a per-vault salt must serialise with no MasterKeySalt field
         // at all, so every existing config.json on disk stays byte-for-byte unchanged.
         var config = new Config([1, 2], "aabb", TestTime.Fixed, RngMode: RngMode.System);
         var json = JsonSerializer.Serialize(config, TswapJsonContext.Default.Config);
@@ -158,7 +158,7 @@ public class ModelsTests
     public void Config_NullKeyring_IsOmittedFromJson()
     {
         // Same backward-compat guarantee as TpmSealedKey/SecureEnclaveWrappedKey/MasterKeySalt:
-        // a vault that hasn't opted into the Phase 6 keyring format (issue #119) must serialize
+        // a vault that hasn't opted into the Phase 6 keyring format (issue #119) must serialise
         // with no Keyring field at all, so every existing config.json stays byte-for-byte
         // unchanged.
         var config = new Config([1, 2], "aabb", TestTime.Fixed, RngMode: RngMode.System);
@@ -229,7 +229,7 @@ public class ModelsTests
     public void KdfParams_Pbkdf2Shape_RoundTrips()
     {
         // Even though nothing writes this today (v1 leaves Kdf null and implies PBKDF2), the
-        // PBKDF2 shape of KdfParams must itself serialize/deserialize correctly per #30, since
+        // PBKDF2 shape of KdfParams must itself serialise/deserialise correctly per #30, since
         // the whole point is a format that can describe either algorithm.
         var kdf = new KdfParams(KdfAlgorithm.Pbkdf2Sha256, Iterations: 100_000, HashAlgorithm: "SHA256");
         var json = JsonSerializer.Serialize(kdf, TswapJsonContext.Default.KdfParams);

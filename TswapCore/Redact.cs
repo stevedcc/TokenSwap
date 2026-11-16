@@ -7,7 +7,7 @@ namespace TswapCore;
 
 /// <summary>
 /// Static facade over <see cref="SecretMatcher"/>, plus the standalone heuristic scanner for
-/// unrecognized secrets.
+/// unrecognised secrets.
 /// </summary>
 public static class Redact
 {
@@ -106,7 +106,7 @@ public static class Redact
     }
 
     /// <summary>
-    /// Scans <paramref name="content"/> for strings that look like unrecognized credentials
+    /// Scans <paramref name="content"/> for strings that look like unrecognised credentials
     /// (adjacent to a keyword like <c>password</c>, <c>token</c>, etc.). Returns the 1-based
     /// line number and the matched snippet for each hit.
     /// </summary>

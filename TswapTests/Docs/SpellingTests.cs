@@ -100,6 +100,68 @@ public partial class SpellingTests
             $"or add the line to {AllowlistPath} with a reason):\n" + string.Join('\n', offenders));
     }
 
+    /// <summary>
+    /// Brief T33 task 2: the other US forms, as lowercase whole words (case-sensitive, a word boundary each side),
+    /// built from stems and suffixes so that no US word appears whole in this file. PascalCase names (a framework's
+    /// or tswap's own) never match, nor does a capitalised word starting a sentence.
+    /// <para>The <c>-ize</c> endings are a valid British (Oxford) spelling too; the owner chose <c>-ise</c> for tswap.</para>
+    /// </summary>
+    private static readonly (string Stem, string[] Suffixes)[] OtherUsWords =
+    [
+        ("behavi", ["or", "ors", "oral", "orally"]),
+        ("col", ["or", "ors", "ored"]),
+        ("hon", ["or"]),
+        ("fav", ["or", "orite"]),
+        ("cent", ["er", "ered"]),
+        ("gr", ["ay"]),
+        ("cancel", ["ed", "ing"]),
+        ("defen", ["se"]),
+        ("offen", ["se"]),
+        ("acknowledg", ["ment", "ments"]),
+        ("fulfil", ["l", "ls", "lment"]),
+        ("travel", ["ed", "ing"]),
+        ("label", ["ed", "ing"]),
+        ("model", ["ed", "ing"]),
+        ("analy", ["ze", "zes", "zed", "zing", "zer", "zers"]),
+        .. new[]
+        {
+            "recogn", "organ", "author", "final", "normal", "initial", "summar", "minim", "maxim", "custom",
+            "priorit", "synchron", "optim", "serial", "deserial", "sanit", "material", "util", "real", "standard",
+            "special", "general", "local", "visual", "emphas", "random", "canonical", "token", "stabil", "categor",
+            "character", "modern", "item", "memor", "legitim", "penal", "apolog", "digit", "notar", "personal",
+            "unrecogn", "reinitial", "parallel",
+        }.Select(stem => (stem, new[] { "ize", "izes", "ized", "izing", "ization", "izations", "izer", "izers" })),
+    ];
+
+    internal static readonly Regex OtherUsForm = new(
+        @"\b(?:" + string.Join('|', OtherUsWords.Select(w => w.Stem + "(?:" + string.Join('|', w.Suffixes) + ")")) + @")\b",
+        RegexOptions.CultureInvariant);
+
+    [Fact]
+    public void NoOtherUsSpellings_InProse()
+    {
+        var offenders = Offenders(OtherUsForm.IsMatch);
+        Assert.True(offenders.Count == 0,
+            $"{offenders.Count} lines with a US spelling (British: -our, centre, grey, cancelled, -ise, analyse, defence, " +
+            $"acknowledgement, fulfil, travelled, labelled, modelled; or add the line to {AllowlistPath} with a reason):\n" +
+            string.Join('\n', offenders));
+    }
+
+    [Fact]
+    public void OtherUsForm_MatchesLowercaseWholeWordsOnly()
+    {
+        // (Built from parts, so this file holds no US word itself.)
+        Assert.Matches(OtherUsForm, "a " + "behavi" + "or change");
+        Assert.Matches(OtherUsForm, "it was " + "normal" + "ized");
+        Assert.Matches(OtherUsForm, "the " + "gr" + "ay key");
+        Assert.DoesNotMatch(OtherUsForm, "Json" + "Serial" + "izer");
+        Assert.DoesNotMatch(OtherUsForm, "Operation" + "Cancel" + "edException");
+        Assert.DoesNotMatch(OtherUsForm, "Console" + "Col" + "or");
+        Assert.DoesNotMatch(OtherUsForm, "Behavi" + "or starts a sentence");
+        Assert.DoesNotMatch(OtherUsForm, "the size, not a " + "size" + "d prize");
+        Assert.DoesNotMatch(OtherUsForm, "cancelled, normalised, behaviour, colour, centre, grey, analysed");
+    }
+
     [Fact]
     public void UsSpellingAllowlist_HasNoStaleEntries()
     {

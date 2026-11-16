@@ -186,7 +186,7 @@ public class SkillEvalTests(ITestOutputHelper output)
         {
             var realTswap = Path.Combine(dir, "tswap");
             File.WriteAllText(realTswap, "#!/bin/sh\necho 'a real tswap'\n");
-            if (!OperatingSystem.IsWindows()) // always true here (CanRun is Linux-only); for the analyzer
+            if (!OperatingSystem.IsWindows()) // always true here (CanRun is Linux-only); for the analyser
                 File.SetUnixFileMode(realTswap, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
 
             var (exit, stdout) = RunEval(["--agent", "fake", "--skill", "off", "--scenario", "01-secret-in-log"], psi =>

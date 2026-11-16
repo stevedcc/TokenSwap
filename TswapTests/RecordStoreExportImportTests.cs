@@ -9,7 +9,7 @@ using static TswapTests.RecordVaultTestSupport;
 namespace TswapTests;
 
 /// <summary>
-/// Brief T6 decision 9: export and import keep their single-file encrypted format and serialize
+/// Brief T6 decision 9: export and import keep their single-file encrypted format and serialise
 /// whatever store is active. An export is a snapshot of the current values and burn state (no
 /// tombstones, no history) and, since format 3 (issue #311), each secret's live fields; importing into a
 /// record store writes each secret as a new version, so importing an old export can bring back a deleted

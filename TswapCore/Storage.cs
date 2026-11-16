@@ -98,7 +98,7 @@ public class Storage : IFileVaultStore
     public Config LoadConfig()
     {
         if (!_owner.FileExists(ConfigFile))
-            throw new TswapException("Not initialized. Run: tswap init");
+            throw new TswapException("Not initialised. Run: tswap init");
 
         // Like File.ReadAllText: honour a byte-order mark (an editor may have added one).
         using var reader = new StreamReader(new MemoryStream(_owner.ReadAllBytes(ConfigFile)), Encoding.UTF8, detectEncodingFromByteOrderMarks: true);

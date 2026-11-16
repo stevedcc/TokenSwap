@@ -13,7 +13,7 @@ namespace TswapCli.Commands;
 /// on a secret, without sudo (except <c>adopt</c>).
 /// <list type="bullet">
 /// <item><b><c>set NAME &lt;FIELD=VALUE…|JSON|@FILE&gt; [--by LABEL]</c></b>: sets the fields listed, like an object
-/// initializer (every other field keeps its value; JSON <c>null</c> removes one). Every value is checked
+/// initialiser (every other field keeps its value; JSON <c>null</c> removes one). Every value is checked
 /// (<see cref="FieldRules.Validate"/>, then guard rail 1 against every stored value's fingerprints) before anything
 /// is staged, so one refusal writes nothing. A random-looking value is written with a warning.</item>
 /// <item><b><c>unset NAME FIELD… [--by LABEL]</c></b>: removes fields.</item>

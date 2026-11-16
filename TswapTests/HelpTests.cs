@@ -115,7 +115,7 @@ public class HelpTests : IDisposable
         Assert.True(exit == 0, $"exit {exit}: {stdout}{stderr}");
         Assert.Contains("get <name>", stdout);
         Assert.DoesNotContain("sudo", stderr);
-        Assert.DoesNotContain("Not initialized", stderr);
+        Assert.DoesNotContain("Not initialised", stderr);
     }
 
     [Fact]

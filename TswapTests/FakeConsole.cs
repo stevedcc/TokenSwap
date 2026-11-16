@@ -45,7 +45,7 @@ public sealed class FakeConsole(string stdin = "") : IConsole
         return line;
     }
 
-    public void SetForeground(ConsoleColor color) { }
+    public void SetForeground(ConsoleColor colour) { }
     public void ResetColor() { }
 
     public string OutText => _out.ToString();

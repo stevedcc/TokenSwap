@@ -22,10 +22,10 @@ public sealed record CommandContext(
     // Brief T7 item 3 (#180): the store is opened at first use, so a command that never touches
     // it (help, prompt, completion, ...) never resolves the config folder.
     //
-    // `Storage` in this initializer is the primary constructor's PARAMETER (initializers see
+    // `Storage` in this initialiser is the primary constructor's PARAMETER (initialisers see
     // parameters before members), not the Storage property below, which reads _storage.Value.
-    // Renaming the parameter doesn't silently turn this into recursion: the initializer would then
-    // name the property, which a field initializer can't (error CS0236), so it stops compiling
+    // Renaming the parameter doesn't silently turn this into recursion: the initialiser would then
+    // name the property, which a field initialiser can't (error CS0236), so it stops compiling
     // (checked). Don't "fix" that by moving this into a member that reads the property.
     // CommandContextTests covers both constructors.
     private Lazy<IVaultStore> _storage = new(() => Storage);
@@ -78,10 +78,10 @@ public sealed record CommandContext(
     public bool ClassicVaultAllowed { get; set; }
 
     /// <summary>
-    /// A classic vault: the single-file store holding an initialized vault, i.e. a
+    /// A classic vault: the single-file store holding an initialised vault, i.e. a
     /// <c>secrets.json.enc</c>, or a <c>config.json</c> that names a way to open one (a keyring, the
     /// two-YubiKey pair, or a single-slot TPM / Secure Enclave key). A folder with neither is not
-    /// initialized (commands report that as before), and a <c>config.json</c> holding only a pending
+    /// initialised (commands report that as before), and a <c>config.json</c> holding only a pending
     /// <c>slot request</c> belongs to a machine about to join a shared vault folder with
     /// <c>slot accept --vault-dir</c>: neither is refused. An unreadable config.json is left to the
     /// command, which reports it as before.

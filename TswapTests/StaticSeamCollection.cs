@@ -7,7 +7,7 @@ namespace TswapTests;
 /// Review T17 p4 B1 (and p1 M4/M7, p5 assumption 1): the brief T17 test classes that set process-wide
 /// static seams (<c>StretchedPassword.BeforeFreeObserver</c>, <c>VaultPasswordChoice</c>'s platform
 /// seams, <c>SimulatedHardwareService.ObserveCalls</c>, the agent and broker observers) and count
-/// what they see. A collection with parallelization disabled runs alone, after every parallel one,
+/// what they see. A collection with parallelisation disabled runs alone, after every parallel one,
 /// so no other class can dispose a password or reach a seam while these count, whatever the runner
 /// configuration says.
 /// </summary>

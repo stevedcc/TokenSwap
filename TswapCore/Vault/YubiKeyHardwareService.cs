@@ -56,7 +56,7 @@ public sealed class YubiKeyHardwareService(IYubiKeyService yubiKeys, byte[]? ove
 
         // Task 4b: a key being re-enrolled is never used (the pair's other key alone opens it with the share).
         var enrolled = connected.Where(config.YubiKeySerials.Contains).Where(s => s != selection.ExcludeSerial).Distinct().ToList();
-        // Final review (p1-M3): the excluded key is plugged in and enrolled, so "not authorized, expected: it" would be
+        // Final review (p1-M3): the excluded key is plugged in and enrolled, so "not authorised, expected: it" would be
         // wrong: say it is left out, and that the pair's other key is missing.
         // Round 2: the key being enrolled again is never listed as one to plug in.
         var excluded = selection.ExcludeSerial is int e && config.YubiKeySerials.Contains(e) ? e : (int?)null;
@@ -68,8 +68,8 @@ public sealed class YubiKeyHardwareService(IYubiKeyService yubiKeys, byte[]? ove
             var expected = string.Join(", ", others) +
                 (excluded is int x ? $" (YubiKey {x} is left out because it's being enrolled again)" : "");
             throw new TswapException(connected.Count == 1
-                ? $"YubiKey {connected[0]} not authorized. Expected: {expected}" + (excluded is null ? "" : ".")
-                : $"None of the plugged-in YubiKeys ({string.Join(", ", connected)}) is authorized. Expected: {expected}" +
+                ? $"YubiKey {connected[0]} not authorised. Expected: {expected}" + (excluded is null ? "" : ".")
+                : $"None of the plugged-in YubiKeys ({string.Join(", ", connected)}) is authorised. Expected: {expected}" +
                     (excluded is null ? "" : "."));
         }
 

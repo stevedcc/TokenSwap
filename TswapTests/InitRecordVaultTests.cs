@@ -8,7 +8,7 @@ namespace TswapTests;
 /// <summary>
 /// Brief T16-S1 task 8 (ruling 4): a plain <c>init</c> makes a record vault (one YubiKey slot plus
 /// a recovery slot) in <c>&lt;config dir&gt;/vault</c>, or in <c>--folder &lt;dir&gt;</c>, with the
-/// <c>record-format</c> marker; a classic vault is never initialized over. Guided init (v0.2.0): that is
+/// <c>record-format</c> marker; a classic vault is never initialised over. Guided init (v0.2.0): that is
 /// now <c>init --yubikey</c>; <c>--keyring</c> (a no-op until then) is refused, see <see cref="InitFlagsTests"/>.
 /// </summary>
 public sealed class InitRecordVaultTests : IDisposable
@@ -158,7 +158,7 @@ public sealed class InitRecordVaultTests : IDisposable
         var (exit, stdout, err) = _m.Run("no\n", "init", "--yubikey");
 
         Assert.True(exit == 0, err);
-        Assert.Contains("Already initialized. Reinitialize?", stdout);
+        Assert.Contains("Already initialised. Reinitialise?", stdout);
         Assert.DoesNotContain("classic", err);
         Assert.Equal(config, File.ReadAllText(_m.ConfigPath));
         Assert.False(Directory.Exists(Path.Combine(_m.Dir, "vault")));

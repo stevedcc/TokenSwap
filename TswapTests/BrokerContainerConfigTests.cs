@@ -155,7 +155,7 @@ public class BrokerContainerConfigTests
 
     // I224 fix round 1 (MiMo p1 M4): a "container" with no usable "cgroup" is refused when the file is read
     // (BrokerContainerConfig.Cgroup is required and non-null in the JSON context), never bound to nothing.
-    // Only our loader's refusal and the field's name are pinned, not the serializer's wording.
+    // Only our loader's refusal and the field's name are pinned, not the serialiser's wording.
     [UnixTheory("socket_dir must be a POSIX absolute path; the broker refuses Windows")]
     [InlineData("\"container\": { }")]
     [InlineData("\"container\": { \"selinux_label\": \"system_u:system_r:container_t:s0:c12,c34\" }")]

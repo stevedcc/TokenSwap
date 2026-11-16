@@ -85,7 +85,7 @@ public class SlotEnrolmentFileCodecTests
         // Compared field-by-field (rather than via record Equals) because ExistingSlots is a
         // List<SlotDto>, and List<T> has no structural Equals of its own — the record-generated
         // Equals would compare list references, not contents, and always report "different" for
-        // a freshly-deserialized list even when every element matches.
+        // a freshly-deserialised list even when every element matches.
         var file = MakeApproveFile();
 
         var json = SlotEnrolmentFileCodec.SerializeApprove(file);

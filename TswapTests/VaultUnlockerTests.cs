@@ -125,7 +125,7 @@ public class VaultUnlockerTests
         yubi.Connected = [33333333];
 
         var ex = Assert.Throws<TswapException>(() => new VaultUnlocker(yubi).Unlock(config, NoSelection));
-        Assert.Contains("not authorized", ex.Message);
+        Assert.Contains("not authorised", ex.Message);
     }
 
     [Fact]

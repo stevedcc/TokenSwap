@@ -137,7 +137,7 @@ public sealed class InitCommand : ICliCommand
         // ask, back it up. Read through GuidedPrompts so a stray Yubico OTP line is not an answer.
         if (fileStore.Owner.FileExists(fileStore.ConfigFile))
         {
-            if (!YesNo.Ask(c.Out.Write, () => GuidedPrompts.ReadAnswer(c), "Already initialized. Reinitialize?", defaultAnswer: null))
+            if (!YesNo.Ask(c.Out.Write, () => GuidedPrompts.ReadAnswer(c), "Already initialised. Reinitialise?", defaultAnswer: null))
                 return 0;
             c.Out.WriteLine($"Previous config backed up to: {fileStore.BackupConfig()}");
         }
@@ -177,7 +177,7 @@ public sealed class InitCommand : ICliCommand
                 $"This machine's {fileStore.ConfigFile} belongs to a shared record-store vault ({recordVaultDir}). To set up " +
                 "a different vault, use another config folder (TSWAP_CONFIG_DIR) or move config.json aside first.");
 
-        // Ruling 4: a classic vault here is converted, never initialized over. "Classic vault" is the
+        // Ruling 4: a classic vault here is converted, never initialised over. "Classic vault" is the
         // definition every command's refusal uses (CommandContext.IsClassicVault).
         if (CommandContext.IsClassicVault(ctx.Storage))
             throw new TswapException(
@@ -489,7 +489,7 @@ public sealed class InitCommand : ICliCommand
 
         if (fileStore.Owner.FileExists(fileStore.ConfigFile))
         {
-            if (!YesNo.Ask(c.Out.Write, c.ReadLine, "Already initialized. Point this machine at the shared folder instead?", defaultAnswer: null))
+            if (!YesNo.Ask(c.Out.Write, c.ReadLine, "Already initialised. Point this machine at the shared folder instead?", defaultAnswer: null))
                 return 0;
             c.Out.WriteLine($"Previous config backed up to: {fileStore.BackupConfig()}");
         }

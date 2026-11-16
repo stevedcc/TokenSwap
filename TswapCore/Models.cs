@@ -62,7 +62,7 @@ public record Config(List<int> YubiKeySerials,
     // converted a plain XOR vault; every other writer keeps "" as before.
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? RedundancyXor, DateTime Created, bool? RequiresTouch = null, RngMode? RngMode = null, string? UnlockChallenge = null,
     // Null means YubiKey (every vault created before hardware backends existed). Omitted
-    // from config.json when null so existing YubiKey vaults serialize byte-for-byte as before.
+    // from config.json when null so existing YubiKey vaults serialise byte-for-byte as before.
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] HardwareBackend? Backend = null,
     // LEGACY, Secure Enclave single-slot vaults only (made before keyring vaults): base64 ECIES
     // wrap of the vault master key against this machine's Secure Enclave key pair (see
@@ -108,9 +108,9 @@ public record Config(List<int> YubiKeySerials,
     // on the NEW, not-yet-enrolled machine between 'slot request' (which enrols this machine's
     // own hardware immediately — one YubiKey since brief T4, see PendingSlotHwBlob — but
     // has no K_v yet to build a real Keyring above from) and 'slot accept' (which recovers K_v
-    // from another machine's 'slot approve' file and finalizes Keyring, clearing these three
+    // from another machine's 'slot approve' file and finalises Keyring, clearing these three
     // fields back to null). PendingSlotId/PendingSlotPublicKey are this slot's identity, chosen
-    // at request time and carried unchanged into the finalized Machine slot 'slot accept'
+    // at request time and carried unchanged into the finalised Machine slot 'slot accept'
     // eventually writes (see MachineSlotWrap). PendingSlotPrivateKey is that slot's own X25519
     // private key, held here in the clear until accept hardware-wraps it into the real keyring —
     // the same plaintext-in-local-config custody model this file already uses for the XOR share
@@ -136,7 +136,7 @@ public record Config(List<int> YubiKeySerials,
     // *both* machines' slots, and "first Machine slot" would silently pick whichever one happens
     // to sort first, unwrapping with the wrong slot's AAD and failing (or, worse in a
     // differently-shaped future format, succeeding against the wrong slot). Every keyring vault
-    // created from here on (init's first slot, or slot accept's finalized slot) sets
+    // created from here on (init's first slot, or slot accept's finalised slot) sets
     // this to its own slot id; VaultUnlocker looks it up by id when present and falls back to the
     // old "first Machine slot" heuristic only when null — i.e. only for a keyring predating this
     // field, which is guaranteed single-machine-slot anyway, so the fallback is exact, not a
@@ -188,7 +188,7 @@ public record Secret(string Value, DateTime Created, DateTime Modified, DateTime
 {
     /// <summary>
     /// Brief T6 decision 4 (record store only): past burns of this secret, i.e. burns of a value
-    /// version a newer value superseded (a rotation). Never serialized: the classic file and the
+    /// version a newer value superseded (a rotation). Never serialised: the classic file and the
     /// export format carry the current value and burn state only (decision 9), and since export
     /// format 3 the live <see cref="Fields"/>.
     /// </summary>
@@ -198,7 +198,7 @@ public record Secret(string Value, DateTime Created, DateTime Modified, DateTime
     /// <summary>
     /// Issue #311 (record store only): the secret's live fields, name to value (no history, no delete
     /// markers), or null for none. Set for <c>export</c> (format <see cref="ExportFile.V3"/>), read by
-    /// <c>import</c>. Not written when null, so a secret without fields serializes as before, in an
+    /// <c>import</c>. Not written when null, so a secret without fields serialises as before, in an
     /// export and in the classic vault file alike.
     /// </summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -206,25 +206,25 @@ public record Secret(string Value, DateTime Created, DateTime Modified, DateTime
 
     /// <summary>
     /// Fix round 1 (A7): set by <c>rotate</c> / <c>ingest --rotate</c>, so the record store writes a
-    /// new version even when the new value equals the old one. Never serialized.
+    /// new version even when the new value equals the old one. Never serialised.
     /// </summary>
     [JsonIgnore]
     public bool Rotated { get; init; }
 
     /// <summary>
     /// Fix round 1, B (record store only): the value the last rotation replaced, or null. Used by
-    /// <c>{{name:previous}}</c>; never displayed, never serialized (an export carries no history).
+    /// <c>{{name:previous}}</c>; never displayed, never serialised (an export carries no history).
     /// </summary>
     [JsonIgnore]
     public string? PreviousValue { get; init; }
 
-    /// <summary>Fix round 3: true when the previous value's version was burned. Never serialized.</summary>
+    /// <summary>Fix round 3: true when the previous value's version was burned. Never serialised.</summary>
     [JsonIgnore]
     public bool PreviousBurned { get; init; }
 
     /// <summary>
     /// Fix round 1, B: set by <c>restore</c>: this write puts the previous value back, so the record
-    /// store makes its burn (if it had one) outstanding again. Never serialized.
+    /// store makes its burn (if it had one) outstanding again. Never serialised.
     /// </summary>
     [JsonIgnore]
     public bool Restored { get; init; }
@@ -238,14 +238,14 @@ public record SecretsDb(Dictionary<string, Secret> Secrets) : ISecretLookup
     /// <summary>
     /// Brief T6 decision 4 (record store only): for a name whose record file can't be read
     /// (truncated mid-sync, fails authentication), that file's hashed name; else null. Such a
-    /// secret is present-but-unknown: never treated as absent. Never serialized.
+    /// secret is present-but-unknown: never treated as absent. Never serialised.
     /// </summary>
     [JsonIgnore]
     public Func<string, string?>? UnreadableRecord { get; init; }
 
     /// <summary>
     /// Fix round 1 (A3, record store only): the hashed file names of records that can't be read.
-    /// Never serialized.
+    /// Never serialised.
     /// </summary>
     [JsonIgnore]
     public IReadOnlyList<string>? UnreadableFiles { get; init; }

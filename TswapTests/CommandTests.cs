@@ -65,7 +65,7 @@ public class CommandTests : IDisposable
     }
 
     /// <summary>
-    /// Brief T16-S1 (ruling 4): <c>init</c> refuses on an existing vault (it used to re-initialize
+    /// Brief T16-S1 (ruling 4): <c>init</c> refuses on an existing vault (it used to re-initialise
     /// after a "yes"), so a test that needs a fresh vault in the same config folder removes the old
     /// one (config.json and the vault folder) and runs init again.
     /// </summary>
@@ -147,7 +147,7 @@ public class CommandTests : IDisposable
     {
         // Every 'init --yubikey' generates a brand-new random K_v (unlike the default flow,
         // where re-init with the same test key would still decrypt an old vault under some
-        // circumstances) — reinitializing must leave the old secret behind, not silently expose
+        // circumstances) — reinitialising must leave the old secret behind, not silently expose
         // or destroy data without the documented backup-file dance.
         RunTswap("init", "--yubikey");
         RunTswapWithStdin("first-value\nfirst-value\n", "add", "first-secret");
@@ -206,7 +206,7 @@ public class CommandTests : IDisposable
     [Fact]
     public void InitKeyring_NoRecovery_VaultStillFullyUsable()
     {
-        // --no-recovery must only remove the recovery slot, not otherwise change vault behavior.
+        // --no-recovery must only remove the recovery slot, not otherwise change vault behaviour.
         RunTswap("init", "--yubikey", "--no-recovery");
         RunTswapWithStdin("hunter2\nhunter2\n", "add", "my-secret");
 
@@ -1331,7 +1331,7 @@ password2: """"  # tswap: missing-mixed-secret");
 
         Assert.NotNull(config.RngMode);
         Assert.Equal(RngMode.System, config.RngMode); // test mode uses default
-        // On-disk format compatibility: the enum must serialize as the legacy lowercase string
+        // On-disk format compatibility: the enum must serialise as the legacy lowercase string
         Assert.Contains("\"RngMode\": \"system\"", json);
     }
 
@@ -1434,7 +1434,7 @@ password2: """"  # tswap: missing-mixed-secret");
 
         // Re-init clears the vault (also delete secrets.json.enc — test key is constant
         // so the old encrypted file remains readable if not explicitly removed)
-        // "yes\n" answers the "Already initialized. Reinitialize?" prompt via stdin.
+        // "yes\n" answers the "Already initialised. Reinitialise?" prompt via stdin.
         FreshVault();
         var (exit, stdout, _) = RunTswapWithStdin("strongpassphrase\n", "import", exportPath);
 

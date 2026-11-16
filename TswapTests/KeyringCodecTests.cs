@@ -39,7 +39,7 @@ public class KeyringCodecTests
         //
         // formatVersion is "02", not "01": #120's own follow-up fix bumped
         // KeyringFormat.KeyringFormatVersion 1 -> 2, because the trailing `kind` byte is a
-        // breaking wire-format change (every existing slot's serialized shape changed), not a
+        // breaking wire-format change (every existing slot's serialised shape changed), not a
         // merely-additive one — see KeyringFormat.KeyringFormatVersion's doc comment.
         var bytes = KeyringCodec.Encode(OneSlotKeyring());
 

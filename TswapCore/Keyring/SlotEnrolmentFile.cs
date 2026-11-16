@@ -26,7 +26,7 @@ namespace TswapCore.Keyring;
 /// <para><b>Fields:</b> <see cref="SlotId"/> (base64, <see cref="KeyringFormat.SlotIdSize"/>
 /// bytes) is chosen here, at request time, by the new machine — not by the approving machine —
 /// specifically so it can be persisted locally (see <c>Config.PendingSlotId</c>) and carried
-/// through unchanged into the finalized <see cref="SlotKind.Machine"/> slot that <c>slot
+/// through unchanged into the finalised <see cref="SlotKind.Machine"/> slot that <c>slot
 /// accept</c> eventually writes. <see cref="PublicKey"/> (base64, <see cref="SlotKeyPair.KeySize"/>
 /// bytes) is that same slot's long-lived X25519 public key (<see cref="SlotKeyPair.Generate"/>) —
 /// the private half never leaves the requesting machine in this file.</para>
@@ -125,7 +125,7 @@ public sealed record SlotApproveFile(
 }
 
 /// <summary>
-/// Serializes/deserializes <see cref="SlotRequestFile"/>/<see cref="SlotApproveFile"/> to/from
+/// Serializes/deserialises <see cref="SlotRequestFile"/>/<see cref="SlotApproveFile"/> to/from
 /// JSON, with explicit version checks on both this small format's own version and (for the
 /// approve file) the embedded <see cref="KeyringFormat.KeyringFormatVersion"/> — see
 /// <see cref="SlotRequestFile"/>'s doc comment for why JSON was chosen over fixed-binary here, and

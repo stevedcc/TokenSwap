@@ -22,7 +22,7 @@ extra hardware"):
   no merge engine.**
 - **v1** — revocation, `K_v` rotation, and automating the enrolment exchange over the sync
   transport (which reinstates the enrolment fingerprint as the *primary* control, not
-  defense-in-depth — see §The landmine below).
+  defence-in-depth — see §The landmine below).
 - **v2** — threshold (`k`-of-`n`) *enrolment* governance, and the merge engine's HLC/
   commutativity work (the latter belongs to `REFACTORING_PLAN.md` §Phase 6, not this doc).
 
@@ -65,7 +65,7 @@ Two facts that drive everything below:
 Fact 2 matters: the moment backends are heterogeneous (a YubiKey yields HMAC bytes, a TPM
 unseals, a Secure Enclave decrypts), no single value can be *derived* from all of them. So
 `K_v` must become a **fixed random 256-bit key** that each backend *wraps*, not derives. This
-is the same realization every design path below arrives at.
+is the same realisation every design path below arrives at.
 
 ## The design space (and why it all funnels to one answer)
 
@@ -134,7 +134,7 @@ keyring {
 ```
 
 Each slot wraps the whole `K_v` (via an intermediate `KEK_slot` — see "Two-layer slot wrap"
-below); the "share" is just the key. This is today's YubiKey-pair convenience, generalized to
+below); the "share" is just the key. This is today's YubiKey-pair convenience, generalised to
 *n* heterogeneous devices: one machine, one device, unlock alone. No machine needs to be online,
 present, or aware for another to use the vault — adding a slot is an append, which is what makes
 the design work over a sync transport with zero coordination.
@@ -230,7 +230,7 @@ slot is re-wrapped, which needs every device physically present — the right pr
 (see "The landmine", below) and completely the wrong one for a counter that bumps on every
 write.
 
-**Encoding: fixed binary, length-prefixed fields, explicit ordering — not serialized JSON.**
+**Encoding: fixed binary, length-prefixed fields, explicit ordering — not serialised JSON.**
 `System.Text.Json` gives no byte-stability guarantee across versions or property reordering, and
 an incidental whitespace or property-order change would silently change every AAD computation
 and brick every vault on disk with no diagnosable cause. This is a format decision, not an
@@ -378,7 +378,7 @@ work, reusing the per-slot X25519 keypair above:
 
 A key for **this** machine needs no exchange at all: `slot add --yubikey` (see "YubiKey slots").
 
-Still display a short fingerprint on both machines as cheap defense in depth (a few dozen lines
+Still display a short fingerprint on both machines as cheap defence in depth (a few dozen lines
 of code), but it is no longer the load-bearing control in v0, so the usable-security question of
 whether people actually compare it isn't on the critical path yet. **v1's transport-borne
 enrolment reinstates the fingerprint as the primary control** — see "Deferred to v1".
@@ -418,7 +418,7 @@ and the vault's home never opened with the joiner's device. Decisions made in br
      other new slot (from another copy, or a slot this machine never approved) is shown by
      fingerprint and confirmed on a terminal, or needs `--yes`; without either the merge is
      refused and nothing is written. The other copy's own `ApprovedSlots` are never read. This
-     is the defense against a slot smuggled into a copy: AEAD binding stops slots of *another*
+     is the defence against a slot smuggled into a copy: AEAD binding stops slots of *another*
      vault, but a slot of *this* vault is a new unlock path for whoever holds its device, so only
      the user can vouch for it.
 2. **`slot request --tpm` / `--secure-enclave`** (#152): the machine enrols its own hardware
@@ -686,7 +686,7 @@ If `k` (or `formatVersion`) lived in a plaintext field, a thief with the synced 
 enrolled device** could just rewrite `k = 2 → k = 1` and unlock — a silent downgrade that would
 defeat the whole point of a stronger posture, if one is ever configured.
 
-Per the enforcement rule above, the **primary** defense is that `k`, `vaultId`, and
+Per the enforcement rule above, the **primary** defence is that `k`, `vaultId`, and
 `formatVersion` are bound into every slot's AEAD **associated data** (see "AAD binding"): they
 are not policy an attacker declines to honour, they are inputs whose mismatch makes the AEAD
 unwrap itself fail. Downgrading `k` for one slot without re-wrapping *every* slot to match
@@ -736,7 +736,7 @@ slot wrap" above — needs **no interface change**:
 **v1:**
 
 4. **Transport-borne enrolment** — automate the hand-carried exchange over the sync folder,
-   which reinstates the enrolment fingerprint as the primary defense against a MITM substituting
+   which reinstates the enrolment fingerprint as the primary defence against a MITM substituting
    their own key (see "Deferred to v1").
 5. **Revocation + `K_v` rotation:** slot removal, `K_v` rotation, re-encrypt all records, bump a
    keyring generation counter so stale copies are detectably outdated. This is the step that
@@ -744,7 +744,7 @@ slot wrap" above — needs **no interface change**:
 
 **v2:**
 
-6. **User-set `k ≥ 2` unlock** — only if a genuine independent second factor materializes on some
+6. **User-set `k ≥ 2` unlock** — only if a genuine independent second factor materialises on some
    platform (see "Why not k ≥ 2 (yet)"); otherwise this stays a rationale note indefinitely.
 7. **k-of-n threshold *enrolment*** (governance over who may extend the fleet — distinct from
    `k`-of-`n` *unlock*, demoted above). Shamir-split enrolment key; adding a machine requires k
@@ -765,7 +765,7 @@ slot wrap" above — needs **no interface change**:
   same secret can still produce conflicted copies" story visible, without capping `n` in the
   format itself.
 
-Filename determinism (`HMAC(K_names, name)` vs. randomized-filename-plus-internal-id) is
+Filename determinism (`HMAC(K_names, name)` vs. randomised-filename-plus-internal-id) is
 **settled, not open** — see `REFACTORING_PLAN.md` §Phase 6 for the decision and reasoning; it's
 a record-format question, not a key-model one, so it lives there.
 
@@ -776,13 +776,13 @@ Recorded so the work isn't lost, and so it doesn't leak into v0 scope by acciden
 - **Fleet signing key `K_s`** (Ed25519), wrapped alongside `K_v` in every slot, so any machine
   that can unlock can sign. Resolves the keyring-authenticity question above (a device learns
   `fleetSigPub` from its enrolment response; successfully decrypting `K_v` with it authenticates
-  the response) and gives "The landmine" section a secondary defense beyond AAD binding.
+  the response) and gives "The landmine" section a secondary defence beyond AAD binding.
 - **Rotation atomicity — the largest open design question in this entire doc.** A partially
   rotated record directory syncing against another, not-yet-rotated copy needs a rotation
   generation per record, a merge rule that tolerates mixed generations mid-rotation, and
   resumability if a rotation is interrupted. Must be fully settled before v1 writes a single
   rotated record — this is exactly the kind of byte-layout decision that cannot be retrofitted.
-- **Fingerprint confirmation becomes the primary control**, not defense-in-depth, once
+- **Fingerprint confirmation becomes the primary control**, not defence-in-depth, once
   transport-borne enrolment (v1, above) removes the manual-file-movement trust boundary. Neither
   the Secure Enclave nor a TPM helps here — hardware attestation proves *some* device is
   involved, not *your* device specifically. This is also a usable-security question in its own
@@ -793,7 +793,7 @@ Recorded so the work isn't lost, and so it doesn't leak into v0 scope by acciden
   until `K_v` is rotated and a fresh recovery keypair enrolled — see "Extension implies
   decryption" above for why this substitutes for revocation on a credential that structurally
   can't be revoked.
-- **Pinned monotonic epoch counter in local (unsynced) config**, as defense in depth alongside
+- **Pinned monotonic epoch counter in local (unsynced) config**, as defence in depth alongside
   rotation — an old keyring yields the old `K_v`, which decrypts nothing written since, so this
   is a belt-and-suspenders check, not where the real work happens.
 - **Non-extractable enrolment-key custody per backend.** A transient software key is fine for

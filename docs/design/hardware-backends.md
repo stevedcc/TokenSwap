@@ -404,7 +404,7 @@ plus the presence-cancellation failure path — see `TswapSecureEnclave.swift`'s
 but three things are still open before this should be trusted as a primary vault backend:
 
 - **Only tested on Apple Silicon** (M4 Pro, macOS 26 and 27.2). The Intel-Mac T2 Secure Enclave path is
-  untested — CryptoKit's `SecureEnclave` API availability/behavior there is unverified.
+  untested — CryptoKit's `SecureEnclave` API availability/behaviour there is unverified.
 - **No independent cryptographic review.** The ephemeral-ECDH + HKDF-SHA256 + AES-GCM
   construction in `TswapSecureEnclave.swift` is a hand-rolled ECIES equivalent; it's been
   verified for correctness (round-trips, fails cleanly on denial), not reviewed by anyone with
@@ -748,8 +748,8 @@ property holds. Concretely still open before this should be trusted as a primary
 - **No real TPM hardware has been used at any point.** All testing ran against
   `danieltrick/swtpm-docker` via the `swtpm` TCTI (see "Dev/test setup" below for the exact
   setup). Real hardware may behave differently in ways a simulator can't surface — timing,
-  lockout/anti-hammering behavior, vendor-specific quirks, or a stricter owner-hierarchy
-  authorization policy than the simulator's default (empty) owner auth.
+  lockout/anti-hammering behaviour, vendor-specific quirks, or a stricter owner-hierarchy
+  authorisation policy than the simulator's default (empty) owner auth.
 - **No PCR or PIN policy support.** `MULTI_MACHINE_KEYING.md`'s per-backend table lists TPM's
   primitive as "seal `KEK_slot` to a machine-bound key (**optionally** PCR/PIN policy)" — this
   pass implements only the unconditional case (no policy digest on the sealed object at all).
@@ -880,12 +880,12 @@ ARM64 with Parallels' own virtual TPM** — not a physical TPM. Concretely still
 - **Physical TPM: only the undocumented July development run (see above).** A software/virtual TPM proves the
   code speaks the CNG/PCP APIs correctly — key creation, wrap/unwrap round-trips, error
   handling — it does not prove the real hardware root-of-trust property holds. Real hardware may
-  differ in lockout/anti-hammering behavior, timing, or vendor-specific PCP quirks.
+  differ in lockout/anti-hammering behaviour, timing, or vendor-specific PCP quirks.
 - **`Get-Tpm` (the standard PowerShell TPM-status cmdlet) fails on this VM with a TBS-level
   HRESULT (`0x80284005`, "output buffer too small")** — a quirk specific to querying Parallels'
   virtual TPM through that particular cmdlet's WMI provider, not a sign the TPM itself is
   unhealthy: `tpmtool getdeviceinformation` (a different, lower-level tool) reports it present,
-  initialized, and `Ready For Storage: True` on the same machine. Worth knowing if `Get-Tpm`
+  initialised, and `Ready For Storage: True` on the same machine. Worth knowing if `Get-Tpm`
   throws during any future diagnostic work on a Parallels VM — it doesn't mean the TPM is broken.
 - **No attestation policy support.** Since brief T17 a slot can carry the vault password as the
   key's usage auth ([below](#windows-tpm-pcp_usageauth-at-creation-and-at-use)); otherwise the
@@ -1087,7 +1087,7 @@ Never point these tests at the machine's real TPM: the lockout test locks the TP
 ## Redundancy and Phase 6
 
 The YubiKey 1-of-2 XOR redundancy of the plain vault is intrinsic to having **two removable
-tokens** — it does not generalize to a TPM or Secure Enclave soldered to one machine. For those,
+tokens** — it does not generalise to a TPM or Secure Enclave soldered to one machine. For those,
 redundancy is achieved at the fleet level: the Phase 6 "keyring of wrapped keys" gives each
 machine its own wrapped slot for a shared vault key. Since brief T4 keyring vaults use the same
 answer for YubiKeys: each key is its own slot, so a spare key is a second slot, not an XOR share.

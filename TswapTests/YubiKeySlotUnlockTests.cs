@@ -288,7 +288,7 @@ public class YubiKeySlotUnlockTests
         var ex = Assert.Throws<TswapException>(() =>
             new VaultUnlocker(keys).Unlock(KeyringV3PairFixtureTests.FixtureConfig(), NoSelection));
 
-        Assert.Equal($"YubiKey {SerialC} not authorized. Expected: {KeyringV3PairFixtureTests.SerialA}, {KeyringV3PairFixtureTests.SerialB}", ex.Message);
+        Assert.Equal($"YubiKey {SerialC} not authorised. Expected: {KeyringV3PairFixtureTests.SerialA}, {KeyringV3PairFixtureTests.SerialB}", ex.Message);
     }
 
     [Fact]

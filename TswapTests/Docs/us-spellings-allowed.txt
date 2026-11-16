@@ -14,3 +14,30 @@ docs/design/hardware-backends.md	<a id="the-enrollment-seam-issue-151"></a>	rele
 docs/design/multi-machine-keying.md	<a id="hand-carried-enrollment-v0"></a>	released anchor
 docs/design/multi-machine-keying.md	<a id="fleet-enrollment-receipts-merge-and-the-recovery-key-brief-t5-issues-190-152-187"></a>	released anchor
 docs/design/refactoring-plan.md	<a id="where-shamir-does-earn-its-complexity-the-enrollment-authority"></a>	released anchor
+
+# The other US forms (Task 2)
+TswapCore/Vault/Slot2Verify.cs	/// yubikey-personalization <c>ykpersonalize.1.adoc</c>, option <c>hmac-lt64</c>): every trailing byte equal to the	external name: Yubico's yubikey-personalization project and its ykpersonalize man page
+TswapCore/Vault/YubiKeyAccessTexts.cs	return $"{name}: its OTP interface can't be reached. It needs the YubiKey udev rule (often installed by the ykpers or yubikey-personalization package, which needs an administrator), and there is no smart-card fallback for this slot type. Without the rule, use a TPM slot or another machine.";	external name: the yubikey-personalization package
+TswapTests/MacFakeTools.cs	*" --check-notarization "*)	external name: codesign's --check-notarization option
+TswapTests/MacPkgScriptTests.cs	Assert.Equal("never", (string?)options.Attribute("customize"));	external name: Apple's distribution.xml customize attribute
+TswapTests/ReleasePackagingTests.cs	[.. _mac.Log("codesign").Where(line => line.Contains("--check-notarization") && line.EndsWith("/" + fileName, StringComparison.Ordinal))];	external name: codesign's --check-notarization option
+TswapTests/ReleasePackagingTests.cs	var checks = _mac.Log("codesign").Where(line => line.Contains("notarized")).ToList();	external name: codesign's notarized requirement
+TswapTests/ReleasePackagingTests.cs	Assert.All(checks, line => Assert.StartsWith("-vvvv --test-requirement==notarized --check-notarization /", line));	external name: codesign's notarized requirement and --check-notarization option
+TswapTests/ReleasePackagingTests.cs	Assert.Contains("::error::notarisation: tswap: codesign --check-notarization exit 3 after 4 attempts", output);	external name: codesign's --check-notarization option
+TswapTests/ReleasePackagingTests.cs	Assert.Contains("REPORT-ONLY notarisation: tswap: codesign --check-notarization exit 3 after 4 attempts", output);	external name: codesign's --check-notarization option
+TswapTests/ReleasePackagingTests.cs	Assert.Contains("libtswapse.dylib: codesign --check-notarization exit 1 after 1 attempts", output);	external name: codesign's --check-notarization option
+TswapTests/ReleasePackagingTests.cs	var control = Assert.Single(_mac.Log("codesign"), line => line.Contains("--check-notarization") && line.Contains("control"));	external name: codesign's --check-notarization option
+TswapTests/SdkYubiKeyServiceTests.cs	Assert.Contains("yubikey-personalization", ex.Message);	external name: the yubikey-personalization package
+TswapTests/Slot2VerifyTests.cs	/// HMAC_LT64 gives. The rule is Yubico's (yubikey-personalization, <c>ykpersonalize.1.adoc</c>, <c>hmac-lt64</c>):	external name: Yubico's yubikey-personalization project and its ykpersonalize man page
+TswapTests/Tpm2ArgvTests.cs	return new TpmToolRun(1, [], "ERROR: Esys_Unseal(0x921) - tpm:warn(2.0): authorizations for objects subject to DA protection are not allowed at this time because the TPM is in DA lockout mode");	quoted tool error: tpm2-tools' message
+TswapTests/Tpm2ArgvTests.cs	return new TpmToolRun(1, [], "ERROR: Esys_Unseal(0x98E) - tpm:session(1):the authorization HMAC check failed and DA counter incremented");	quoted tool error: tpm2-tools' message
+contrib/packaging/macos/distribution.xml	<options customize="never" require-scripts="false" hostArchitectures="arm64"/>	external name: Apple's distribution.xml customize attribute
+contrib/packaging/package.sh	# the runtime flag; Apple's notarisation check for "other code" (codesign -vvvv --test-requirement='=notarized'	external name: codesign's notarized requirement
+contrib/packaging/package.sh	# --check-notarization), asked again every TSWAP_NOTARY_CHECK_INTERVAL seconds (20) while it answers 3 (the ticket	external name: codesign's --check-notarization option
+contrib/packaging/package.sh	# The long option with a leading '=': requirement text, not a file path (never -R, which takes '==notarized').	external name: codesign's notarized requirement
+contrib/packaging/package.sh	check_answer=$(codesign -vvvv --test-requirement='=notarized' --check-notarization "$file" 2>&1) || check_code=$?	external name: codesign's notarized requirement and --check-notarization option
+contrib/packaging/package.sh	runner_check notarisation "$check_code" "$f: codesign --check-notarization exit $check_code after $check_tries attempts" || exit 1	external name: codesign's --check-notarization option
+docs/design/hardware-backends.md	seek`, then `Invalid key authorization`), for `-p` and for `-i` alike. `tpm2_create` needs stdin for	quoted tool error: tpm2-tools' message
+docs/design/hardware-backends.md	- **Errors:** `0x98E` (`TPM_RC_AUTH_FAIL` for the object's session, "the authorization HMAC check	quoted tool error: tpm2-tools' message on swtpm
+docs/install.md	`ykpers` or `yubikey-personalization` package; installing it needs an administrator). Without	external name: the yubikey-personalization package
+docs/portable.md	device. It is often installed by the `ykpers` or `yubikey-personalization` package; installing	external name: the yubikey-personalization package

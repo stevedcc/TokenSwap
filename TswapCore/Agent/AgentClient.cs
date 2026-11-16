@@ -95,7 +95,7 @@ public static class AgentClient
 
     private static AgentAnswer Send(AgentOp op, string socketPath, byte[] vaultId, uint expectedServerUid,
         TimeSpan connectTimeout, TimeSpan responseTimeout) =>
-        // The CLI is synchronous; run the socket work off any caller's synchronization context.
+        // The CLI is synchronous; run the socket work off any caller's synchronisation context.
         Task.Run(() => SendAsync(op, socketPath, vaultId, expectedServerUid, connectTimeout, responseTimeout))
             .GetAwaiter().GetResult();
 

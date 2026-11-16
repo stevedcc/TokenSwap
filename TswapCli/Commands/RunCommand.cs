@@ -242,8 +242,8 @@ public sealed class RunCommand : ICliCommand
                 // Show the sanitised command
                 if (ctx.Verbose)
                 {
-                    var sanitized = string.Join(" ", commandArgs.Select(Validation.SanitizeCommand));
-                    ctx.Console.Out.WriteLine($"\nExecuting: {sanitized}");
+                    var sanitised = string.Join(" ", commandArgs.Select(Validation.SanitizeCommand));
+                    ctx.Console.Out.WriteLine($"\nExecuting: {sanitised}");
                     ctx.Console.Out.WriteLine();
                 }
 

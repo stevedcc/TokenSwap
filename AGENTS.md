@@ -314,7 +314,7 @@ Secret redaction of subprocess output (used by `run`) comes from the [`Redacting
 
 ## Working with tswap as an AI Agent
 
-When working in this repository and tswap is initialized (YubiKey present), follow these rules:
+When working in this repository and tswap is initialised (YubiKey present), follow these rules:
 
 1. **Install the skill** (one-time, per project): `mkdir -p .claude/skills/tswap && tswap prompt > .claude/skills/tswap/SKILL.md`. After installation the SKILL.md is loaded automatically by your agent when relevant — no need to run `tswap prompt` at session start.
 2. **Keep it current**: Re-run the install command whenever `tswap prompt-hash` changes so your skill file stays up to date.

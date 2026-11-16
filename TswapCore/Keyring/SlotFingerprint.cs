@@ -10,10 +10,10 @@ namespace TswapCore.Keyring;
 ///
 /// <para><b>Not load-bearing in v0.</b> The hand-carried file exchange itself is the trust
 /// boundary (see <c>docs/design/multi-machine-keying.md</c> §Hand-carried enrolment) — there is no network
-/// path for a MITM to substitute a different public key on, so this fingerprint is defense in
+/// path for a MITM to substitute a different public key on, so this fingerprint is defence in
 /// depth, not a required verification step. It is, however, the seam v1's transport-borne
 /// enrolment builds on, where substitution again becomes possible and this fingerprint becomes
-/// the *primary* defense — hence adding it now, cheaply, while this file format is being
+/// the *primary* defence — hence adding it now, cheaply, while this file format is being
 /// designed, rather than retrofitting it later (see <c>docs/design/multi-machine-keying.md</c> §Deferred to
 /// v1).</para>
 ///

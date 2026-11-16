@@ -156,6 +156,6 @@ public class KeyringV3PairFixtureTests : IDisposable
 
         Assert.NotEqual(0, exit);
         Assert.DoesNotContain(FixtureSecretValue, console.OutText);
-        Assert.Contains("33333333 not authorized", console.ErrorText);
+        Assert.Contains("33333333 not authorised", console.ErrorText);
     }
 }

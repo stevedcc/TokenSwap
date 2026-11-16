@@ -154,7 +154,7 @@ tswap field show opnsense-root --json       # one JSON object of the fields: the
 tswap field show opnsense-root --history    # each field's last changes, removed fields included
 ```
 
-- **Only the fields given change**, like an object initializer; every other field keeps its value. In JSON,
+- **Only the fields given change**, like an object initialiser; every other field keeps its value. In JSON,
   `null` removes a field (`{"url": null}`); in the key=value form only `field unset` removes one, and an empty
   `FIELD=` is refused. key=value splits at the first `=`, so a value may contain `=`; a value with a line break
   needs JSON. JSON is one flat object whose values are strings or `null` (anything else, or a key given twice, is

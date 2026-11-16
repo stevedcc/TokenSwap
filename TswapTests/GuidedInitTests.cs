@@ -803,7 +803,7 @@ public sealed class GuidedInitTests : IDisposable
         var (noExit, noOut, noErr) = m.RunOnTerminal("no\n", "init");
 
         Assert.True(noExit == 0, noErr);
-        Assert.Contains("Already initialized. Reinitialize? (yes/no): ", noOut);
+        Assert.Contains("Already initialised. Reinitialise? (yes/no): ", noOut);
         Assert.DoesNotContain(PlugIn, noOut);
         Assert.Equal(config, File.ReadAllText(m.ConfigPath));
         Assert.False(Directory.Exists(VaultFolder(m)));

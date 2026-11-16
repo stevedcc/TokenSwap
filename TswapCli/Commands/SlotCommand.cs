@@ -105,7 +105,7 @@ public sealed partial class SlotCommand : ICliCommand
     /// <c>RedundancyXor = ""</c>) holding the keypair and the blob in
     /// <see cref="Config.PendingSlotId"/>/<see cref="Config.PendingSlotPublicKey"/>/
     /// <see cref="Config.PendingSlotPrivateKey"/>/<see cref="Config.PendingSlotHwBlob"/> until
-    /// <c>slot accept</c> finalizes things, and writes the request file with the blob. No secrets
+    /// <c>slot accept</c> finalises things, and writes the request file with the blob. No secrets
     /// vault is created here: there is nothing to encrypt yet, and <see cref="VaultUnlocker"/>'s
     /// pending-enrolment guard refuses ordinary use of this config until <c>slot accept</c> runs.
     /// No test-mode branch: in test mode <see cref="TestKeyYubiKeyService"/> answers the challenge.
@@ -678,7 +678,7 @@ public sealed partial class SlotCommand : ICliCommand
     /// mirroring <see cref="ExecuteApprove"/>'s wrap), then builds this machine's own real
     /// <see cref="SlotKind.Machine"/> slot exactly the way <c>InitCommand.BuildKeyringConfig</c>
     /// does for a fresh vault (via <see cref="MachineSlotWrap"/>) — this is functionally "the
-    /// enrolment half of a keyring <c>init</c>," not a new primitive. The finalized
+    /// enrolment half of a keyring <c>init</c>," not a new primitive. The finalised
     /// <see cref="Keyring"/> is the approve file's <see cref="SlotApproveFile.ExistingSlots"/>
     /// plus this new slot (design decision #3), and <see cref="Config.PendingSlotId"/>/
     /// <see cref="Config.PendingSlotPublicKey"/>/<see cref="Config.PendingSlotPrivateKey"/> are
@@ -1992,7 +1992,7 @@ public sealed partial class SlotCommand : ICliCommand
         public string? ReadLine() => inner.ReadLine();
         public string ReadPassword(TextWriter? echo = null) => inner.ReadPassword(echo ?? inner.Error);
         // No colours: on a terminal they are escape sequences written to stdout.
-        public void SetForeground(ConsoleColor color) { }
+        public void SetForeground(ConsoleColor colour) { }
         public void ResetColor() { }
     }
 

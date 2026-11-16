@@ -187,8 +187,8 @@ internal sealed class MacFakeTools : IDisposable
             name=$(basename "$file")
             case " $* " in
               *" --check-notarization "*)
-                if grep -qxF "$file" "$FAKE_DIR/adhoc.list" 2>/dev/null; then seq="$FAKE_DIR/notarization-control"; default=3
-                else seq="$FAKE_DIR/notarization-$name"; default=0; fi
+                if grep -qxF "$file" "$FAKE_DIR/adhoc.list" 2>/dev/null; then seq="$FAKE_DIR/notarisation-control"; default=3
+                else seq="$FAKE_DIR/notarisation-$name"; default=0; fi
                 if [ -f "$seq" ]; then
                   code=$(head -n1 "$seq"); rest=$(tail -n +2 "$seq")
                   [ -n "$rest" ] && printf '%s\n' "$rest" > "$seq"

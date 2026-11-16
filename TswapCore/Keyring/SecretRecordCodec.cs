@@ -143,7 +143,7 @@ public static class SecretRecordCodec
         var raw = InnerFixedSize + name.Length + 4 + record.Value.Length
             + 1 + (record.Previous is null ? 0 : StampSize + 4 + record.Previous.Value.Length) + 1
             + record.Burns.Count * (2 * StampSize + 2) + reasons.Sum(r => r?.Length ?? 0);
-        var inner = new byte[BucketSize(raw)]; // zero-initialized: the padding tail is all zero bytes
+        var inner = new byte[BucketSize(raw)]; // zero-initialised: the padding tail is all zero bytes
         var span = inner.AsSpan();
         var offset = 0;
         span[offset++] = (byte)record.Type;
@@ -500,7 +500,7 @@ public static class SecretRecordCodec
         if (raw > int.MaxValue / 2)
             throw new ArgumentException("Record metadata too large", nameof(metadata));
 
-        var plain = new byte[BucketSize((int)raw)]; // zero-initialized: the padding tail is all zero bytes
+        var plain = new byte[BucketSize((int)raw)]; // zero-initialised: the padding tail is all zero bytes
         var span = plain.AsSpan();
         var offset = 0;
         span[offset++] = (byte)metadata.Type;

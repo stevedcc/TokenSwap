@@ -321,7 +321,7 @@ The payoff phase: `ProgramTests`' 90 subprocess tests become in-process tests.
 
 Not part of the refactor proper; listed so the architecture above is checked against
 them ("does the design make these easy?"). The design held up — each item below landed
-as a localized change with no cross-cutting churn:
+as a localised change with no cross-cutting churn:
 
 - ✅ **`--json` machine-readable output for `names`/`burned`/`check`.** A per-command
   `--json` flag (`JsonFlag.Consume`) selects a source-generated JSON path
@@ -385,7 +385,7 @@ key-management model and a mergeable on-disk format.
 - **v2**: the merge engine (HLC, commutativity/idempotence fuzz tests) and threshold
   enrolment governance.
 
-Everything below is written against that split; steps and open questions are labeled v0/v1/v2
+Everything below is written against that split; steps and open questions are labelled v0/v1/v2
 so it's clear what's gating and what can be revised later under a format-version bump.
 
 #### Brief T6: the record store as built (settled decisions, 2026-10-30)
@@ -654,7 +654,7 @@ rotation, no merge engine.
    per-slot X25519 keypair), and `slot request`/`approve`/`accept` for hand-carried enrolment
    (files moved by the user themselves — scp, USB, paste — not over the sync transport).
    **Fingerprint display on both sides is an explicit deliverable of this step, not an
-   afterthought detail** — even though it's defense-in-depth rather than load-bearing in v0
+   afterthought detail** — even though it's defence-in-depth rather than load-bearing in v0
    (see `multi-machine-keying.md` §Hand-carried enrolment), it's the seam v1's transport-borne
    enrolment builds on, and it's a couple dozen lines of code that are much cheaper to add now
    than to retrofit once `slot approve` output format is settled.
@@ -674,8 +674,8 @@ an acceptable v0 answer for a tool with no deployed fleets yet.
    physically present again, which for a token in a drawer in another country is a migration
    that never actually happens.
 5. **Transport-borne enrolment:** automate the step-3 file exchange over the sync folder,
-   which reinstates the enrolment fingerprint from step 3 as the *primary* defense against a
-   MITM substituting their own key, not defense-in-depth. Rotation atomicity (see "Open
+   which reinstates the enrolment fingerprint from step 3 as the *primary* defence against a
+   MITM substituting their own key, not defence-in-depth. Rotation atomicity (see "Open
    questions" below) must be fully resolved before this step, not concurrently with it.
 
 **v2** — the merge engine and threshold enrolment.
@@ -704,7 +704,7 @@ Settled by brief T6 (see "Brief T6: the record store as built" above) and no lon
 `K_names` is derived from `K_v` for v0 (a v1 rotation renames every record; #126 decides
 whether to move to a separate non-rotated constant before rotation exists); tombstones are
 last-writer-wins by (HLC, origin), not delete-wins; export/import keep the single-file format
-and serialize whatever store is active (an export is a snapshot without merge metadata).
+and serialise whatever store is active (an export is a snapshot without merge metadata).
 
 Still open:
 
@@ -718,7 +718,7 @@ Still open:
 - **Keyring authenticity / fleet signing key** — deferred to v1; see
   `multi-machine-keying.md` §Deferred to v1 for the settled reasoning (a fleet signing key
   `K_s`, not a per-slot signature) and why AAD binding, not a keyring signature, is the
-  *primary* defense against threshold downgrade even before v1 lands.
+  *primary* defence against threshold downgrade even before v1 lands.
 
 Filename determinism, padding, and per-record keys are **settled** (see the mergeable-format
 section above) — the open items above are what remain before v1/v2 code, not v0. Much of the
@@ -750,7 +750,7 @@ requirement driving this plan.
 
 - CI runs AOT `dotnet publish` on all three OSes — catches AOT regressions (the
   refactor introduces interfaces, which are AOT-fine, but no reflection may sneak in).
-- Golden-file tests pin the serialized forms of `config.json` and the export format
+- Golden-file tests pin the serialised forms of `config.json` and the export format
   before Phase 3 touches models.
 - Behaviour freeze: user-visible strings, exit codes, and file formats change only
   where this plan explicitly says so (the single §Phase-2.6 exit-code note).
