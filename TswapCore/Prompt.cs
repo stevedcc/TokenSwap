@@ -127,8 +127,8 @@ Rules for fields:
    once in their own terminal, then retry. You never run it yourself (it needs sudo), and you
    never work around the refusal (by reading or printing the file another way)
 12. NEVER store usernames, ports, hostnames or other non-secret settings as secrets: store them as fields of
-   the secret they belong to (see ""Fields"" above). tswap hides a value wherever it appears, also inside
-   longer words and numbers, so they get hidden in unrelated output and get burned for no reason
+   the secret they belong to (see ""Fields"" above). tswap hides a short value wherever it stands as a
+   whole word or number, so they get hidden in unrelated output and get burned for no reason
 
 ## Keeping secrets out of config files:
 - In Helm values.yaml and similar config files, replace plaintext secrets with empty

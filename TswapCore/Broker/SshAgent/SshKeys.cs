@@ -63,16 +63,21 @@ public interface ISshKeySource
 /// the vault key at once. Like <see cref="VaultBrokerSecretSource"/>, without its header-value check
 /// (a PEM key has line breaks).
 /// </summary>
-/// <remarks>Brief T17: <paramref name="password"/> is a password broker's held password, null for a password-free one; no unlock asks an agent.</remarks>
-public sealed class VaultSshKeySource(RecordVaultStore store, VaultUnlocker unlocker, TswapCore.VaultPassword.VaultPasswordProvider? password = null) : ISshKeySource
+/// <remarks>Brief T17: <paramref name="password"/> is a password broker's held password, null for a password-free one; no unlock asks an agent.
+/// Brief T29 (A2, fix round 1): each unlock waits for the YubiKey lock at most <see cref="BrokerLimits.YubiKeyWaitBudget"/>
+/// (an ssh-agent signature, the key load at <c>serve</c> start and the control socket's after <c>broker unlock</c>).</remarks>
+public sealed class VaultSshKeySource(RecordVaultStore store, VaultUnlocker unlocker, TswapCore.VaultPassword.VaultPasswordProvider? password = null, BrokerLimits? limits = null) : ISshKeySource
 {
+    private readonly TimeSpan _yubiKeyWait = (limits ?? new BrokerLimits()).YubiKeyWaitBudget;
+
     public byte[] ReadKey(string secretName)
     {
         byte[] key;
         try
         {
             var config = store.LoadConfig();
-            key = unlocker.Unlock(config, BrokerPasswordProof.NoChoice, BrokerPasswordProof.SourcesFor(password));
+            using (TswapCore.Vault.YubiKeyLock.WithWaitBudget(_yubiKeyWait))
+                key = unlocker.Unlock(config, BrokerPasswordProof.NoChoice, BrokerPasswordProof.SourcesFor(password));
         }
         catch (Exception ex) when (ex is not (OutOfMemoryException or BrokerLockedException))
         {

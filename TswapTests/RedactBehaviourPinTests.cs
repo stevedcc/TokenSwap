@@ -49,8 +49,9 @@ public class RedactBehaviourPinTests
     public void EqualLengthTies_DecidedByText_NotPosition()
     {
         // The names sort the other way round ("a-…" before "z-…"), so only the text decides.
-        var db = Db(("a-xab-secret", S("xab")), ("z-abz-secret", S("abz")));
-        AssertRedact("x[REDACTED: z-abz-secret]", "xabz", db);
+        // Brief T30: values of 8 characters (a shorter one is matched only as a whole word).
+        var db = Db(("a-xab-secret", S("xabcdefg")), ("z-abz-secret", S("abcdefgz")));
+        AssertRedact("x[REDACTED: z-abz-secret]", "xabcdefgz", db);
 
         var spaced = Db(("a-xab-secret", S("x ab")), ("z-abz-secret", S("ab z")));
         AssertToComment("k: x \"\"  # tswap: z-abz-secret", "k: x ab z", spaced,
@@ -70,10 +71,11 @@ public class RedactBehaviourPinTests
     [Fact]
     public void SelfOverlappingValue_LeftmostNonOverlapping()
     {
-        var db = Db(("s", S("aa")));
-        AssertRedact("x [REDACTED: s]a", "x aaa", db);
-        AssertRedact("[REDACTED: s][REDACTED: s]", "aaaa", db);
-        AssertToComment("k: aaa", "k: aaa", db); // no boundary on either side: unchanged
+        // Brief T30: an 8-character value (a shorter one is matched only as a whole word).
+        var db = Db(("s", S(new string('a', 8))));
+        AssertRedact("x [REDACTED: s]a", "x " + new string('a', 9), db);
+        AssertRedact("[REDACTED: s][REDACTED: s]", new string('a', 16), db);
+        AssertToComment("k: " + new string('a', 9), "k: " + new string('a', 9), db); // no boundary on either side: unchanged
     }
 
     [Fact]
@@ -141,18 +143,18 @@ public class RedactBehaviourPinTests
     [Fact]
     public void QuotesBoundariesAndAnExistingMarker()
     {
-        var db = Db(("s", S("val123")));
-        const string content = "a: \"val123\"\nb: 'val123'\nc: myval123-x\nd: \"val123\"  # tswap: s\ne: val123";
+        var db = Db(("s", S("val12345")));
+        const string content = "a: \"val12345\"\nb: 'val12345'\nc: myval12345-x\nd: \"val12345\"  # tswap: s\ne: val12345";
         AssertRedact(
             "a: \"[REDACTED: s]\"\nb: '[REDACTED: s]'\nc: my[REDACTED: s]-x\nd: \"[REDACTED: s]\"  # tswap: s\ne: [REDACTED: s]",
             content, db);
         AssertToComment(
-            "a: \"\"  # tswap: s\nb: \"\"  # tswap: s\nc: myval123-x\nd: \"\"  # tswap: s\ne: \"\"  # tswap: s",
+            "a: \"\"  # tswap: s\nb: \"\"  # tswap: s\nc: myval12345-x\nd: \"\"  # tswap: s\ne: \"\"  # tswap: s",
             content, db,
-            new LineDiff(1, "a: \"val123\"", "a: \"\"  # tswap: s"),
-            new LineDiff(2, "b: 'val123'", "b: \"\"  # tswap: s"),
-            new LineDiff(4, "d: \"val123\"  # tswap: s", "d: \"\"  # tswap: s"),
-            new LineDiff(5, "e: val123", "e: \"\"  # tswap: s"));
+            new LineDiff(1, "a: \"val12345\"", "a: \"\"  # tswap: s"),
+            new LineDiff(2, "b: 'val12345'", "b: \"\"  # tswap: s"),
+            new LineDiff(4, "d: \"val12345\"  # tswap: s", "d: \"\"  # tswap: s"),
+            new LineDiff(5, "e: val12345", "e: \"\"  # tswap: s"));
     }
 
     [Fact]

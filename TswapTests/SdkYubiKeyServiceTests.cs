@@ -448,6 +448,29 @@ public sealed class SdkYubiKeyServiceTests
         Assert.Equal(expected, YubicoOtpKeys.Classify(sdkException));
 
     /// <summary>
+    /// Brief T29 (#301): during a challenge, a malformed response other than the busy status report is an answer cut
+    /// short by another writer (<see cref="OtpFailure.Interrupted"/>); every other row keeps its kind.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(SdkExceptions))]
+    public void ClassifyChallenge_AMalformedResponseThatIsOtherwiseOther_IsInterrupted(Exception sdkException, OtpFailure classified) =>
+        Assert.Equal(sdkException is MalformedYubiKeyResponseException && classified == OtpFailure.Other ? OtpFailure.Interrupted : classified,
+            YubicoOtpKeys.ClassifyChallenge(sdkException));
+
+    /// <summary>Brief T29 (#301): an interrupted challenge names the key and what happened, without the SDK's text.</summary>
+    [Fact]
+    public void Challenge_Interrupted_SaysTheAnswerWasCutShort_WithoutTheSdksText()
+    {
+        var keys = new ThrowingOtpKeys(9, new OtpKeysException(OtpFailure.Interrupted, 9,
+            "Exception of type 'Yubico.YubiKey.MalformedYubiKeyResponseException' was thrown."));
+
+        var ex = Assert.Throws<YubiKeyDeviceException>(() => Service(keys).ChallengeReportingTouch(9, "x"));
+
+        Assert.Equal(OtpFailure.Interrupted, ex.Kind);
+        Assert.Equal("YubiKey 9's answer was cut short: another tswap or app used the key at the same time. Try again.", ex.Message);
+    }
+
+    /// <summary>
     /// Final review item 4 (p1-I1): the probe's open failure is classified like a challenge's: macOS's exclusive-access
     /// refusal is a busy key, any other open failure an interface tswap can't open.
     /// </summary>

@@ -233,10 +233,10 @@ reason only, never the value, its length or which whitespace, and the exit code 
 their success line (in `add`, after the whitespace warning) when the value they store is shorter than
 8 characters: for `add` the typed or piped value (also when it was already stored), for `ingest` the
 value after trimming, for `create` and `rotate` the generated value (exactly the length asked for; the
-default 32 never warns). `run`, `redact` and `tocomment` match a value wherever it appears, also inside
-longer words and numbers, so a short value gets hidden in unrelated output and gives itself away
-([what `run` masks](security-model.md#what-run-masks)); a username, a port or a setting doesn't belong
-in tswap. The line names the secret and the reason only, never the value or its length; the command
+default 32 never warns). `run`, `redact` and `tocomment` hide a value this short only where it stands
+as a whole word or number, not inside a longer one, so a secret this short can show unmasked there
+([what `run` masks](security-model.md#what-run-masks)); a username, a port or a setting belongs in a
+field of the secret it belongs to. The line names the secret and the reason only, never the value or its length; the command
 still succeeds and its exit code doesn't change. `restore`, `import`, `vault merge` and `migrate` write
 values that were already stored and don't warn.
 
@@ -601,6 +601,11 @@ The tswap agent's socket lives in the vault user's run folder, never in the conf
 folder: `/run/user/<uid>/tswap/agent-<16 hex>.sock` on Linux (else `~/.cache/tswap/run/`),
 `~/Library/Caches/tswap/run/` on macOS, a named pipe on Windows; a password broker's control socket
 is `broker-<16 hex>/control.sock` in the same folder.
+
+The YubiKey lock (several tswap commands take turns at the key, [setup.md](setup.md#several-tswap-commands-at-once))
+is `~/.cache/tswap/yubikey.lock` on Linux and macOS (the invoking user's under sudo) and
+`%LOCALAPPDATA%\tswap\yubikey.lock` on Windows, never in the config or vault folder. It is empty, and safe to
+delete when no tswap runs.
 
 A command that backs up `config.json` before it writes (`slot add`, `slot merge` and others) copies
 it to `config.json.bak-<UTC timestamp>` beside it (for example `config.json.bak-20261105T120000123Z`,

@@ -188,6 +188,35 @@ public sealed class CliEnvironment
         return entry;
     }
 
+    /// <summary>
+    /// Brief T29: the YubiKey lock's path, one per user and independent of <c>TSWAP_CONFIG_DIR</c> and
+    /// <c>XDG_CONFIG_HOME</c> (two vaults of one user share it): <c>&lt;home&gt;/.cache/tswap/yubikey.lock</c> on Unix,
+    /// the home resolved as <see cref="ResolveConfigDir"/> resolves it (privileged with <c>SUDO_USER</c>: the invoking
+    /// user's passwd entry, trusted only when <c>SUDO_UID</c> matches; root's own for <c>SUDO_USER=root</c> or
+    /// <c>SUDO_UID=0</c>; otherwise <c>HOME</c>); <c>%LOCALAPPDATA%\tswap\yubikey.lock</c> on Windows. Throws
+    /// <see cref="TswapException"/> when there is no usable home (the lock then warns and goes on without it).
+    /// </summary>
+    internal static string YubiKeyLockPath(Func<string, string?> getEnv, bool isPrivileged,
+        Func<string, UnixPasswdEntry?>? lookupUser = null, bool? isWindows = null)
+    {
+        if (isWindows ?? OperatingSystem.IsWindows())
+        {
+            var local = getEnv("LOCALAPPDATA");
+            if (string.IsNullOrEmpty(local))
+                local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData, Environment.SpecialFolderOption.DoNotVerify);
+            if (string.IsNullOrEmpty(local) || !Path.IsPathRooted(local))
+                throw new TswapException("there is no local application data folder to put it in; set LOCALAPPDATA");
+            return Path.Combine(local, "tswap", TswapCore.Vault.YubiKeyLock.FileName);
+        }
+        string? home = null;
+        if (getEnv("SUDO_USER") is { } sudoUser && isPrivileged)
+            home = InvokingUserHome(sudoUser, getEnv("SUDO_UID"), lookupUser ?? (name => UnixPasswd.Lookup(name)));
+        home ??= getEnv("HOME");
+        if (string.IsNullOrEmpty(home) || !Path.IsPathRooted(home))
+            throw new TswapException("there is no home folder to put it in; set HOME");
+        return Path.Combine(home, ".cache", "tswap", TswapCore.Vault.YubiKeyLock.FileName);
+    }
+
     /// <summary>SUDO_USER=root or SUDO_UID=0: sudo run by root itself, so root's own folder (no redirect, no escalation).</summary>
     internal static bool IsRootInvoker(string sudoUser, string? sudoUid) => sudoUser == "root" || sudoUid == "0";
 

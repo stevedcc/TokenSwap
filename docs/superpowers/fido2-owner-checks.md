@@ -443,9 +443,15 @@ programming). Paste back the test output lines and the summary.
    ```
 
    Terminal 1: `"$T" names`, and don't touch the key. Terminal 2, with the same `T` and
-   `TSWAP_CONFIG_DIR`: `"$T" names`. Expect in terminal 2 `YubiKey <spare> is busy (another tswap or
-   app is waiting for a touch); try again when it's done.` (or record the busy text you get). Then
-   touch the key for terminal 1.
+   `TSWAP_CONFIG_DIR`: `"$T" names`. Expect (brief T29) terminal 2 to print `Waiting for another
+   tswap to finish with the YubiKey or security key (it may be waiting for a touch or a PIN)...` and
+   nothing else. Touch the key for terminal 1: its `names` completes. Terminal 2 then prints `The
+   other tswap is done; going on (touch the key again if it flashes).`, the key flashes again; touch
+   it, and terminal 2's `names` completes. The busy text this check expected before T29, `YubiKey
+   <spare> is busy (another tswap or app is waiting for a touch); try again when it's done.`, is now
+   what an app other than tswap holding the key gives (when the key is hidden from the listing; an
+   app caught mid-command gives `YubiKey <spare> is busy (another tswap or app is using it); try
+   again.`). Record the text you get.
 2. The FIDO2 one. A FIDO2-only vault on the spare:
 
    ```bash
@@ -454,8 +460,11 @@ programming). Paste back the test output lines and the summary.
    ```
 
    Terminal 1: `"$T" names`, type the PIN, and don't touch the key. Terminal 2 (same settings):
-   `"$T" names`. Record what terminal 2 says; expected: `YubiKey <spare> is busy: another program
-   is using it. Try again when it's done.`, with no PIN prompt.
+   `"$T" names`. Expect (brief T29) terminal 2 to print the waiting line and no PIN prompt. Once
+   terminal 1 is done (PIN, touch), terminal 2 prints the going-on line and asks for its PIN; give
+   it and a touch, and its `names` completes. With an app other than tswap holding the key, the
+   busy text is still `YubiKey <spare> is busy: another program is using it. Try again when it's
+   done.` (record what you get).
 
 ### B8. `yubikey setup --replace` with a FIDO2 slot
 
