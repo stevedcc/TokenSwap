@@ -67,6 +67,33 @@ public sealed class FieldTokenRefusalTests : IDisposable
     }
 
     /// <summary>
+    /// #311 with T26's <c>--env</c>: a field token in an <c>--env</c> value is refused like one in the command, with the
+    /// field message, before unlock (no challenge, no child).
+    /// </summary>
+    [Theory]
+    [InlineData("--env", "X={{db.user}}", "{{db.user}}", true)]
+    [InlineData("--env=X={{db.user}}", null, "{{db.user}}", true)]
+    [InlineData("--env", "X={{db.a.b}}", "{{db.a.b}}", false)]
+    [InlineData("--env", "X={{db.user:previous}}", "{{db.user:previous}}", false)]
+    public void Run_FieldTokenInEnv_Refused_BeforeUnlock(string option, string? value, string token, bool isField)
+    {
+        using var m = new FleetMachine("field-token-env", SimulatedYubiKeyService.WithKeys(SerialA));
+        InitRecordVault(m);
+        m.Ok("pw", "ingest", "db");
+        m.Keys.Challenges.Clear();
+        var started = m.PathOf("child-started");
+        string[] args = value is null ? ["run", option, "--", "touch", started] : ["run", option, value, "--", "touch", started];
+
+        var (exit, stdout, stderr) = m.Run("", args);
+
+        Assert.Equal(1, exit);
+        Assert.Equal("", stdout);
+        Assert.Contains(isField ? FieldMessage(token, "db") : MalformedMessage(token), stderr);
+        Assert.Empty(m.Keys.Challenges);
+        Assert.False(File.Exists(started));
+    }
+
+    /// <summary>
     /// Final review I1 (ruling): only a valid secret name right after <c>{{</c>, then a dot, is refused. Go-template
     /// text (<c>docker/podman inspect --format</c>, <c>kubectl -o go-template</c>) passes through literally, as
     /// before #311: next to a real token the command reaches the vault (with no vault, its error).

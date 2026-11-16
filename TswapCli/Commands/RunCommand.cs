@@ -375,6 +375,8 @@ public sealed class RunCommand : ICliCommand
             throw new TswapException(
                 $"'--env {name}': a {{{{@file}}}} token can't be an --env value (a file path isn't a secret): put it in the command.");
         Validation.ThrowIfUnknownTokenSuffix(value);
+        // #311: a field token in an --env value gets the same refusal as one in the command (before unlock).
+        Validation.ThrowIfFieldOrMalformedToken(value);
         if (Validation.TokenRegex.Match(value) is { Success: true } whole && whole.Length == value.Length)
             return whole.Groups[1].Value;
         if (!value.Contains("{{", StringComparison.Ordinal))
