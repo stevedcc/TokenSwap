@@ -41,7 +41,28 @@ folder), and never `--privileged`, `--security-opt`, `--cap-add`, `--device` or 
 a non-root user made there (`useradd -m tester`, `podman exec --user tester ...`): the broker refuses root and several
 tests behave differently as root. Stop every container you started before you finish.
 
-**Review history.** None yet.
+**Review history.** Round 1 (MiMo: not ready, 1 Important and 6 Minors; GLM: ready, 1 Important and 3 Minors), folded:
+- MiMo Important 1 (Task 1's expected `shim_paths` set didn't follow its own rule): valid. A1 gives the full 12-entry
+  set, asserted exactly, with sorted JSON lists.
+- MiMo Minor 2 (90ddf8d didn't touch `ExchangeAsync`): valid. Why now names d997c77 for `ExchangeAsync`.
+- MiMo Minor 3 (the python3 test fails on a host without python3): valid. A3: it skips with a message, and fails under
+  `CI_REQUIRE_BWRAP=1`.
+- MiMo Minor 4 (the isolation lines need Contains): valid. A2.
+- MiMo Minor 5 (the repro needs `gh`, egress and a guessed `libicu78`): partly valid. `libicu78` isn't a guess (the
+  controller read its candidate, 78.2-2ubuntu1, in the 26.04 image), and the container has egress (apt worked there).
+  The anonymous logs endpoint isn't a fallback, because job logs need auth. A missing `gh` is A4 (below).
+- MiMo Minor 6 (the 26.04 move isn't confirmable from runner-images' README): valid. A6: the report quotes the job's
+  runner-image line.
+- MiMo Minor 7 (the trailer names a model): invalid. The trailer is the controller's house rule for every brief.
+- GLM Important 1 (Task 3's teardown, a stdin close followed by `Kill`): valid as an ambiguity. A7 keeps today's
+  `Kill(); WaitForExit();` and drops the stdin close. MiMo checked that `Kill` on an exited process doesn't throw on
+  Unix, so it was never a failure, but the close bought nothing.
+- GLM Minor 2 (the parallel-briefs paragraph said `BrokerContainerGateTests.cs` was shared with no counterpart):
+  valid. A5: T37 owns that line, and no other brief touches the file.
+- GLM Minor 3 (the out-of-scope `su` bullet could read as excluding same-named cargo links): valid. A9 rewords it;
+  on 26.04 `/usr/bin/su` is util-linux's own file (checked in the container).
+- GLM Minor 4 (`gh` may be unavailable): valid. A4: say so in the report and don't fetch the log another way.
+- GLM coverage note (`BrokerContainerGateTests` is `Category=E2E`): taken as A8, run by filter in Task 4.
 
 **Parallel briefs.** T34 (enrol follow-ups: `SlotEnrol*.cs`, `SlotStage.cs`, `ProcessSshTransport.cs`, `SlotCommand.cs`'s
 request/accept output, `docs/multi-machine.md`'s enrolling-over-SSH section, `SlotEnrolTests`/`SlotStdioTests`), T35
@@ -49,10 +70,10 @@ request/accept output, `docs/multi-machine.md`'s enrolling-over-SSH section, `Sl
 header, `docs/install.md`'s Windows notes, `docs/agent-integration.md`, `Prompt.cs`'s Windows note) and T36 (the `slots`
 listing, loose record-vault files, `docs/multi-machine.md`'s Sync transports section) touch none of T37's files. T37 owns
 `evals/skill/**`, `SkillEvalTests.cs`, `BrokerTemplateProgramAndEnvTests.cs`, `InstallScriptUpgradeTests.cs`,
-`SshAgentTestSupport.cs`, `SshAgentFramingTests.cs` and `.github/workflows/*`. Two shared files, said so the merges are
-expected: `TswapTests/BrokerContainerGateTests.cs` (one line in `TheSshAgentSocketOfAMismatchingSocket_ClosesBeforeTheFirstFrame`)
-and AGENTS.md (one phrase in the skill-eval paragraph, "the Linux CI job" becomes "the Linux CI jobs"; T35 and T36 may
-edit other paragraphs). No production code changes in this brief unless Task 5's CI run turns up a real 26.04 bug
+`SshAgentTestSupport.cs`, `SshAgentFramingTests.cs`, the new `SshAgentTestClientTests.cs` and `.github/workflows/*`,
+plus one line of `TswapTests/BrokerContainerGateTests.cs` (in `TheSshAgentSocketOfAMismatchingSocket_ClosesBeforeTheFirstFrame`),
+which no other brief tonight touches (A5). One shared file, said so the merge is expected: AGENTS.md (one phrase in the
+skill-eval paragraph, "the Linux CI job" becomes "the Linux CI jobs"; T35 and T36 may edit other paragraphs). No production code changes in this brief unless Task 5's CI run turns up a real 26.04 bug
 (then see Task 5).
 
 ## Why
@@ -101,8 +122,8 @@ SshAgentFramingTests.cs:180. With `allowOwnUid: false`, `BrokerContainerGate.Adm
 (`own-uid`) and the listener returns, which closes the socket before any frame is read. A slow machine lets that close
 reach the client before its first send, and the send then fails with EPIPE. The outcome the test checks (closed
 without a reply, `reason=own-uid` logged) happened. The test client just can't take the close arriving first. The HTTP
-side had the same race and was fixed in 90ddf8d: `BrokerHarness.SendRawAsync` (BrokerTestSupport.cs) and
-`BrokerContainerGateTests.ExchangeAsync` count a send that fails with
+side had the same race: `BrokerHarness.SendRawAsync` (BrokerTestSupport.cs, fixed in 90ddf8d) and
+`BrokerContainerGateTests.ExchangeAsync` (which has had the same catch since d997c77) count a send that fails with
 `SocketException { SocketErrorCode: SocketError.Shutdown or SocketError.ConnectionReset }` as "nothing answered" (.NET
 reports EPIPE as `SocketError.Shutdown`).
 
@@ -146,8 +167,10 @@ Steps:
    Expected: the two #339 failures with the CI run's messages, and `SkillEvalTests` reporting SKIPPED (bwrap). Keep the
    container (stop it only at the end) and re-run the same filter after Tasks 1 to 3 as the "after" evidence (the
    `SkillEvalTests` still skip there; Task 1's new `shim_mounts` test does not skip, it needs only `python3`).
-4. The CI log: `gh run view 43868884283 -R stevedcc/TokenSwap --log-failed`, the 14 failure lines and the two
-   `isolation:` lines, quoted in the report.
+4. The CI log: `gh run view 43868884283 -R stevedcc/TokenSwap --log-failed`, the 14 failure lines, the two
+   `isolation:` lines and the job's runner-image line (`Image: ubuntu-26.04` and its version, from the "Set up job"
+   step: `gh run view --job <id> --log`), quoted in the report (A6). If `gh` is missing or refused, don't fetch the log
+   another way: say so in the report and quote the issue's failure lines instead (A4).
 
 ## Task 1: the eval's shim goes over a link's target (#339 cause 1)
 
@@ -197,19 +220,26 @@ name** (busybox style). It isn't shimmed, because shimming the binary would shim
 
   It runs `/usr/bin/python3 -I -B -c` with a snippet that puts `evals/skill/lib` on `sys.path`, imports `runner`, calls
   `shim_mounts(["sudo","cat","awk","gawk","su","pkexec"], [<root>/usr/bin, <root>/bin])` and prints both results as
-  JSON. The test asserts the exact sets:
-  - targets: `{<root>/usr/lib/cargo/bin/sudo, <root>/usr/lib/cargo/bin/coreutils/cat, <root>/usr/bin/gawk, <root>/usr/bin/pkexec}`;
-  - `shim_paths` contains `<root>/usr/bin/sudo`, `<root>/bin/sudo`, `<root>/usr/lib/cargo/bin/sudo`, `<root>/usr/bin/cat`,
-    `<root>/bin/cat`, `<root>/usr/bin/awk`, `<root>/bin/awk`, `<root>/usr/bin/gawk` and `<root>/usr/bin/pkexec`;
-  - nothing under `<root>/usr/lib/busybox` and no `.../su` is in either set.
+  JSON, each as a sorted list (a Python `set` doesn't serialise). The test asserts both sets exactly (A1):
+  - targets, 4 entries: `<root>/usr/lib/cargo/bin/sudo`, `<root>/usr/lib/cargo/bin/coreutils/cat`, `<root>/usr/bin/gawk`,
+    `<root>/usr/bin/pkexec`;
+  - `shim_paths`, 12 entries: `<root>/usr/bin/sudo`, `<root>/bin/sudo`, `<root>/usr/lib/cargo/bin/sudo`,
+    `<root>/usr/bin/cat`, `<root>/bin/cat`, `<root>/usr/lib/cargo/bin/coreutils/cat`, `<root>/usr/bin/awk`,
+    `<root>/bin/awk`, `<root>/usr/bin/gawk`, `<root>/bin/gawk`, `<root>/usr/bin/pkexec`, `<root>/bin/pkexec`;
+  - so nothing under `<root>/usr/lib/busybox` and no `.../su` is in either set.
+
+  Without `/usr/bin/python3` the test writes `SKIPPED: no /usr/bin/python3 here` and returns, except under
+  `CI_REQUIRE_BWRAP=1` (every Linux CI leg), where it fails instead, as `CanRun` does (A3).
 
   Break-it-once: restore the `continue` for a symlink whose target is in another folder. The test fails on the missing
   cargo `sudo` and `cat` targets.
 - `IsolationCheck_AbortsWhenARealSudoIsReachable` (behind `CanRun`): this is "a real sudo is still refused". It writes
   a stand-in `#!/bin/sh` script in a temp folder and binds it with `EVAL_TEST_EXTRA_RO_BIND` over
   `realpath("/usr/bin/sudo")` (`/usr/bin/sudo` on Fedora and 24.04, `/usr/lib/cargo/bin/sudo` on 26.04, so the test works
-  on both layouts). It runs scenario `01-secret-in-log` and asserts exit 2, `ABORT 01-secret-in-log/pass: isolation check
-  failed`, `isolation: /usr/bin/sudo exists and is not the eval shim`, and no `PASS `. Without `/usr/bin/sudo` on the
+  on both layouts). It runs scenario `01-secret-in-log` and asserts exit 2 and, with `Assert.Contains` as
+  `IsolationCheck_AbortsWhenARealTswapIsReachable` does (the check prints one line per path, so `/bin/sudo` too where
+  `/bin` links to `/usr/bin`), `ABORT 01-secret-in-log/pass: isolation check failed` and
+  `isolation: /usr/bin/sudo exists and is not the eval shim`, and `Assert.DoesNotContain("PASS ", ...)` (A2). Without `/usr/bin/sudo` on the
   host it writes `SKIPPED: no /usr/bin/sudo here` and returns. Break-it-once: comment out the `for dir in "${dirs[@]}"`
   loop in `isolation_check.sh`. The test fails (no abort, because `command -v sudo` still finds `/eval/bin/sudo`).
 - The twelve existing `SkillEvalTests` that failed on 26.04 are the end-to-end measure, on the PR's 26.04 job
@@ -247,8 +277,9 @@ existing assertions stay. **One sanctioned added assertion**, after `Assert.Fals
 `Assert.Equal(target + " (deleted)", new FileInfo($"/proc/{running.Id}/exe").LinkTarget)`. It shows that the process
 still running is the old binary, whose file the rename replaced, rather than some other process at that path. Update
 the test's comment: the stand-in is a copy of bash because a multi-call binary (26.04's uutils `sleep`) picks its tool
-from its own file name and exits at once under the name `tswap`. At the end, close its stdin, then `Kill` and
-`WaitForExit` as now.
+from its own file name and exits at once under the name `tswap`. The teardown stays exactly as now,
+`running.Kill(); running.WaitForExit();`, with no stdin close before it: the kill ends the blocked `read` at once and
+the `using` disposes the pipe (A7).
 
 Break-it-once: in the Linux script's `install_binary` (`InstallScript.cs`; the test reads that copy), change
 `mv -f "$tmp" "$dest"` to `cat "$tmp" > "$dest"`. That is the in-place rewrite the function exists to avoid. The test
@@ -291,7 +322,10 @@ EPIPE the receive sees end of stream. No catch anywhere else, no retries, no wai
   `ObjectDisposedException`. This guards against the catch growing into a blanket one. Break-it-once: widen the catch to
   `catch (Exception)`. The test fails.
 
-macOS runs these in CI's macOS job, where EPIPE is reported the same way.
+macOS runs these in CI's macOS job, where EPIPE is reported the same way. `BrokerContainerGateTests` is
+`Category=E2E`, so `--unit` doesn't run it: run it during this task with
+`--filter "FullyQualifiedName~BrokerContainerGateTests"` (it skips without a usable cgroup client, as it does now), and
+the final full `./runtests.sh` covers it (A8).
 
 ## Task 5: CI runs Ubuntu 24.04 and 26.04
 
@@ -330,7 +364,7 @@ it isn't).
 Write `t37-report.md` at the worktree's parent folder (`../t37-report.md`). It contains:
 - the commits;
 - the reproduction: the layout listing, the cause 3 by-hand result, the container's before and after test summary
-  lines, the `shim_mounts` output on the real 26.04 layout, and the CI log lines;
+  lines, the `shim_mounts` output on the real 26.04 layout, and the CI log lines with the runner-image line;
 - which causes were reproduced in the container and which are left to the runner (expected: cause 1's eval run);
 - the red counts and each break-it-once (the line reverted, the test that failed and how);
 - the tests whose input changed (sanctioned) and the one added assertion;
@@ -343,9 +377,11 @@ Write `t37-report.md` at the worktree's parent folder (`../t37-report.md`). It c
 
 - the ruleset (required checks), and renaming any existing job;
 - moving release.yml's build or test jobs to 26.04;
-- shimming tools linked to a busybox-style multi-call binary, and the sandbox's reach to sudo-rs's own `su` under
-  `/usr/lib/cargo/bin` by absolute path (bwrap's sandbox sets no-new-privileges, so a setuid binary gains nothing there;
-  the isolation check covers the names in its `dirs`);
+- shimming tools linked to a multi-call binary under another name (busybox style), and a setuid binary at a path that
+  no shimmed name resolves to (on 26.04 `/usr/bin/su` is util-linux's own file, so sudo-rs's
+  `/usr/lib/cargo/bin/su` is reached by no system name). bwrap's sandbox sets no-new-privileges, so such a binary
+  gains nothing. A same-named cargo link (`/usr/bin/sudo`, or a `/usr/bin/su` that links into `/usr/lib/cargo/bin`) is
+  covered by Task 1's rule (A9);
 - `InstallScript` changes (unless the reproduction shows a real bug: then stop);
 - the HTTP-side send helpers (fixed in 90ddf8d) and the ssh-agent tests listed in Why as not affected;
 - the Fedora CoreOS VM's missing `python3` (#332's other 14 failures there).
