@@ -45,9 +45,10 @@ public class RedactEngineTests(Xunit.Abstractions.ITestOutputHelper output)
     [Fact]
     public void Redact_SecretAcrossAnInsertedLabel_NotReplaced()
     {
-        var db = Db(("a", S("hello")), ("b", S("]x")));
-        Assert.Equal("[REDACTED: a[REDACTED: b]", PlaintextRedactOracle.RedactContent("hellox", db)); // today
-        Assert.Equal("[REDACTED: a]x", Redact.RedactContent("hellox", db));
+        // Brief T30: 'a' has 8 characters (a shorter value is matched only as a whole word).
+        var db = Db(("a", S("hello123")), ("b", S("]x")));
+        Assert.Equal("[REDACTED: a[REDACTED: b]", PlaintextRedactOracle.RedactContent("hello123x", db)); // today
+        Assert.Equal("[REDACTED: a]x", Redact.RedactContent("hello123x", db));
     }
 
     [Fact]
@@ -134,10 +135,10 @@ public class RedactEngineTests(Xunit.Abstractions.ITestOutputHelper output)
                 {
                     0 when values.Count > 0 => values[random.Next(values.Count)],                       // equal values
                     1 when values.Count > 0 => values[random.Next(values.Count)] + Value(1, 4),         // a prefix of another
-                    _ => Value(2, 12),
+                    _ => Value(8, 16), // brief T30: the oracle matches anywhere, so it can only judge long values
                 };
                 values.Add(value);
-                string? previous = random.Next(3) == 0 ? (random.Next(2) == 0 && values.Count > 1 ? values[random.Next(values.Count)] : Value(2, 10)) : null;
+                string? previous = random.Next(3) == 0 ? (random.Next(2) == 0 && values.Count > 1 ? values[random.Next(values.Count)] : Value(8, 14)) : null;
                 if (previous is not null) values.Add(previous);
                 var burned = random.Next(3) == 0;
                 secrets.Add(($"k{(char)('m' + i)}", S(value, burned, previous, previousBurned: previous is not null && random.Next(2) == 0)));

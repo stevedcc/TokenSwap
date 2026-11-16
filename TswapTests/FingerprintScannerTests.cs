@@ -517,8 +517,10 @@ public class FingerprintScannerTests
                 TswapCore.Keyring.Stamp.Zero, g.Key, 0, [], g.FirstOrDefault(s => !s.IsPrevious).Set,
                 g.Any(s => s.IsPrevious) ? TswapCore.Keyring.Stamp.Zero : null, g.FirstOrDefault(s => s.IsPrevious).Set, [])).ToList();
             var carrying = TswapCli.FingerprintStreamMatcher.For(new VaultMetadata(records, 0, 0, []), keys);
+            // Brief T30 (amendment A1): the reference is built in whole-token mode too, as the matcher's scanner is.
             var stateless = new StatelessMatcher(FingerprintScanner.Build(
-                records.SelectMany(r => r.RetainedVersions().Where(v => v.Fingerprints is not null).Select(v => (r.Name, v.IsPrevious, v.Fingerprints!))), keys));
+                records.SelectMany(r => r.RetainedVersions().Where(v => v.Fingerprints is not null).Select(v => (r.Name, v.IsPrevious, v.Fingerprints!))), keys,
+                ShortValueMatching.WholeToken));
 
             for (var size = 1; size <= 64; size++)
                 Assert.Equal(Redact(stateless, text, size), Redact(carrying, text, size));

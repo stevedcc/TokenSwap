@@ -291,13 +291,15 @@ exits; `run` keeps working (owner decision).
 
 | Output contains | Masked |
 |---|---|
-| A substituted value's forms (raw, escaped in a file, base64/base64url padded and unpadded, the `\r\n`, `\n` and PTY-printed forms of a multi-line value and their encodings) | yes |
-| Any other vault value, current or previous, burned included: verbatim, whitespace-stripped, base64 padded, base64url unpadded | yes (a value made only of whitespace: when it arrives in one read, see below) |
-| … base64url with padding | the unpadded core; the `=` stay visible |
+| A substituted value's forms (raw, escaped in a file, base64/base64url padded and unpadded, the `\r\n`, `\n` and PTY-printed forms of a multi-line value and their encodings) | yes¹ |
+| Any other vault value, current or previous, burned included: verbatim, whitespace-stripped, base64 padded, base64url unpadded | yes¹ (a value made only of whitespace: when it arrives in one read, see below) |
+| … base64url with padding | the unpadded core¹; the `=` stay visible |
 | … base64 with its padding removed; a `\r\n` value printed with `\n` only; wrapped base64; a re-indented PEM (YAML block); JSON, URL or hex encodings; inside a larger base64 blob | no (a later variant-set version) |
-| … multi-line, through a pipe (line endings as stored) or a PTY (`\n` printed as `\r\n`) | yes |
+| … multi-line, through a pipe (line endings as stored) or a PTY (`\n` printed as `\r\n`) | yes¹ |
 | Records not fully fingerprinted, or unreadable | no; warned before and after the child |
 | A secret added while the child runs | no (the matcher is built at the start) |
+
+¹ Short values (under 8 characters): only where they stand alone, see Limits.
 
 Limits:
 
@@ -312,16 +314,43 @@ Limits:
   whitespace for that would hold every line end. Such a value can only be stored with
   `sudo tswap add` (`ingest` trims trailing whitespace), which warns when a value ends in
   whitespace or is only whitespace.
-- **Values are matched anywhere**, including inside longer words and numbers: a value `123` is
-  masked inside `65123`, a value `abc` inside every `abcd` and `xabc`. A short value is
-  therefore hidden in unrelated output, and the mask shows where it appears, so it gives itself away.
-  `add`, `ingest`, `ingest --rotate`, `create` and `rotate` warn when they store a value shorter than 8 characters
-  ([commands](commands.md#commands)).
+- **Short values are matched as whole words only** (brief T30, #314). A value version shorter than 8
+  characters (UTF-16 code units, `Validation.ShortValueLength`) is masked, in every form of it (plain,
+  whitespace-stripped, base64, base64url, and for `run`'s own values every escaped file form and encoding,
+  even where that form has 8 characters or more), only where the occurrence stands alone: at each of its
+  ends that is a word character, the character beyond is not one, the start and end of the text counting
+  as non-word. A word character is what `tocomment`'s `[-\w]` matches: a letter, a non-spacing mark, a
+  decimal digit, connector punctuation (`_`), or `-`; an end that is not a word character constrains
+  nothing (`#42` is masked in `x#42`). So `465` is masked in `port=465`, `"465"`, `:465/` and `1.465`, but
+  not in `65465` or `4650`; `web` is masked in `host: web.example`, but not in `web-ngx`, `webster` or
+  `/home/webster`. `name` and `name:previous` are separate versions, each by its own length.
+  Values of 8 characters or more are still matched anywhere, inside longer words and numbers too:
+  `run` (and the broker) redact output that may be hostile, and whole-word matching for every value
+  would let a command leak a secret by gluing it to letters (`echo x{{pw}}x`). What the rule costs: a
+  short secret printed inside a longer word or number, or glued to another masked value (neighbours are
+  read in the original output, not in the masked one), shows unmasked, with no notice. There is none by
+  design: a note that "a short value occurred inside a word" would confirm guesses (a command printing
+  candidates and reading the note) and bring back the false burns the rule removes. A short value that
+  stands alone (`False` in `x is False`, `465` in `"port": 465`) is still masked, since it can't be told
+  from the secret itself; such a value belongs in a field. `add`, `ingest`, `ingest --rotate`, `create`
+  and `rotate` warn when they store a value shorter than 8 characters ([commands](commands.md#commands)).
+  `redact` follows the same rule; `tocomment` already replaced a value only between `[-\w]` boundaries,
+  for every value, and still does. The fields guards (a field value containing a secret is refused) and
+  the broker (it never emits a known form) still match every value anywhere. Streaming: a read boundary
+  counts as a word boundary, and the redactor holds back the trailing word (up to 256 characters) so the
+  next read starts on a word's first character; in rare cases (a run of word characters longer than 256
+  split by a read with a short value at the split, output held for a long value's prefix, output
+  released at a prompt in mid-word) a short value inside a word is masked anyway: extra masks, never
+  fewer.
 - **A secret split between stdout and stderr** is not recognised when output is redirected
   (RedactingPty's pipe runner redacts each stream on its own).
 - **Held output at a prompt.** To catch a value split across reads, the redactor holds back the end
   of the output: for single-line secrets only the trailing word, but a multi-line secret (a PEM key)
-  could start anywhere, so up to its length is held on every pause. `run` releases held output
+  could start anywhere, so up to its length is held on every pause. When `run` substitutes a value
+  under 8 characters (in an argument, `--env` or a `{{@file}}`), at least the last 255 characters are
+  held on every pause, whatever they are, so streamed output (`logs -f`) then arrives in batches. A pending point inside a word is
+  moved back to the word's start, so the trailing word may be held up to 256 characters further back
+  (brief T30). `run` releases held output
   (masking complete occurrences first) when the child waits for terminal input. **Linux:** when no
   thread of the terminal's foreground process group is running and one is blocked in `read` on the
   terminal (`/proc`); programs that wait in `poll`/`select` (bash's readline prompt) stay held.
@@ -329,10 +358,12 @@ Limits:
   a plain `y/N` prompt stays held until more output or exit. **Windows, and redirected output:**
   never; held output waits for more output or exit. Time alone never releases held output.
 - **The hold-back is observable.** A child (or the agent reading the output) can see when output
-  appears, so how much is held. What is held depends on the text and on two vault-wide figures
-  only, each rounded up to a multiple of 256 characters: the longest value per character class, and
-  the largest whitespace count of a multi-line value. So it reveals a 256-character bucket of those
-  and whether the vault holds a secret with whitespace, nothing finer than the vault folder's
+  appears, so how much is held. What is held depends on the text, on the constant 256-character word
+  hold, and on figures each rounded up to a multiple of 256 characters: two vault-wide ones (the
+  longest value per character class, and the largest whitespace count of a multi-line value) and, when
+  `run` substitutes a value under 8 characters, one bucket that says only that such a value was
+  substituted. So it reveals a 256-character bucket of those, whether the vault holds a secret with
+  whitespace and whether this run substituted a short value, nothing finer than the vault folder's
   256-byte record buckets already show, and nothing about a guess's prefix.
 - **A guessing oracle, as `redact` already is:** a child can test a guess against every vault value
   by printing it and watching for a label; the labels show secret names, which `names` lists anyway.

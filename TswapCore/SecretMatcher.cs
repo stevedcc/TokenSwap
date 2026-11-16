@@ -18,6 +18,11 @@ namespace TswapCore;
 /// <c>Regex.Replace</c> per entry did, minus matches in inserted text). All taken spans are then
 /// replaced in one pass. A <c>name:previous</c> entry always counts as live, as it always has.
 /// </para>
+/// <para>
+/// Brief T30 (#314): in <c>redact</c> a value version shorter than <see cref="Validation.ShortValueLength"/>
+/// is matched, in every form, only where it stands as a whole word or number
+/// (<see cref="TokenBoundary.IsDelimited"/>, neighbours read in the input); longer values anywhere.
+/// </para>
 /// </summary>
 /// <param name="index">The fingerprints of every value version to recognise.</param>
 /// <param name="burned">Names whose current value has an outstanding burn (they lose ties to a live name).</param>
@@ -134,12 +139,19 @@ public sealed class SecretMatcher(FingerprintIndex index, IReadOnlySet<string> b
         return best?.Token;
     }
 
-    /// <summary>The hits of <paramref name="text"/> grouped into entries, in priority order, each with its starts left to right.</summary>
-    private List<(Entry Entry, List<int> Starts)> Entries(string text)
+    /// <summary>
+    /// The hits of <paramref name="text"/> grouped into entries, in priority order, each with its starts left
+    /// to right. With <paramref name="wholeTokenShortValues"/> (brief T30, <c>redact</c>) a hit of a short
+    /// value version that isn't delimited in <paramref name="text"/> is left out before grouping, so it never
+    /// takes a span from another value.
+    /// </summary>
+    private List<(Entry Entry, List<int> Starts)> Entries(string text, bool wholeTokenShortValues)
     {
         Dictionary<Entry, List<int>> byEntry = [];
         foreach (var hit in index.Scan(text))
         {
+            if (wholeTokenShortValues && index.IsShortValue(hit) && !TokenBoundary.IsDelimited(text, hit.Start, hit.Length))
+                continue;
             var token = hit.IsPrevious ? hit.Name + SecretsDb.PreviousSuffix : hit.Name;
             var entry = new Entry(hit.Length, text.Substring(hit.Start, hit.Length), !hit.IsPrevious && burned.Contains(hit.Name),
                 token, SecretProcessor.TypeOf(hit.Kind), hit.Kind);
@@ -169,11 +181,11 @@ public sealed class SecretMatcher(FingerprintIndex index, IReadOnlySet<string> b
         return cmp != 0 ? cmp : a.Kind.CompareTo(b.Kind);
     }
 
-    /// <summary>Selection for spans that are exactly the occurrence (<c>redact</c>).</summary>
+    /// <summary>Selection for spans that are exactly the occurrence (<c>redact</c>; short values whole-token only, brief T30).</summary>
     private SortedList<int, Span> Select(string text, Func<Entry, int, (int Start, int End, string Replacement)> span)
     {
         SortedList<int, Span> taken = [];
-        foreach (var (entry, starts) in Entries(text))
+        foreach (var (entry, starts) in Entries(text, wholeTokenShortValues: true))
         {
             var position = 0;
             foreach (var start in starts)
@@ -198,7 +210,8 @@ public sealed class SecretMatcher(FingerprintIndex index, IReadOnlySet<string> b
     private SortedList<int, Span> SelectToComment(string line)
     {
         SortedList<int, Span> taken = [];
-        foreach (var (entry, starts) in Entries(line))
+        // tocomment's own [-\w] boundary (AnchoredPatterns) already rejects every hit T30's rule rejects.
+        foreach (var (entry, starts) in Entries(line, wholeTokenShortValues: false))
         {
             var patterns = ToCommentProcessor.AnchoredPatterns(entry.Text);
             var replacement = ToCommentProcessor.Replacement(entry.Token);

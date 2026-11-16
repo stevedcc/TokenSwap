@@ -26,13 +26,17 @@ public sealed class FingerprintIndex
     private readonly FingerprintKeys _keys;
     private readonly Dictionary<(int Length, ulong Hash), List<(string Name, bool IsPrevious, VariantKind Kind, byte[] Hmac)>> _entries;
     private readonly int[] _lengths;
+    // Brief T30: whether each value version (name, previous) is short; false when any set under that key is not.
+    private readonly Dictionary<(string Name, bool IsPrevious), bool> _short;
 
     private FingerprintIndex(
         FingerprintKeys keys,
-        Dictionary<(int Length, ulong Hash), List<(string Name, bool IsPrevious, VariantKind Kind, byte[] Hmac)>> entries)
+        Dictionary<(int Length, ulong Hash), List<(string Name, bool IsPrevious, VariantKind Kind, byte[] Hmac)>> entries,
+        Dictionary<(string Name, bool IsPrevious), bool> isShort)
     {
         _keys = keys;
         _entries = entries;
+        _short = isShort;
         _lengths = [.. entries.Keys.Select(k => k.Length).Distinct().Order()];
         MaxLength = _lengths.Length == 0 ? 0 : _lengths[^1];
     }
@@ -44,8 +48,10 @@ public sealed class FingerprintIndex
     public static FingerprintIndex Build(IEnumerable<(string Name, bool IsPrevious, FingerprintSet Set)> sets, FingerprintKeys keys)
     {
         Dictionary<(int, ulong), List<(string, bool, VariantKind, byte[])>> entries = [];
+        Dictionary<(string, bool), bool> isShort = [];
         foreach (var (name, isPrevious, set) in sets)
         {
+            isShort[(name, isPrevious)] = TokenBoundary.IsShort(set) && isShort.GetValueOrDefault((name, isPrevious), true);
             foreach (var entry in set.Entries)
             {
                 if (entry.Length <= 0) continue;
@@ -55,8 +61,16 @@ public sealed class FingerprintIndex
                 list.Add((name, isPrevious, entry.Kind, entry.Hmac));
             }
         }
-        return new FingerprintIndex(keys, entries);
+        return new FingerprintIndex(keys, entries, isShort);
     }
+
+    /// <summary>
+    /// Brief T30: whether <paramref name="hit"/> came from a short value version
+    /// (<see cref="TokenBoundary.IsShort"/>), keyed by its name and whether it is the previous value. When
+    /// two sets were indexed under one key, it is short only if both are (the masking side).
+    /// </summary>
+    public bool IsShortValue(FingerprintHit hit) =>
+        _short.TryGetValue((hit.Name, hit.IsPrevious), out var isShort) && isShort;
 
     /// <summary>
     /// Every confirmed hit in <paramref name="text"/>, ordered by start, then length descending,

@@ -151,13 +151,17 @@ public sealed class RunCommand : ICliCommand
             var secretValues = tokens.ToDictionary(token => token, token => resolved[token]);
 
             // Redact every form of every value: raw, and its base64/base64url (and \r\n) variants. An --env
-            // value is masked exactly like a {{name}} in argv.
+            // value is masked exactly like a {{name}} in argv. Brief T30 (#314): every form of a short value
+            // (under Validation.ShortValueLength) goes to the matcher, which masks it only where it stands as a
+            // whole word or number; a long value's forms are masked anywhere, as RedactingPty replacements.
             Dictionary<string, string> redactions = new(StringComparer.Ordinal);
+            Dictionary<string, string> shortForms = new(StringComparer.Ordinal);
             void Redact(string name, string raw, IEnumerable<string> written)
             {
+                var target = !string.IsNullOrEmpty(raw) && Validation.IsShortValue(raw) ? shortForms : redactions;
                 foreach (var form in written.Prepend(raw))
                     foreach (var variant in Redaction.Variants(form))
-                        redactions.TryAdd(variant, $"[REDACTED: {name}]");
+                        target.TryAdd(variant, $"[REDACTED: {name}]");
             }
             foreach (var (token, value) in resolved)
                 Redact(token, value, []);
@@ -247,6 +251,9 @@ public sealed class RunCommand : ICliCommand
                 // output, progress bars, and interactive prompts (kubectl exec, helm install, etc.).
                 // PTY output is still intercepted and redacted before reaching our terminal.
                 // Longest value first so a shorter secret sharing a prefix never clobbers a longer one.
+                // A text that is also a long value's form is masked anywhere, with that value's label (brief T30).
+                foreach (var text in redactions.Keys)
+                    shortForms.Remove(text);
                 var replacements = redactions
                     .OrderByDescending(kv => kv.Key.Length)
                     .Select(kv => new StreamReplacement(kv.Key, kv.Value))
@@ -258,7 +265,7 @@ public sealed class RunCommand : ICliCommand
                 fingerprintKeys = FingerprintKeys.Derive(key);
                 var options = new RedactionOptions
                 {
-                    Matchers = [matcher = FingerprintStreamMatcher.For(metadata, fingerprintKeys)],
+                    Matchers = [matcher = FingerprintStreamMatcher.For(metadata, fingerprintKeys, shortForms)],
                     ReleaseWhenAwaitingInput = true,
                     // Brief T26: set for the child only, never in its argv; tswap's own environment is unchanged.
                     Environment = environment.Count > 0 ? environment : null,
