@@ -48,6 +48,13 @@ public sealed class CliEnvironment
     /// </summary>
     public string? AgentSocketVariable { get; init; }
 
+    /// <summary>
+    /// Brief T28 (A8): this process runs under a real sudo escalation: privileged on Unix with <c>SUDO_USER</c> naming a
+    /// user other than root (<see cref="IsRootInvoker"/>, the rule <see cref="CheckInvokingUser"/> applies). A
+    /// privileged process without <c>SUDO_USER</c> (a root login, a service) is not; a non-privileged one ignores it.
+    /// </summary>
+    public bool SudoEscalated { get; init; }
+
     /// <summary>Command-line args with the leading global -v/--verbose flags removed.</summary>
     public required string[] CommandArgs { get; init; }
 
@@ -76,6 +83,8 @@ public sealed class CliEnvironment
             CommandArgs = commandArgs,
             YubiKeySerialVariable = getEnv("TSWAP_YUBIKEY_SERIAL"),
             AgentSocketVariable = getEnv(TswapCore.Agent.AgentSocketPath.Variable),
+            SudoEscalated = isPrivileged && !OperatingSystem.IsWindows() && getEnv("SUDO_USER") is { } sudoUser
+                && !IsRootInvoker(sudoUser, getEnv("SUDO_UID")),
         };
     }
 
@@ -152,7 +161,7 @@ public sealed class CliEnvironment
     internal static UnixPasswdEntry? CheckInvokingUser(string sudoUser, string? sudoUid, Func<string, UnixPasswdEntry?> lookupUser, out string? refusal)
     {
         refusal = null;
-        if (sudoUser == "root" || sudoUid == "0")
+        if (IsRootInvoker(sudoUser, sudoUid))
             return null;
         if (sudoUid is null)
         {
@@ -178,6 +187,9 @@ public sealed class CliEnvironment
         }
         return entry;
     }
+
+    /// <summary>SUDO_USER=root or SUDO_UID=0: sudo run by root itself, so root's own folder (no redirect, no escalation).</summary>
+    internal static bool IsRootInvoker(string sudoUser, string? sudoUid) => sudoUser == "root" || sudoUid == "0";
 
     /// <summary>
     /// macOS only (T7 fix round 1): from a300bf8 until T7, sudo used <c>&lt;home&gt;/.config/tswap</c>
