@@ -310,6 +310,23 @@ public sealed class ValueCommandFieldsTests : IDisposable
         Assert.False(Exists("s"));
     }
 
+    /// <summary>GLM final 6: a flag given twice (--fields, --by) or without its argument is a usage error; nothing is written.</summary>
+    [Theory]
+    [InlineData("s --fields {\"url\":\"https://a.example\"} --fields {\"host\":\"db1\"}")]
+    [InlineData("s --field url=https://a.example --by claude --by owner")]
+    [InlineData("s --field")]
+    [InlineData("s --field url=https://a.example --fields")]
+    [InlineData("s --field url=https://a.example --by")]
+    public void Flag_TwiceOrWithoutArgument_Usage(string args)
+    {
+        var (exit, stdout, stderr) = Run("v-0042", ["ingest", .. args.Split(' ')]);
+
+        Assert.Equal(1, exit);
+        Assert.Contains("Usage: <source> | tswap ingest [--rotate] <name>", stderr);
+        Assert.Equal("", stdout);
+        Assert.False(Exists("s"));
+    }
+
     [Fact]
     public void By_WithoutFields_Refused()
     {
