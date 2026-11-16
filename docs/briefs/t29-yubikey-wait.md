@@ -1,0 +1,340 @@
+# Brief T29: concurrent tswap processes wait for the YubiKey instead of failing
+
+Issues: https://github.com/stevedcc/TokenSwap/issues/273, https://github.com/stevedcc/TokenSwap/issues/173,
+https://github.com/stevedcc/TokenSwap/issues/42, https://github.com/stevedcc/TokenSwap/issues/301 (and its comment, B7.2).
+Base: `origin/main` at c6d2ee3. Read AGENTS.md and CLAUDE.md first, then `TswapCore/Vault/IYubiKeyService.cs` (every
+member, the default bodies included), `TswapCore/Vault/SdkYubiKeyService.cs` (`ListSerials`,
+`ChallengeReportingTouch`, `RequireReachable`, `Describe`), `TswapCore/Vault/IOtpKeys.cs` (`OtpFailure`),
+`TswapCore/Vault/YubicoOtpKeys.cs` (`Challenge`, `Classify`, `ProbeKeyboardInterfaces`),
+`TswapCore/Vault/Fido2/IFido2Keys.cs`, `TswapCore/Vault/Fido2/Fido2Service.cs` (`Call`), `TswapCore/Agent/UnixLockFile.cs`
+and `TswapTests/UnixLockFileRaceTests.cs` (#236: why the lock is taken at open, never upgraded),
+`TswapCore/FileOwnership.cs` (`DirectoryOwnerMatcher.AsOwner`), `TswapCli/CliHost.cs` (the composition, `Fido2Service`,
+`Fido2Keys`), `TswapCli/CliEnvironment.cs` (`ConfigDir`, `ResolveConfigDir`: the config folder under sudo is
+`SUDO_USER`'s), and the tests `TswapTests/SimulatedYubiKeyService.cs`, `TswapTests/FleetMachine.cs` (`Context`),
+`TswapTests/SdkYubiKeyServiceTests.cs` (`ThrowingOtpKeys`, `SdkExceptions`), `TswapTests/CliHostFido2WiringTests.cs`,
+`TswapTests/VaultFreeCommandTests.cs` (`YubiKeySetup_WithoutAHomeFolder_ChecksNoVaultAndGoesOn`),
+`TswapTests/BrokerTestSupport.cs` (`BrokerManualClock`, `ObservedLog`), `TswapTests/EndToEndTests.cs` (`MakePsi`) and
+`docs/superpowers/fido2-owner-checks.md` (B7).
+
+One commit per task, test first, a break-it-once check per key test (name in the commit message which line you
+reverted and which test failed), `./runtests.sh --unit` after each task, the full `./runtests.sh` at the end (run it
+locally). No hardware suites, `ykman`, `sudo`, real YubiKeys or security keys, or `~/.config/tswap`: simulated services,
+`TSWAP_CONFIG_DIR` and temp folders only. No test sleeps or reads the real clock to decide anything: waits are on
+concrete conditions (an event, a line on a stream), each with a 30-second test timeout, and time is a
+`BrokerManualClock`. Commits end with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`, explicit-path commits
+(`git commit -m ... -- <paths>`), no push, merge or rebase; stop and report when the brief can't be built as written.
+Never change an existing test's assertion: this brief sanctions none, so if an existing test fails, stop and report.
+British spelling in new text.
+
+**Review history.** None yet (first draft).
+
+## Why
+
+Two tswap processes that use the YubiKey at the same moment collide, and one (or both) fails, or worse, one takes the
+other's touch. Nothing in tswap serialises access across processes.
+
+- #301 (B7.1, the SDK build `0.3.0-pre-b163c0e`, Linux, an OTP vault with a touch-required slot 2): terminal 1 runs
+  `tswap names` and waits for a touch; terminal 2 runs `tswap names`. Terminal 2 sent its own challenge and took the key
+  over: the touch answered terminal 2. Terminal 1 ended with `❌ Error: YubiKey 40107596: Exception of type
+  'Yubico.YubiKey.MalformedYubiKeyResponseException' was thrown.` (the SDK's default message, passed through by
+  `OtpFailure.Other`). The busy check (`YubicoOtpKeys.Classify`: only the status-report message is `Busy`) never fired,
+  and Linux hidraw has no exclusive open.
+- #301's comment (B7.2, a FIDO2-only vault): both terminals at the PIN prompt, PIN typed in terminal 1: `❌ Error:
+  YubiKey 40107596: the FIDO2 operation failed (InvalidOperationException).`; then in terminal 2: `❌ Error: YubiKey
+  40107596: the FIDO2 operation failed (CtapHidError).` Both failed. The waiting process holds a connection open across
+  its PIN prompt (`SdkFido2Keys.GetHmacSecret` goes through `Verified`, which opens the session and then reads the
+  PIN through the delegate).
+- #273 (ykman era): `sudo tswap get … | … <(sudo tswap get …) | tswap ingest <name>`, two `sudo tswap get` at once: `❌
+  Error: ykman failed: WARNING: Failed opening device / ERROR: Failed connecting to a YubiKey with serial: <serial>. /
+  Make sure the application has the required permissions.` Expected: "a second tswap waits for the first … with a
+  timeout and a 'waiting for another tswap to finish with the YubiKey' message on stderr".
+- #173 (ykman era): an agent harness running `tswap run` from several processes: about half failed with `No YubiKey
+  detected. Please insert YubiKey.`; the harness serialises its calls with `flock` itself (agent-harness
+  `scripts/lib/api.sh`, `bf5f2fd`), which "should not be the caller's job".
+- #42 (ykman era): `diff <(tswap names) <(tswap names)` fails with `Exception: Incomplete transfer` / `Failed to write to
+  the YubiKey`.
+
+Today the YubiKey is reached only through Yubico's .NET SDK (`SdkYubiKeyService` over `IOtpKeys`/`YubicoOtpKeys` for the
+OTP slot 2 challenge-response; `IFido2Keys` for FIDO2: `CompositeFido2Keys` over `SdkFido2Keys` and libfido2 on Linux and
+macOS, `WebAuthnFido2Keys` on Windows). ykman is gone (`MigrateCommand` says so), but the race is the same, as #301
+shows on the SDK build.
+
+## The design (decided; rulings marked)
+
+**One lock, taken around every device call.** A new `YubiKeyLock` (`TswapCore/Vault/YubiKeyLock.cs`) is a
+cross-process exclusive lock. Two new decorators take it around every call that can reach a key:
+`LockedYubiKeyService : IYubiKeyService` (`TswapCore/Vault/LockedYubiKeyService.cs`) and `LockedFido2Keys : IFido2Keys`
+(`TswapCore/Vault/Fido2/LockedFido2Keys.cs`). `CliHost` wraps the one YubiKey service it builds (handed to both
+`CommandContext.YubiKeys` and `VaultUnlocker`) and the FIDO2 device layer under the one `Fido2Service`, with one
+`YubiKeyLock` per process for both.
+- Ruling: lock per device call, not per command or per unlock — why: one seam covers every path that reaches a key
+  (unlock, enrolment, `yubikey setup`, `create`'s entropy, the broker's unlocks) without touching `VaultUnlocker` or any
+  command; the lock is held exactly while a key may be mid-command; and it is not held across tswap's own prompts
+  between device calls (vault password, key choice, serial confirmation), so a person at such a prompt blocks no one.
+  The FIDO2 PIN prompt runs inside the device call (the session is open while the PIN is read), so it is held there,
+  which is exactly B7.2's fix: the second process waits before its own listing and shows no PIN prompt until the first
+  is done.
+- Ruling: one lock for all keys and both interfaces (OTP and FIDO2), not one per serial — why: the SDK's listing
+  (`YubiKeyDevice.FindAll`, `FindByTransport`) and `ProbeKeyboardInterfaces` open or read every key's interfaces, and
+  #173's "No YubiKey detected" came from a listing colliding with another process's challenge; a per-serial lock
+  can't cover a listing that happens before the serial is known.
+- **Members.** `LockedYubiKeyService` implements **every** member of `IYubiKeyService` explicitly, each forwarding to
+  the same member of the inner service (never relying on a default interface body, which would bypass the inner's own
+  `FindKeys`, `ChallengeReportingTouch`, `DescribeUnreachable`, `GetSlot2State` or `ProgramSlot2`), under the lock;
+  `IsSimulated` is forwarded without the lock. `LockedFido2Keys` forwards `Find`, `MakeCredential`, `GetHmacSecret`,
+  `FindHolder` and `SetPin` under the lock, and `CanList` and `OtherBrands` without it (neither talks to a key:
+  `OtherBrands` only loads libfido2). Exceptions pass through unchanged; the lock is released in a `finally`.
+- Ruling: Windows' WebAuthn path is wrapped too — why: one rule on every OS; while `webauthn.dll`'s dialog is open for
+  one tswap the other waits with the same line instead of opening a second dialog. The owner's priority is Linux and
+  macOS; Windows gets the same behaviour at no extra cost.
+
+**Where the lock lives.** `<config folder>/yubikey.lock` (`YubiKeyLock.FileName = "yubikey.lock"`), the folder
+`CliEnvironment.ConfigDir` resolves.
+- Ruling: the config folder, not `$XDG_RUNTIME_DIR` (#173's proposal) — why: under sudo the config folder already
+  resolves to `SUDO_USER`'s (`ResolveConfigDir`), so `sudo tswap get` and the user's own `tswap run` share one lock (the
+  owner's daily case: a human's sudo command beside an agent's `run`; #273's pipeline mixes both), where a per-user run
+  folder would give root a different one; every process that unlocks the same vault resolves the same folder; and the
+  tests get isolation for free through `TSWAP_CONFIG_DIR`. The cost: two different config folders of one user
+  (`TSWAP_CONFIG_DIR` set for one command and not the other, including a `sudo` that drops it) don't share a lock. That
+  is the existing rule for which vault sudo uses (`sudo --preserve-env=TSWAP_CONFIG_DIR`), and #42 proposed the config
+  folder too.
+- Resolved once per process, at the first take (`Func<string>` given to the constructor; `CliHost` passes
+  `() => Path.Combine(env.ConfigDir, YubiKeyLock.FileName)`), so commands that never reach a key never resolve the
+  folder.
+- **Folder missing** (a machine before `init`, or a `TSWAP_CONFIG_DIR` that doesn't exist yet): that call runs without
+  the lock, silently, and nothing is created. Checked at every take, so a folder `init` creates mid-command is used by
+  its later calls. Ruling: the lock never creates the config folder — why: an `init` that refuses early must still leave
+  nothing behind, and with no config folder no other tswap is unlocking this vault.
+- **Unix:** `UnixLockFile.TryTake(path, out heldElsewhere)` (exclusive `flock` taken at open via `FileShare.None`,
+  created 0600, a non-regular file refused), run inside `DirectoryOwnerMatcher.AsOwner(path, …)`, so under sudo the file
+  is created and opened as the config folder's owner and comes out the user's (a later unprivileged process can open
+  it); the device call itself then runs as root, outside the switch, as today. **Windows:** a `FileStream`
+  (`FileMode.OpenOrCreate`, `FileAccess.ReadWrite`, `FileShare.None`); an `IOException` whose `HResult & 0xFFFF` is 32
+  (`ERROR_SHARING_VIOLATION`) means held elsewhere. The file is never deleted (deleting a lock file lets a new taker
+  lock a new inode while an old holder still holds the old one) and holds no data.
+- Ruling: no stale-lock handling — why: the kernel releases a `flock` when its process dies, however it dies (SIGKILL
+  included), and Windows closes the handle; a leftover file is harmless. A live holder that is stuck (a forgotten PIN
+  prompt, a tswap stopped with Ctrl-Z) holds it until it goes on or ends; waiters time out (below).
+- Ruling: reuse `UnixLockFile` and .NET's `FileShare.None`, no new package — why: the owner prefers established code
+  over self-rolled, and this is the repo's own tested lock (`UnixLockFileRaceTests`, #236), on .NET's own `flock`;
+  a library such as `DistributedLock.FileSystem` would add a dependency for the same `FileShare.None` open, takes no
+  `TimeProvider` (so its wait can't be tested without real time) and would create its file as root under sudo. A named
+  `Mutex` is out, as #173 says (thread-affine; its Unix scope and permissions are subtle).
+- **Can't take the lock for another reason** (the config folder can't be resolved: `Cannot determine the config
+  folder …`; the lock path is a folder, a symlink or unreadable; an owner switch fails; any `TswapException`, `IOException`
+  or `UnauthorizedAccessException` from resolving or opening): print once per process, on the lock's notice writer
+  (stderr), ``Warning: tswap couldn't take its YubiKey lock (<the exception's message>), so another tswap using the key
+  at the same time could disturb this one.``, and run this and every later call of the process without the file lock.
+  Ruling: a warning, never a refusal — why: the owner prefers warnings over hard blocks, and without the lock tswap
+  behaves exactly as today (so `yubikey setup` on a machine without a home folder still works, with the warning).
+  Nothing is done as root after a failed owner switch: the file step is skipped, not retried as root.
+
+**Waiting.** A take tries the in-process gate (below) and the file lock without blocking. When either is held:
+1. On the first held try only, write ``Waiting for another tswap to finish with the YubiKey or security key (it may be
+   waiting for a touch or a PIN)...`` (one `WriteLine` on the notice writer: `console.Error` in `CliHost`; stdout is
+   never touched, so `$(tswap get …)` and pipes are unaffected).
+2. If the time since the first try (`TimeProvider.GetTimestamp` / `GetElapsedTime`, the run's `time`) is at least
+   `YubiKeyLock.Timeout` (60 seconds): throw `YubiKeyDeviceException(OtpFailure.Busy, null, <text>)` with the text
+   ``Another tswap has been using the YubiKey or security key for 60 seconds, so this one stopped waiting. Try again
+   when it's done (if it is waiting for a touch or a PIN in another terminal, answer or cancel it there).``, and remember
+   it: every later take of this `YubiKeyLock` throws the same at once, without waiting or pausing (an unattended unlock
+   that tries several keys waits once, not once per key).
+3. Otherwise call the pause seam with `YubiKeyLock.PollInterval` (100 ms) and try again.
+
+On success after a wait, write ``The other tswap is done; going on (touch the key again if it flashes).`` before the
+call runs. A take that never waited writes nothing.
+- Ruling: print at the first held try, no grace period — why: a person whose key doesn't flash needs to know why at
+  once (B7.1), and stderr only costs a script nothing; a grace period would add a clock to the message for no gain.
+- Ruling: 60 s, one value for terminals and scripts, not configurable in v1 — why: longer than a touch-required
+  challenge can take (the key gives up on a touch after about 15 s) and enough for a person to type a PIN; a person who
+  doesn't want to wait presses Ctrl-C. The timeout is a failure, not a "go on anyway": going on is #301's takeover.
+  The type is `Busy` so `yubikey setup --replace`'s check (`YubiKeyCommand`, `case OtpFailure.Busy`) keeps the text.
+- **Ctrl-C while waiting** ends the process as before: the wait adds no signal handling, nothing is held yet, nothing
+  was sent to a key (`run` registers its signal handlers only after its unlock, `FilledFiles`). Ctrl-C while holding:
+  the kernel releases the lock.
+- **The process being waited for is never disturbed:** the waiter makes no device call at all, not even a listing or
+  the read-only probe, until it holds the lock.
+
+**In process.** One `SemaphoreSlim(1, 1)` per `YubiKeyLock`, tried with `Wait(0)` in the same loop before the file lock
+(so threads of one process, such as the broker's request handlers that unlock through `BrokerSecrets`, are
+serialised the same way, and two threads never open the same lock file twice: `flock` conflicts between two opens in
+one process). Ruling: never
+a blocking wait on it — why: the pause seam is the only wait, so the timeout and the test seams cover both levels.
+A take on a thread that already holds this lock throws `InvalidOperationException("The YubiKey lock is already held by
+this thread.")` (the decorators never nest; this catches a bug instead of deadlocking for 60 s). `internal bool
+HeldByThisThread` reports it for tests.
+
+**The API** (new, `TswapCore.Vault`):
+```csharp
+public sealed class YubiKeyLock(Func<string> lockPath, TextWriter notices, TimeProvider time,
+    DirectoryOwnerMatcher? owner = null, Action<TimeSpan>? pause = null) // owner null: DirectoryOwnerMatcher.Default; pause null: Thread.Sleep
+{
+    public const string FileName = "yubikey.lock";
+    public static readonly TimeSpan Timeout = TimeSpan.FromSeconds(60);
+    public static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(100);
+    public const string WaitingLine = "Waiting for another tswap to finish with the YubiKey or security key (it may be waiting for a touch or a PIN)...";
+    public const string GoingOnLine = "The other tswap is done; going on (touch the key again if it flashes).";
+    public const string TimeoutText = "Another tswap has been using the YubiKey or security key for 60 seconds, so this one stopped waiting. Try again when it's done (if it is waiting for a touch or a PIN in another terminal, answer or cancel it there).";
+    public static string Warning(string reason) => $"Warning: tswap couldn't take its YubiKey lock ({reason}), so another tswap using the key at the same time could disturb this one.";
+    public T Run<T>(Func<T> call);
+    public void Run(Action call);
+    internal bool HeldByThisThread { get; }
+}
+```
+
+**Composition (`CliHost`).** Three `internal static` helpers, so the wiring is testable without hardware:
+- `YubiKeyLock? HardwareLock(byte[]? testKey, Func<string, string?> getEnv, Func<string> lockPath, TextWriter notices,
+  TimeProvider time, DirectoryOwnerMatcher owner)`: a lock when `testKey` is null; in test mode null, unless (Debug
+  builds only, inside `#if DEBUG`) `getEnv("TSWAP_TEST_YUBIKEY_LOCK") == "1"`. Ruling: off in test mode by default —
+  why: test-mode runs through `CliHost` (the E2E suite, `SecureEnclaveOwnerScopeTests`, `VaultFreeCommandTests`) would
+  otherwise gain a `yubikey.lock` file in folders some tests compare file by file, and an owner switch that
+  `SecureEnclaveOwnerScopeTests` count; the variable lets this brief's E2E test opt in.
+- `IYubiKeyService YubiKeyService(byte[]? testKey, YubiKeyLock? hardwareLock, TextWriter? verbose,
+  Func<IYubiKeyService>? real = null)`: the inner is `TestKeyYubiKeyService` in test mode, else `real?.Invoke() ?? new
+  SdkYubiKeyService(verbose)`; wrapped in `LockedYubiKeyService` when `hardwareLock` is not null.
+- `IFido2Keys WithLock(IFido2Keys keys, YubiKeyLock? hardwareLock)`; `Fido2Service` gains a trailing optional
+  `YubiKeyLock? hardwareLock = null` and builds `new Fido2Service(WithLock(keys, hardwareLock), verbose)`.
+  `Fido2Keys` is unchanged (`CliHostFido2WiringTests` pins its types).
+- `Run` builds the lock with `() => Path.Combine(env.ConfigDir, YubiKeyLock.FileName)`, `console.Error`, its `time` and
+  `owner ?? DirectoryOwnerMatcher.Default` (the same matcher as the store), and passes it to both.
+
+**#301's second point: the raw SDK message.** A `MalformedYubiKeyResponseException` during a challenge, other than the
+status-report one (already `Busy`), is an answer cut short by another writer. New `OtpFailure.Interrupted` (added
+**last** in the enum, with a doc comment). `YubicoOtpKeys` gets `internal static OtpFailure ClassifyChallenge(Exception
+e)`: `Interrupted` for a `MalformedYubiKeyResponseException` that `Classify` maps to `Other`, else `Classify(e)`; only
+`Challenge`'s catch uses it. `Classify` and its theory stay as they are (its `MalformedYubiKeyResponseException("bad")
+→ Other` row is unchanged). `SdkYubiKeyService.Describe` gets an arm: ``<YubiKeyAccessTexts.Name(serial)>'s answer was
+cut short: another tswap or app used the key at the same time. Try again.`` (the owner's wording in #301; for serial
+40107596: `YubiKey 40107596's answer was cut short: another tswap or app used the key at the same time. Try again.`),
+kind `Interrupted`, the SDK's text dropped. With the lock this is left for a tswap that doesn't take it (an older one,
+another config folder) or another app. Ruling: challenge only — why: the session open's status read is already `Busy`,
+and programming failures carry their own kinds (`ProgramFailed` and the verify kinds); the FIDO2 "operation failed
+(type)" texts are T31's (FIDO2 messages), and with the lock tswap no longer produces them against itself.
+
+## Task 1: `YubiKeyLock`
+
+Files: `TswapCore/Vault/YubiKeyLock.cs` (new), `TswapTests/YubiKeyLockTests.cs` (new).
+
+Tests (`YubiKeyLockTests`; each uses a temp folder as the config folder; "held elsewhere" means the test holds the
+same path itself, with `UnixLockFile.TryTake` on Unix and a `FileShare.None` `FileStream` on Windows; the clock is a
+`BrokerManualClock`; the notice writer a `StringWriter`):
+- Free: `Run` runs the call once and returns its value; the notices are empty; afterwards the test takes the same path
+  at once (released).
+- Held elsewhere, released on the third pause (the pause seam counts and disposes the test's holder on call 3): the
+  call runs once, after the release (the call records that the test's holder was disposed); pauses == 3, each with
+  `PollInterval`; the notices are exactly `WaitingLine + NewLine + GoingOnLine + NewLine`.
+- Held past the timeout (the pause advances the clock by 30 s): `YubiKeyDeviceException` with `Kind == Busy`,
+  `Serial == null`, `Message == TimeoutText`; pauses == 2; the call never ran; the notices are `WaitingLine` once. A
+  second `Run` on the same instance throws the same at once: no further pause, no second `WaitingLine`, call not run.
+- The call throws: the same exception instance comes out, and the test then takes the path at once.
+- Config folder missing (`lockPath` inside a folder that doesn't exist): the call runs; notices empty; the folder
+  still doesn't exist. Then the test creates the folder and a second `Run` takes the file lock (the test can't take
+  the path while the call runs).
+- `lockPath` throws `TswapException("Cannot determine the config folder …")`: two `Run`s both run their calls; the
+  notices hold `Warning(<that message>)` exactly once. The same for a lock path that is a folder (Unix and Windows).
+- Under sudo (`[UnixFact]`): `new DirectoryOwnerMatcher(new FileOwnershipTests.FakeOwnership(privileged: true, euid: 0,
+  dirUid: 1000, dirGid: 1001))`: after `Run`, the fake's `Switches` holds `(<full lock path>, 1000, 1001)`, and inside the
+  call the fake's `Current` is null (the device call runs outside the switch).
+- Two threads, one `YubiKeyLock`: thread 1's call blocks on an event; thread 2's `Run` reaches its pause (the pause
+  seam sets an event, then waits for thread 1's call to end); thread 1 is released; both calls ran, never at once (an
+  `Interlocked` counter in the calls never exceeds 1); thread 2's notices show `WaitingLine` then `GoingOnLine`.
+- Two `YubiKeyLock` instances on one path (two "processes"; the file lock, not the gate): the second waits while the
+  first's call runs, then runs.
+- A nested `Run` inside a call on the same thread throws `InvalidOperationException` with the message above, and the
+  outer call's lock is still released afterwards (the test takes the path at once).
+- Break-it-once: make the held case run the call without waiting (return after the first try); the "released on the
+  third pause" test fails. Drop the "remember the timeout" flag; the second-`Run` assertion of the timeout test fails.
+
+## Task 2: the decorators, the wiring, and two tswaps at once
+
+Files: `TswapCore/Vault/LockedYubiKeyService.cs` (new), `TswapCore/Vault/Fido2/LockedFido2Keys.cs` (new),
+`TswapCli/CliHost.cs` (composition only: the three helpers and lines ~72-90 of `Run`; T31 may also touch this file:
+say so in the report if it has), `TswapTests/YubiKeyLockWiringTests.cs` (new), `TswapTests/YubiKeyLockEndToEndTests.cs`
+(new, `[Trait("Category", "E2E")]`, `IClassFixture<TswapBinaryFixture>`).
+
+Tests:
+- `LockedYubiKeyService` forwards every member: one row per member of `IYubiKeyService` (nine: `IsSimulated`,
+  `ListSerials`, `Challenge`, `DetectTouchRequirement`, `ChallengeReportingTouch`, `FindKeys`, `DescribeUnreachable`,
+  `GetSlot2State`, `ProgramSlot2`), each called through the decorator **cast to the interface** on a recording inner
+  service that implements all nine and returns a distinct value; assert the inner recorded exactly that member once,
+  with the lock's `HeldByThisThread` true (false for `IsSimulated`), and the decorator returned the inner's value. A
+  guard asserts by reflection that the rows name every method and property getter of `IYubiKeyService`, so a member
+  added later fails here.
+- `LockedFido2Keys` the same over `IFido2Keys` (`Find`, `MakeCredential`, `GetHmacSecret`, `FindHolder`, `SetPin` under
+  the lock; `CanList`, `OtherBrands` without), with the same reflection guard; and a `GetHmacSecret` whose inner calls
+  the PIN delegate: the delegate runs with the lock held (B7.2: the PIN prompt is inside the lock).
+- `CliHost.YubiKeyService(testKey: null, hardwareLock: <a lock>, verbose: null, real: () => recording)` is a
+  `LockedYubiKeyService` whose `ListSerials` reaches the recording service with the lock held;
+  `CliHost.YubiKeyService(new byte[32], null, null)` is a `TestKeyYubiKeyService`. `CliHost.WithLock(fake, lock)` is a
+  `LockedFido2Keys` over the fake; `WithLock(fake, null)` is the fake itself. `CliHost.HardwareLock`: not null for
+  `testKey: null`; null for a test key without the variable; not null with `TSWAP_TEST_YUBIKEY_LOCK=1`.
+- **Two `names` at once (B7.1's shape), in process.** A `FleetMachine` with `SimulatedYubiKeyService.WithKeys
+  (RecordVaultTestSupport.SerialA)` and `RecordVaultTestSupport.InitRecordVault`. An overlap-detecting test double
+  (in the test file) wraps `machine.Keys`: every member increments an active count on entry and decrements it on exit,
+  counting an overlap (and setting an `overlapped` event) when the count exceeds 1. Two contexts from
+  `machine.Context(console, ["names"]) with { YubiKeys = locked, Unlocker = new VaultUnlocker(locked) }`, each `locked`
+  a `LockedYubiKeyService` over the same double with its **own** `YubiKeyLock` on `<machine.Dir>/yubikey.lock` (two
+  processes); B's lock writes to an `ObservedLog` and its pause sets a `bWaiting` event, then waits for `aDone`. A runs
+  `CliRunner.Run` on the test thread; the double's first `Challenge` on A's thread starts B's `CliRunner.Run` on a new
+  thread and waits for `bWaiting` or `overlapped`. After A returns, the test sets `aDone` and joins B. Assert: both exit
+  0 and both stdouts list the vault's names; overlaps == 0; B's log holds `WaitingLine` then `GoingOnLine`;
+  `machine.Keys.Challenges` has one entry per command. Break-it-once: make `LockedYubiKeyService.ListSerials` call the
+  inner directly; B's listing overlaps A's challenge and the overlap assertion fails.
+- **A second process waits (E2E).** A temp folder as `TSWAP_CONFIG_DIR`; the test holds `<folder>/yubikey.lock`
+  (Unix `UnixLockFile.TryTake`, Windows `FileShare.None`), then starts the binary with `TSWAP_TEST_KEY`,
+  `TSWAP_CONFIG_DIR` and `TSWAP_TEST_YUBIKEY_LOCK=1` running `yubikey setup --no-touch --serial 1` (chosen because it
+  can never program a key in any build: after the locked `FindKeys` it refuses `YubiKey 1 is not plugged in.`). Read the
+  child's stderr line by line until the line equals `WaitingLine` (on a reader task, 30 s test timeout); assert the
+  child hasn't exited; release the lock; wait for exit. Assert exit 1, and stderr after the waiting line holds
+  `GoingOnLine` and then `YubiKey 1 is not plugged in.`. Break-it-once: make `CliHost.HardwareLock` return null; the
+  child exits at once with the refusal and no waiting line, and the test fails.
+
+## Task 3: the cut-short message, and the docs
+
+Files: `TswapCore/Vault/IOtpKeys.cs`, `TswapCore/Vault/YubicoOtpKeys.cs`, `TswapCore/Vault/SdkYubiKeyService.cs`,
+`TswapTests/SdkYubiKeyServiceTests.cs` (new tests only), `AGENTS.md`, `docs/setup.md`, `docs/commands.md` (the "Files"
+section only; T32 owns the `names` text there), `docs/security-model.md`, `docs/superpowers/fido2-owner-checks.md` (B7
+only; if T31 also changes B7.2's expected FIDO2 text, the later merge keeps both points).
+
+Tests (`SdkYubiKeyServiceTests`, new):
+- `ClassifyChallenge` over the existing `SdkExceptions` data: for each row, `Interrupted` when the exception is a
+  `MalformedYubiKeyResponseException` and the row's kind is `Other`, otherwise the row's kind (so the
+  status-report row stays `Busy`).
+- `ThrowingOtpKeys(9, new OtpKeysException(OtpFailure.Interrupted, 9, "Exception of type
+  'Yubico.YubiKey.MalformedYubiKeyResponseException' was thrown."))`: `ChallengeReportingTouch(9, "x")` throws a
+  `YubiKeyDeviceException` with `Kind == Interrupted` and exactly the message `YubiKey 9's answer was cut short: another
+  tswap or app used the key at the same time. Try again.` (so the SDK's text is gone).
+- Break-it-once: drop the `MalformedYubiKeyResponseException` case from `ClassifyChallenge`; the `"bad"` row fails.
+
+Docs:
+- `AGENTS.md`, after "YubiKey selection": a short paragraph, "Several tswap processes (brief T29)": the lock, where it
+  lives, per device call (the FIDO2 PIN prompt inside it), the two lines, the 60 s timeout, the warning when it can't be
+  taken, off in test mode unless `TSWAP_TEST_YUBIKEY_LOCK=1` (Debug only), and the in-process gate.
+- `docs/setup.md`, a new `### Several tswap commands at once` after "Several YubiKeys plugged in": a second command
+  waits (the line it prints, the second touch it may need), Ctrl-C to stop waiting, the 60 s limit, that `sudo` and the
+  user's own commands share the lock through the config folder (and that a different `TSWAP_CONFIG_DIR` doesn't), that
+  ykman, a browser or an older tswap don't take it, and that scripts no longer need their own `flock`.
+- `docs/commands.md` "Files": `yubikey.lock` in the config directory (empty; never synced; safe to delete when no tswap
+  runs).
+- `docs/security-model.md` "What tswap does not protect against": one row: the lock is a courtesy between tswap
+  processes, not a boundary: any process running as you can hold it (others then wait and time out), and a program that
+  doesn't take it (ykman, a browser, an older tswap) can still interrupt a command (then the cut-short or busy text).
+- `docs/superpowers/fido2-owner-checks.md` B7: 1. terminal 2 prints the waiting line and nothing else; touch the key
+  for terminal 1 (its `names` completes); terminal 2 prints the going-on line, the key flashes again, touch it, terminal
+  2's `names` completes. 2. terminal 2 prints the waiting line and no PIN prompt; once terminal 1 is done (PIN, touch),
+  terminal 2 asks for its PIN. Keep the old busy text as what an app other than tswap holding the key gives.
+
+## Out of scope
+
+Retrying when a key is busy with another program (ykman, a browser): retrying a challenge is how #301's takeover happens;
+the existing busy and probe texts stay. The FIDO2 failure texts (`Fido2Texts`, T31). A per-user lock shared across
+config folders (owner question below). A configurable timeout. #273's other point (the "YubiKey touch requirement
+unknown" banner under sudo): a separate issue. Removing the agent harness's `flock` (another repo; after a release).
+Release notes.
+
+## Owner questions (the rulings above stand unless answered otherwise)
+
+1. Lock scope: one lock per config folder (shared by `sudo` and the user's own commands; not by two different
+   `TSWAP_CONFIG_DIR`s of one user), or one per user in the run folder (`/run/user/<uid>/tswap`), which would also cover
+   two config folders but needs the run folder created as the user under sudo?
+2. The 60-second wait: right for both a person and an agent, and fixed (no variable) in v1?
