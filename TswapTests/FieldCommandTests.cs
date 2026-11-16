@@ -634,4 +634,22 @@ public sealed class FieldCommandTests : IDisposable
         Assert.Contains(file, error.Message);
         Assert.Contains("can't be read", error.Message);
     }
+
+    /// <summary>GLM final 1: <c>field set</c>'s kind/expires refusal shows the value on neither stream, and writes nothing.</summary>
+    [Theory]
+    [InlineData("kind")]
+    [InlineData("expires")]
+    public void FieldSet_FormatRefusal_DoesNotShowTheValue(string field)
+    {
+        const string pasted = "Xq7-pasted-secret-91";
+        _m.Ok(StoredValue, "ingest", "s");
+        var before = Bytes("s");
+
+        var (exit, stdout, stderr) = Field("set", "s", $"{field}={pasted}");
+
+        Assert.Equal(1, exit);
+        Assert.Contains($"Secret 's': Refused field '{field}': the value given is not", stderr);
+        Assert.DoesNotContain(pasted, stdout + stderr);
+        Assert.Equal(before, Bytes("s"));
+    }
 }

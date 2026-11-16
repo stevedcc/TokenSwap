@@ -426,4 +426,46 @@ public sealed class ValueCommandFieldsTests : IDisposable
         Assert.Equal(0, exit);
         Assert.Contains("Warning: the new value of 's' appears in other.note.", stderr);
     }
+
+    // ------------------------------------------------------------------ final wave
+
+    /// <summary>MiMo final 1: the value-in-a-field warning escapes the NAME.FIELD it names (a merged copy can carry any name).</summary>
+    [Fact]
+    public void ValueInAField_PlantedFieldName_Escaped()
+    {
+        const string NewValue = "new-value-0042";
+        Ok("other-value-0042", "ingest", "other");
+        var record = Record("other");
+        var who = new FieldWho("a1a1a1a1", "eve", Elevated: false, Terminal: false, By: null);
+        var changed = new Stamp(new Hlc(record.Version.Hlc.PhysicalMs + 1, 0), record.Version.Origin);
+        const string planted = "n\u202Eote\nx";
+        var path = RecordFile(_m, _key, "other");
+        File.WriteAllBytes(path, SecretRecordCodec.Encode(record with
+        {
+            Extensions = FieldsCodec.With(record.Extensions,
+                new FieldSet(record.Version, [new FieldEntry(planted, $"uses {NewValue}", false, changed, who, [])])),
+        }, _key));
+
+        var (exit, _, stderr) = Run(NewValue, "ingest", "s", "--field", "kind=token");
+
+        Assert.True(exit == 0, stderr);
+        Assert.Contains("Warning: the new value of 's' appears in other.nU+202EoteU+000Ax.", stderr);
+        Assert.DoesNotContain('\u202E', stderr);
+    }
+
+    /// <summary>GLM final 1: a kind/expires refusal of --field shows neither the value nor writes anything.</summary>
+    [Theory]
+    [InlineData("kind")]
+    [InlineData("expires")]
+    public void Field_FormatRefusal_DoesNotShowTheValue(string field)
+    {
+        const string pasted = "Xq7-pasted-secret-91";
+
+        var (exit, stdout, stderr) = Run("value-0042", "ingest", "s", "--field", $"{field}={pasted}");
+
+        Assert.Equal(1, exit);
+        Assert.Contains($"Refused field '{field}': the value given is not", stderr);
+        Assert.DoesNotContain(pasted, stdout + stderr);
+        Assert.False(Exists("s"));
+    }
 }

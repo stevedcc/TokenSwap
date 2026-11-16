@@ -183,7 +183,8 @@ internal sealed class ValueCommandFields : IDisposable
             return;
         // The view was read before this write: the fields it replaced are left out (the same-write check covered them).
         var replaced = _edits.Select(e => $"{_name}.{e.Name}").ToHashSet(StringComparer.Ordinal);
-        var found = FieldSecretCheck.FieldsContaining(_view, _newValue).Where(f => !replaced.Contains(f)).ToList();
+        // Escaped (MiMo final 1): a merged or imported copy can carry a field name no write accepts.
+        var found = FieldSecretCheck.FieldsContaining(_view, _newValue).Where(f => !replaced.Contains(f)).Select(FieldRules.Escape).ToList();
         if (found.Count > 0)
             ctx.Console.Error.WriteLine(
                 $"Warning: the new value of '{_name}' appears in {string.Join(", ", found)}. Fields are visible: " +

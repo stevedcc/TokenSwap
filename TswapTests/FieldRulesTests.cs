@@ -231,4 +231,47 @@ public sealed class FieldRulesTests
         Assert.NotNull(message);
         Assert.Contains("65536", message);
     }
+
+    // ------------------------------------------------------------------ final wave: Escape, the value subject, format refusals
+
+    /// <summary>Both final reviews: an astral character is one Unicode scalar, shown as one <c>U+XXXXX</c>, not two surrogates.</summary>
+    [Theory]
+    [InlineData("a\U0001F600b", "aU+1F600b")]
+    [InlineData("\U000F0000", "U+F0000")]
+    [InlineData("x\u202Ey\n", "xU+202EyU+000A")]
+    [InlineData("plain-ascii_1", "plain-ascii_1")]
+    public void Escape_PerScalar(string text, string escaped) => Assert.Equal(escaped, FieldRules.Escape(text));
+
+    /// <summary>A lone surrogate (not a scalar) is still shown by its code unit. Not as InlineData: xUnit mangles lone surrogates there.</summary>
+    [Fact]
+    public void Escape_LoneSurrogates_ShownByCodeUnit()
+    {
+        Assert.Equal("aU+D800b", FieldRules.Escape("a\uD800b"));
+        Assert.Equal("U+DC00U+D800", FieldRules.Escape("\uDC00\uD800"));
+    }
+
+    /// <summary>GLM final 1: a kind/expires refusal never shows the value given (it may be a secret pasted by mistake).</summary>
+    [Theory]
+    [InlineData("kind", "Refused field 'kind': the value given is not a known kind (use one of password,")]
+    [InlineData("expires", "Refused field 'expires': the value given is not a date; use YYYY-MM-DD")]
+    public void Validate_FormatRefusal_DoesNotShowTheValue(string name, string message)
+    {
+        const string value = "Xq7-pasted-secret-91";
+
+        var refusal = FieldRules.Validate(name, value);
+
+        Assert.NotNull(refusal);
+        Assert.StartsWith(message, refusal);
+        Assert.DoesNotContain(value, refusal);
+    }
+
+    /// <summary>MiMo final 2 / GLM final 2: the subject names what is checked, a field value or a <c>--by</c> label.</summary>
+    [Fact]
+    public void ValidateValue_Subject_NamesALabel()
+    {
+        Assert.Equal("The value contains U+001B (a control character); a field holds no control, format, surrogate or " +
+            "private-use characters other than a line feed.", FieldRules.ValidateValue("a\u001bb"));
+        Assert.Equal("The label contains U+001B (a control character); a label holds no control, format, surrogate or " +
+            "private-use characters other than a line feed.", FieldRules.ValidateValue("a\u001bb", FieldRules.ValueSubject.Label));
+    }
 }

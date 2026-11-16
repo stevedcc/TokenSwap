@@ -39,27 +39,32 @@ public static partial class FieldRules
     public static string NormaliseValue(string value) =>
         FindLoneSurrogate(value) is null ? value.Normalize(NormalizationForm.FormC) : value;
 
+    /// <summary>What <see cref="ValidateValue"/> checks, for its message: a field value, or a <c>--by</c> label.</summary>
+    public enum ValueSubject { Field, Label }
+
     /// <summary>
-    /// The character rules and the length cap for a value (also a <c>--by</c> label), after
-    /// <see cref="NormaliseValue"/>: line feeds are allowed, every other control (Cc), format (Cf),
-    /// surrogate (Cs) or private-use (Co) character is refused, naming its code point.
+    /// The character rules and the length cap for a value (also a <c>--by</c> label, <paramref name="subject"/>
+    /// <see cref="ValueSubject.Label"/>: the message then names a label; the caller checks the label's own,
+    /// shorter cap first), after <see cref="NormaliseValue"/>: line feeds are allowed, every other control (Cc),
+    /// format (Cf), surrogate (Cs) or private-use (Co) character is refused, naming its code point.
     /// </summary>
-    public static string? ValidateValue(string value)
+    public static string? ValidateValue(string value, ValueSubject subject = ValueSubject.Field)
     {
+        var (noun, holder) = subject == ValueSubject.Label ? ("label", "a label") : ("value", "a field");
         // A lone surrogate anywhere is named first: such a value can't be normalised.
         if (FindLoneSurrogate(value) is { } lone)
-            return Refusal(new Refused(CodePoint(lone), "a lone surrogate"));
+            return Refusal(new Refused(CodePoint(lone), "a lone surrogate"), noun, holder);
         var normalised = NormaliseValue(value);
         if (FindRefused(normalised) is { } refused)
-            return Refusal(refused);
+            return Refusal(refused, noun, holder);
         var length = CountScalars(normalised);
         if (length > MaxValueLength)
-            return $"The value has {length} characters; a field holds at most {MaxValueLength}.";
+            return $"The {noun} has {length} characters; {holder} holds at most {MaxValueLength}.";
         return null;
     }
 
-    private static string Refusal(Refused refused) =>
-        $"The value contains {refused.CodePoint} ({refused.Kind}); a field holds no control, format, " +
+    private static string Refusal(Refused refused, string noun, string holder) =>
+        $"The {noun} contains {refused.CodePoint} ({refused.Kind}); {holder} holds no control, format, " +
         "surrogate or private-use characters other than a line feed.";
 
     /// <summary>The name rules alone (for a removal, which has no value): null when allowed, otherwise the refusal.</summary>
@@ -70,10 +75,10 @@ public static partial class FieldRules
 
     /// <summary>
     /// The name rules, then <see cref="ValidateValue"/>, then the format of a well-known field
-    /// (<c>kind</c>, <c>expires</c>); the message names the field. A format refusal shows the value
-    /// (escaped), or with <paramref name="valueOf"/> says "the value of 'valueOf'" instead: <c>field adopt</c>
-    /// passes the secret it adopts from, whose value a refusal must not show (the secret stays a secret).
-    /// The character and length refusals never show the value, only a code point or a count.
+    /// (<c>kind</c>, <c>expires</c>); the message names the field. No refusal shows the value: a format
+    /// refusal says "the value given" (it may be a secret pasted by mistake; GLM final 1), or with
+    /// <paramref name="valueOf"/> "the value of 'valueOf'": <c>field adopt</c> passes the secret it adopts
+    /// from. The character and length refusals name only a code point or a count.
     /// </summary>
     public static string? Validate(string name, string value, string? valueOf = null)
     {
@@ -83,7 +88,7 @@ public static partial class FieldRules
             return $"Refused field '{name}': {refusal}";
 
         var normalised = NormaliseValue(value);
-        var shown = valueOf is null ? $"'{Escape(normalised)}'" : $"the value of '{valueOf}'";
+        var shown = valueOf is null ? "the value given" : $"the value of '{valueOf}'";
         return name switch
         {
             "kind" when !KnownKinds.Contains(normalised, StringComparer.Ordinal) =>
@@ -171,12 +176,23 @@ public static partial class FieldRules
         return count;
     }
 
-    /// <summary>A name or value for a message: anything outside printable ASCII as <c>U+XXXX</c>.</summary>
+    /// <summary>
+    /// A name or value for a message: anything outside printable ASCII as <c>U+XXXX</c>, one per Unicode scalar
+    /// (an astral character is one <c>U+XXXXX</c>); a lone surrogate by its code unit.
+    /// </summary>
     public static string Escape(string text)
     {
         var builder = new StringBuilder(text.Length);
-        foreach (var c in text)
-            builder.Append(c is >= ' ' and <= '~' ? c.ToString() : CodePoint(c));
+        for (var i = 0; i < text.Length; i++)
+        {
+            var c = text[i];
+            if (c is >= ' ' and <= '~')
+                builder.Append(c);
+            else if (char.IsHighSurrogate(c) && i + 1 < text.Length && char.IsLowSurrogate(text[i + 1]))
+                builder.Append(CodePoint(char.ConvertToUtf32(c, text[++i])));
+            else
+                builder.Append(CodePoint(c));
+        }
         return builder.ToString();
     }
 }

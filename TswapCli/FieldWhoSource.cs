@@ -29,12 +29,13 @@ public static class FieldWhoSource
     private static string ValidateBy(string by)
     {
         var label = FieldRules.NormaliseValue(by);
-        if (FieldRules.ValidateValue(label) is { } refusal)
-            throw new TswapException("--by: " + refusal.Replace("The value", "The label").Replace("a field holds", "a label holds"));
-        if (label.Contains('\n'))
-            throw new TswapException("--by: a label is one line (it contains a line feed).");
+        // The label's own cap first: the value rules' cap (4096) is a field's.
         if (label.EnumerateRunes().Count() > MaxByLength)
             throw new TswapException($"--by: a label is at most {MaxByLength} characters.");
+        if (FieldRules.ValidateValue(label, FieldRules.ValueSubject.Label) is { } refusal)
+            throw new TswapException("--by: " + refusal);
+        if (label.Contains('\n'))
+            throw new TswapException("--by: a label is one line (it contains a line feed).");
         return label;
     }
 

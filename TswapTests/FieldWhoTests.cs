@@ -174,4 +174,13 @@ public sealed class FieldWhoTests : IDisposable
         Assert.Contains("--by", ex.Message);
         Assert.Contains("64", ex.Message);
     }
+
+    /// <summary>MiMo final 2 / GLM final 2: a label over 4096 characters is refused by the label's own cap (64), not a field's.</summary>
+    [Fact]
+    public void Who_ByLabel_OverTheFieldCap_NamesTheLabelCap()
+    {
+        var ex = Assert.Throws<TswapException>(() => FieldWhoSource.Current(Context(terminal: false, user: "alice"), new string('b', 5000)));
+
+        Assert.Equal("--by: a label is at most 64 characters.", ex.Message);
+    }
 }
