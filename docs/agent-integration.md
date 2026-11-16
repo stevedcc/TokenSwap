@@ -21,7 +21,7 @@ a secret value:
 |---------|---------|------|
 | `create <name> [length]` | Generate random secret; name max 64 chars, value length 1–4096, default 32 | None — value is never displayed |
 | `ingest <name>` | Import secret from stdin pipe; name max 64 chars, value up to 64 KB | None — agent constructs the pipeline but never sees the value |
-| `names` | List secret names | Reveals what secrets exist (names only) |
+| `names` | List secret names, all or those matching a pattern | Reveals what secrets exist (names only) |
 | `run <cmd>` | Use secrets via `{{token}}`, a file with `# tswap:` markers via `{{@file}}`, or an environment variable via `--env NAME={{name}}` ([`run --env`](commands.md#run---env)) | Secrets passed to subprocess; exfiltration blocklist applies, and with `{{@file}}` printers, encoders, copiers, shells and interpreters are refused too ([limits](security-model.md#files-with-secrets-run-with-file)) |
 | `burn <name> [reason]` | Mark secret as compromised | None — write-only operation |
 | `burned` | List burned secrets | Reveals names + burn metadata |

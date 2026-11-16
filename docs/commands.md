@@ -293,10 +293,10 @@ Replace a secret with a new random value (no display); sudo unless it is burned;
 ### names
 
 ```
-tswap names [--json]
+tswap names [<pattern>...] [--json]
 ```
 
-List secret names (no values)
+List secret names (no values); with patterns, only the names matching one of them (\* any characters, ? one character, case ignored; quote them; a pattern can't start with '-', which tswap reads as an option: write '?-...' or '\*-...' for such names)
 
 ### slots
 

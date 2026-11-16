@@ -410,7 +410,7 @@ public sealed class InitCommand : ICliCommand
         c.Out.WriteLine("╚════════════════════════════════════════╝\n");
         c.Out.WriteLine("This vault's master key (K_v) is random and wrapped by one security key's FIDO2 slot");
         c.Out.WriteLine("(k = 1): every unlock asks for the key's FIDO2 PIN and a touch. Add more keys later,");
-        c.Out.WriteLine($"each as its own slot that opens the vault alone: sudo {ctx.Prefix} slot add --fido2\n");
+        c.Out.WriteLine($"each as its own slot that opens the vault alone: {ctx.Prefix} slot add --fido2 (with sudo, or from an elevated prompt on Windows)\n");
 
         using var password = NewVaultPassword(ctx, passwordFlag, HardwareBackend.YubiKey);
         var key = Fido2SlotEnrollment.ChooseKey(ctx, serial);
@@ -436,7 +436,7 @@ public sealed class InitCommand : ICliCommand
                 CryptographicOperations.ZeroMemory(vaultKey);
             }
 
-            var name = fido2.KeyName(blob);
+            var name = Fido2SlotEnrollment.EnrolledName(fido2, key, blob);
             c.Out.WriteLine("\n╔════════════════════════════════════════╗");
             c.Out.WriteLine("║  ✓ INITIALIZATION COMPLETE            ║");
             c.Out.WriteLine("╚════════════════════════════════════════╝\n");

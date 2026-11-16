@@ -84,7 +84,7 @@ public sealed class RecoverCommand : ICliCommand
         {
             // Brief T17 ruling 15: the vault's password (checked with K_v), or the first one (asked twice).
             password = VaultPasswordChoice.Resolve(ctx, passwordFlag, hardware ?? HardwareBackend.YubiKey,
-                ctx.Storage as RecordVaultStore, vaultKey, keyring.VaultId, "recover");
+                ctx.Storage as RecordVaultStore, vaultKey, keyring, "recover");
             if (enrollment is null)
             {
                 c.Out.WriteLine("Recovery key accepted. Enrolling a YubiKey as a new slot.");

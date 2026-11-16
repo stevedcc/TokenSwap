@@ -1086,7 +1086,7 @@ public sealed partial class SlotCommand : ICliCommand
         {
             // Brief T17 ruling 15: a later password slot is checked against the verifier with K_v.
             password = VaultPasswordChoice.Resolve(ctx, passwordFlag, HardwareBackend.YubiKey, ctx.Storage as RecordVaultStore,
-                vaultKey, keyring.VaultId, "slot add --yubikey");
+                vaultKey, keyring, "slot add --yubikey");
             var chosen = YubiKeySlotEnrollment.ChooseEligibleSerial(ctx, enrolled);
             (newSlot, blob) = YubiKeySlotEnrollment.EnrollAsSlot(ctx, chosen, vaultKey, keyring, password?.Stretched);
         }
@@ -1136,7 +1136,7 @@ public sealed partial class SlotCommand : ICliCommand
         try
         {
             password = VaultPasswordChoice.Resolve(ctx, passwordFlag, HardwareBackend.YubiKey, ctx.Storage as RecordVaultStore,
-                vaultKey, keyring.VaultId, "slot add --fido2");
+                vaultKey, keyring, "slot add --fido2");
             key = key is null ? Fido2SlotEnrollment.PickKey(ctx, serial) : Fido2SlotEnrollment.EnsurePin(ctx, key);
             (newSlot, blob) = Fido2SlotEnrollment.EnrollAsSlot(ctx, key, vaultKey, keyring, password?.Stretched);
         }
@@ -1148,7 +1148,7 @@ public sealed partial class SlotCommand : ICliCommand
 
         var extended = SaveWithNewSlot(ctx, config, keyring, newSlot, password);
 
-        var name = fido2.KeyName(blob);
+        var name = Fido2SlotEnrollment.EnrolledName(fido2, key, blob);
         c.Out.WriteLine($"\n✓ {name} added as a FIDO2 slot — it now opens this vault alone, with its PIN and a touch.");
         if (password is not null)
             c.Out.WriteLine("It needs the vault password (or a running 'tswap agent') for every unlock.");
@@ -1482,6 +1482,11 @@ public sealed partial class SlotCommand : ICliCommand
             // look dead), whatever the new slot gets.
             if (keySlotNeedsPassword && file is null)
                 throw new VaultPasswordUnavailableException(VaultPasswordMessages.MissingFile);
+            // Brief T32 (#320): only the new slot was to get the password, but other slots need the missing file: a
+            // freshly salted one would lock them out. Refused before the recovery key, any password prompt and the
+            // liveness challenges; --no-password still re-enrols.
+            if (newSlotPassword)
+                VaultPasswordChoice.RefuseFirstPasswordWithoutFile(file, keyring);
             // Fix round (controller ruling): with --recovery-key-stdin, stdin carries the recovery key on its first
             // line and, when needed, the vault password on the next, as a first enrolment reads them.
             if (withRecoveryKey)

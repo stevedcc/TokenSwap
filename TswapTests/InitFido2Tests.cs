@@ -94,6 +94,38 @@ public class InitFido2Tests : IDisposable
         Assert.Contains("  tswap slot add --fido2 (with sudo, or from an elevated prompt on Windows)", stdout);
     }
 
+    // ---- Brief T31: the header on every OS (#294.2), one name per enrolled key (#294.3 comment)
+
+    [Fact]
+    public void InitFido2_Header_SaysSudoOrAnElevatedPrompt()
+    {
+        _fido2.AddKey(SerialA, Fido2TestSlots.Aaguid);
+        _terminal = new FakeTerminal(Pin, Pin);
+
+        var (exit, stdout, stderr) = Run(Dir(), "", "init", "--fido2");
+
+        Assert.True(exit == 0, stderr);
+        Assert.Contains("each as its own slot that opens the vault alone: tswap slot add --fido2 (with sudo, or from an elevated prompt on Windows)", stdout);
+        Assert.DoesNotContain("alone: sudo tswap", stdout);
+    }
+
+    [Fact]
+    public void InitFido2_OtherBrand_NamedByItsProductThroughout()
+    {
+        const string product = "TOKEN2 FIDO2 Security Key(0024)";
+        var token2 = _fido2.AddKey(null, Guid.Parse("eabb46cc-e241-80bf-ae9e-96fa6d2975cf"));
+        token2.Product = product;
+        _terminal = new FakeTerminal(Pin, Pin);
+
+        var (exit, stdout, stderr) = Run(Dir(), "", "init", "--fido2", "--no-recovery", "--no-password");
+
+        Assert.True(exit == 0, stderr);
+        Assert.Contains($"FIDO2 key:      {product}", stdout);
+        Assert.Contains(Fido2SlotEnrollment.ResetWarning(product), stdout);
+        Assert.Contains($"losing {product} and every key added later", stdout);
+        Assert.DoesNotContain("the security key this slot was made with", stdout + stderr);
+    }
+
     [Fact]
     public void InitFido2_NoRecovery_OneSlot()
     {

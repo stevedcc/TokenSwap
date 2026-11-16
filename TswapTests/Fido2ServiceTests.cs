@@ -677,17 +677,146 @@ public class Fido2ServiceTests
         Assert.Equal("Windows' WebAuthn API on this machine is too old for FIDO2 slots (version 3; needs 4).", error.Message);
     }
 
+    // Brief T31 (#289) changed this message (sanctioned): an OpenFailed key is one tswap couldn't talk to.
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public void OpenFailed_OnLinux_AddsTheNoAccessLine(bool linux)
+    public void OpenFailed_SaysWaitAndOnLinuxWhoCanOpenIt(bool linux)
     {
         _keys.FailNext(FakeFido2Op.Find, Fido2Failure.Other, detail: "OpenFailed:FIDO_ERR_INTERNAL");
 
         var error = Assert.Throws<Fido2Exception>(() => new Fido2Service(_keys, linux: linux).ListKeys());
 
-        var plain = Fido2Texts.Other(Fido2Texts.AnyKey, "OpenFailed:FIDO_ERR_INTERNAL");
-        Assert.Equal(linux ? plain + " " + Fido2Texts.NoDeviceAccess : plain, error.Message);
+        Assert.Equal(Fido2Texts.CouldNotTalk(Fido2Texts.AnyKey, "OpenFailed:FIDO_ERR_INTERNAL", linux), error.Message);
+    }
+
+    // ---- Brief T31: #289, a key tswap couldn't reach; #290.1, no PIN prompt for a key that can't take one ----
+
+    [Theory]
+    [InlineData("HidrawFailed", true)]
+    [InlineData("HidrawFailed", false)]
+    [InlineData("HidOpenFailed", true)]
+    [InlineData("HidOpenFailed", false)]
+    [InlineData("FIDO_ERR_TX", true)]
+    [InlineData("FIDO_ERR_TX", false)]
+    [InlineData("FIDO_ERR_RX", true)]
+    [InlineData("FIDO_ERR_RX", false)]
+    [InlineData("OpenFailed:FIDO_ERR_INTERNAL", true)]
+    [InlineData("OpenFailed:FIDO_ERR_INTERNAL", false)]
+    public void Open_KeyCouldNotBeReached_SaysWaitAndTryAgain(string detail, bool linux)
+    {
+        var key = _keys.AddKey(Serial, Yubico5Nfc);
+        var blob = SlotOn(key);
+        _keys.FailNext(FakeFido2Op.GetHmacSecret, Fido2Failure.Other, detail: detail, afterPin: true);
+
+        var error = Assert.Throws<Fido2Exception>(() =>
+            new Fido2Service(_keys, linux: linux).Open([blob], FakeFido2Keys.Info(key), Typing()));
+
+        Assert.Equal(Fido2Failure.Other, error.Kind);
+        Assert.Equal(Fido2Texts.CouldNotTalk("YubiKey 33060005", detail, linux), error.Message);
+        if (detail == "HidrawFailed" && linux)
+            Assert.Equal(
+                "YubiKey 33060005: tswap couldn't talk to the key (HidrawFailed). If it was just plugged in, wait a second and run the command again. If that keeps failing: Linux lets only the user logged in at the machine open a security key (not over SSH); see docs/install.md.",
+                error.Message);
+        if (!linux)
+            Assert.Equal(
+                $"YubiKey 33060005: tswap couldn't talk to the key ({detail}). If it was just plugged in, wait a second and run the command again.",
+                error.Message);
+    }
+
+    [Fact]
+    public void Open_OtherDeviceDetail_KeepsTheGenericText()
+    {
+        var key = _keys.AddKey(Serial, Yubico5Nfc);
+        var blob = SlotOn(key);
+        _keys.FailNext(FakeFido2Op.GetHmacSecret, Fido2Failure.Other, detail: "CtapHidError0x7F", afterPin: true);
+
+        var error = Assert.Throws<Fido2Exception>(() =>
+            new Fido2Service(_keys, linux: true).Open([blob], FakeFido2Keys.Info(key), Typing()));
+
+        Assert.Equal(Fido2Texts.Other("YubiKey 33060005", "CtapHidError0x7F"), error.Message);
+        Assert.Equal("YubiKey 33060005: the FIDO2 operation failed (CtapHidError0x7F).", error.Message);
+    }
+
+    // FakeFido2Keys.Verify refuses a blocked or re-insert key before it asks for the PIN (the SDK path takes the PIN
+    // first, which is how the bug reached the owner), so the outcome that counts is that the key is never called.
+    [Fact]
+    public void Open_PinBlocked_RefusedBeforeThePin()
+    {
+        var key = _keys.AddKey(Serial, Yubico5Nfc, retries: 0);
+        var blob = SlotOn(key);
+
+        var error = Assert.Throws<Fido2Exception>(() => Service.Open([blob], FakeFido2Keys.Info(key), Typing()));
+
+        Assert.Equal(Fido2Failure.PinBlocked, error.Kind);
+        Assert.Equal(
+            "YubiKey 33060005: its FIDO2 PIN is blocked (8 wrong PINs). Only a FIDO2 reset unblocks it, and a reset deletes every FIDO2 credential on the key: its FIDO2 slots in this and any other vault, and every passkey or security-key login it holds. tswap never resets a key. Open the vault another way; after a reset, enrol the key again with `tswap slot add --fido2`.",
+            error.Message);
+        Assert.Empty(_requests);
+        Assert.DoesNotContain(_keys.Calls, c => c.Op == FakeFido2Op.GetHmacSecret);
+    }
+
+    [Fact]
+    public void Open_ReinsertRequired_RefusedBeforeThePin()
+    {
+        var key = _keys.AddKey(Serial, Yubico5Nfc, retries: 5);
+        key.WrongInARow = 3;
+        var blob = SlotOn(key);
+
+        var error = Assert.Throws<Fido2Exception>(() => Service.Open([blob], FakeFido2Keys.Info(key), Typing()));
+
+        Assert.Equal(Fido2Failure.PinNeedsReinsert, error.Kind);
+        Assert.Equal(5, error.RetriesLeft);
+        Assert.Equal(
+            "YubiKey 33060005: three wrong FIDO2 PINs in a row. Unplug the key and plug it in again before the next try; 5 tries left before this key's FIDO2 is blocked (a key allows 8 wrong PINs in all).",
+            error.Message);
+        Assert.Empty(_requests);
+        Assert.DoesNotContain(_keys.Calls, c => c.Op == FakeFido2Op.GetHmacSecret);
+    }
+
+    /// <summary>libfido2 reports no power-cycle state: such a key is asked as before, and the key refuses it.</summary>
+    [Fact]
+    public void Open_ReinsertNotReported_AsksAsBefore()
+    {
+        var key = _keys.AddKey(Serial, Yubico5Nfc, retries: 5);
+        key.WrongInARow = 3;
+        var blob = SlotOn(key);
+
+        var error = Assert.Throws<Fido2Exception>(() =>
+            Service.Open([blob], FakeFido2Keys.Info(key) with { ReinsertRequired = null }, Typing()));
+
+        Assert.Single(_keys.Calls, c => c.Op == FakeFido2Op.GetHmacSecret);
+        Assert.Equal(Fido2Failure.PinNeedsReinsert, error.Kind);
+        Assert.Equal(Fido2Texts.PinNeedsReinsert("YubiKey 33060005", 5), error.Message);
+    }
+
+    [Fact]
+    public void Enrol_PinBlocked_RefusedBeforeThePin()
+    {
+        var key = _keys.AddKey(Serial, Yubico5Nfc, retries: 0);
+        var existing = SlotOn(_keys.AddKey(OtherSerial, Yubico5Nfc));
+
+        var error = Assert.Throws<Fido2Exception>(() => Service.Enrol(FakeFido2Keys.Info(key), false, [existing], Typing()));
+
+        Assert.Equal(Fido2Failure.PinBlocked, error.Kind);
+        Assert.Equal(Fido2Texts.PinBlocked("YubiKey 33060005"), error.Message);
+        Assert.Empty(_requests);
+        Assert.DoesNotContain(_keys.Calls, c => c.Op is FakeFido2Op.FindHolder or FakeFido2Op.MakeCredential);
+    }
+
+    [Fact]
+    public void Enrol_ReinsertRequired_RefusedBeforeThePin()
+    {
+        var key = _keys.AddKey(Serial, Yubico5Nfc, retries: 5);
+        key.WrongInARow = 3;
+        var existing = SlotOn(_keys.AddKey(OtherSerial, Yubico5Nfc));
+
+        var error = Assert.Throws<Fido2Exception>(() => Service.Enrol(FakeFido2Keys.Info(key), false, [existing], Typing()));
+
+        Assert.Equal(Fido2Failure.PinNeedsReinsert, error.Kind);
+        Assert.Equal(Fido2Texts.PinNeedsReinsert("YubiKey 33060005", 5), error.Message);
+        Assert.Empty(_requests);
+        Assert.DoesNotContain(_keys.Calls, c => c.Op is FakeFido2Op.FindHolder or FakeFido2Op.MakeCredential);
     }
 
     private sealed class AskingTwiceKeys : IFido2Keys
