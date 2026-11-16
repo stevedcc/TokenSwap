@@ -21,10 +21,18 @@ commit message and list those tests in the report. Known ones, all sanctioned th
 `Usage: tswap slot enroll ...` text), and the `SlotEnrollTests` message assertions that quote the command
 (`slot enroll needs a terminal here...`, `'tswap slot enroll ... --fresh'`, `Running 'slot enroll' again...`). Any other
 changed assertion must be a printed string whose only change is a respelling; anything else is not sanctioned.
+Also sanctioned:
+- every test invocation of the command (`SlotEnrollTests`' `Enroll`/`EnrollOnTerminal` helpers, which pass
+  `["slot", "enroll", ...]`, and its direct calls) renames with it, apart from the synonym test;
+- the simulated hardware seam's call name: `SimulatedHardwareService` reports `nameof(Enroll)` to its `CallObserver`,
+  so renaming `Enroll` changes the observed `"Enroll"` to `"Enrol"` in `SecureEnclaveOwnerScopeTests` (lines 174, 186,
+  199, 234 and 481 at bdda149) and `GuidedInitTests` (line 785). `"Unlock"` is unaffected.
+List all of these in the report.
 
 **Review history.** Round 1 (MiMo): C1 (the guard scanned its own allowlist and word list), I1 (the
 confirmation check covered JSON members only), I2 (`docs/commands.md` is only partly generated), I3 (gaps in the
-word list), M1-M5. All folded in. GLM's round-1 session ended without a review.
+word list), M1-M5. All folded in. GLM's round-1 session ended without a review. Round 2 (GLM): I1 (the seam's
+call-name assertions were not sanctioned) and M1-M8, all folded in.
 
 **Parallel briefs.** None: T33 runs last, alone, because it touches most files.
 
@@ -57,7 +65,9 @@ What stays:
   `TswapTests/Docs/old-*-anchors.txt`, keeps working. When its heading is respelt, put `<a id="<old-anchor>"></a>`
   right before the heading (an inline redirect; `DocLinkTests` accepts it). Those old ids, and the entries in the
   `old-*-anchors.txt` lists, are names released links own: they go in the allowlist with the reason
-  "released anchor".
+  "released anchor". Check every heading you respell against v0.3.0, not only the listed anchors. For example,
+  `docs/design/refactoring-plan.md#where-shamir-does-earn-its-complexity-the-enrollment-authority` is in no list but
+  was released.
 - **On-disk and wire formats, and tswap's own interface names:** the controller and the brief reviewer found no
   JSON member, environment variable, flag, file or folder name spelt `enroll`. The enrolment folders are already
   `enrol/` and `enrol-staged/`, and the carried files are `request.json`, `approve.json` and `receipt.json`. The
@@ -77,7 +87,7 @@ What stays:
 - it lists the repository's tracked files with `git ls-files`, the way the docs tests find files (reuse their helper
   if one exists);
 - it reads the text files (`.cs`, `.md`, `.sh`, `.ps1`, `.yml`, `.yaml`, `.json`, `.json5`, `.txt`, `.te`, `.fc`,
-  `.service`, `.socket`, `.xml`, `.csproj`, `.slnx`, `.c`, `.h`, `.swift`, and files with no extension, where a
+  `.service`, `.socket`, `.xml`, `.csproj`, `.slnx`, `.c`, `.h`, `.swift`, `.py`, `.cil`, `.html`, and files with no extension, where a
   name starting with `.`, such as `.gitignore`, counts as having no extension), with line endings normalised to `\n`
   (read through `MarkdownLinks`' reader if it does this, so a CRLF checkout on Windows matches the same lines);
 - it skips `docs/briefs/`, `docs/superpowers/`, `docs/release-notes/` and the allowlist file itself
@@ -91,7 +101,7 @@ What stays:
   A second test, `UsSpellingAllowlist_HasNoStaleEntries`, fails on an entry that matches no line any more.
 
 Run it before the sweep and record the red count in the report: about 1,000 hits, the controller's rough count on
-main at bdda149.
+main at bdda149: about 700 hit lines in scope (about 1,000 counting the skipped record folders).
 
 A respelt British identifier whose next word starts with `L` (`EnrolList`, `enrolLookup`) still matches the regex.
 Don't respell it back to a US form. Choose another name or allowlist it with the reason "British spelling, camelCase
@@ -100,14 +110,17 @@ word break".
 **The command word.** `slot enroll` was added after v0.3.0 (T27, unreleased), so it is renamed outright to
 `slot enrol`: usage, `Forms`, `Description`, `Prompt.cs`, the docs and the hints that name it. Keep `enroll` as a
 synonym that runs the same command, so someone typing the US form isn't refused. It is not shown in help,
-`docs/commands.md` or the prompt. Its one literal in the dispatch, and the test that pins it, are the allowlist's
-only expected entries. Tests, written first:
+`docs/commands.md` or the prompt. For the command word, its one literal in the dispatch and the test that pins it
+are the only allowlist entries. Other entries are expected too: released anchors, external names such as
+`ykpersonalize`, quoted tool errors (for example `Tpm2ArgvTests.cs`), Apple's `customize="never"` in
+`contrib/packaging/macos/distribution.xml`, and camelCase breaks. Tests, written first:
 - `SlotEnrol_UsSpelling_RunsTheSameCommand`: `slot enroll --via <user@host> --batch ...` behaves as `slot enrol`
   does. Reuse `SlotEnrollTests`' harness (renamed `SlotEnrolTests`), assert the same outcome as the existing batch
   happy-path test, and leave the host's vault with the new slot merged.
 - `SlotHelp_NamesOnlyEnrol`: `tswap slot` usage and `tswap help slot` contain `slot enrol`, and no match of the
   guard's regex (so `enrolled` and `enrolling` may appear there).
-- Break-it-once: delete the synonym arm, and `SlotEnrol_UsSpelling_RunsTheSameCommand` must fail.
+- Break-it-once: delete the synonym arm, and `SlotEnrol_UsSpelling_RunsTheSameCommand` must fail. Put
+  `slot enroll` back into `Forms`, and `SlotHelp_NamesOnlyEnrol` must fail.
 
 **The sweep.** Rename and re-spell everything the guard finds, outside the "What stays" list. Regenerate
 `docs/commands.md` the way `CommandReferenceTests` says. Check anchors: a heading respelt from `...enrollment...`
@@ -132,10 +145,13 @@ says that `-ize` is also a valid British (Oxford) spelling, and that the owner c
 - the `-ize` family of `recogn`, `organ`, `author`, `final`, `normal`, `initial`, `summar`, `minim`, `maxim`,
   `custom`, `priorit`, `synchron`, `optim`, `serial`, `deserial`, `sanit`, `material`, `util`, `real`, `standard`,
   `special`, `general`, `local`, `visual`, `emphas`, `random`, `canonical`, `token`, `stabil`, `categor`,
-  `character`, `modern`, `item`, `memor`, `legitim`, `penal`, `apolog`, `digit`: each stem followed by `ize`, `izes`, `ized`, `izing`, `ization`,
+  `character`, `modern`, `item`, `memor`, `legitim`, `penal`, `apolog`, `digit`, `notar`, `personal`, `unrecogn`,
+  `reinitial`, `parallel`: each stem followed by `ize`, `izes`, `ized`, `izing`, `ization`,
   `izations`, `izer`, `izers`. Plus `analyze`, `analyzes`, `analyzed`, `analyzing`, `analyzer`, `analyzers`.
 
-The British forms are `-our`, `centre`, `grey`, `cancelled/cancelling`, `-ise/-isation/-iser` and `analyse/-yser`.
+Lowercase hits in tswap's own code are respelt like prose. That includes identifiers such as a `color` parameter
+across `IConsole` and its implementations, or `sanitized` and `normalized` locals. tswap's own PascalCase identifiers
+are out of Task 2's reach and stay as they are. The British forms are `-our`, `centre`, `grey`, `cancelled/cancelling`, `-ise/-isation/-iser` and `analyse/-yser`.
 Before the sweep, run a catch-all once, `\b[a-z]+iz(e|es|ed|ing|ation|ations|er|ers)\b` over the same files. Add
 every further `-ize` stem it shows to the list (ignore `size`, `prize`, `seize`, `capsize` and the like, which have no
 `-ise` form), and list the added stems in the report. Same allowlist file and same rules as Task 1. A lowercase hit that is a name other software owns, such as a JSON
