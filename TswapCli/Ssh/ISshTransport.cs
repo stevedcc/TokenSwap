@@ -3,7 +3,8 @@ using TswapCore;
 namespace TswapCli.Ssh;
 
 /// <summary>
-/// Brief T27: how <c>slot enroll --via</c> runs a tswap command on another machine. <see cref="ProcessSshTransport"/>
+/// Brief T27: how <c>slot enroll --via</c> runs a tswap command on another machine (brief T28: also on a terminal of
+/// its own, <see cref="RunInteractive"/>). <see cref="ProcessSshTransport"/>
 /// starts <c>ssh</c>; tests run the host's commands in process.
 /// </summary>
 public interface ISshTransport
@@ -16,6 +17,19 @@ public interface ISshTransport
     /// can't be made or its stdout is larger than <see cref="SshRelay.MaxStdout"/>.
     /// </summary>
     SshResult Run(string destination, IReadOnlyList<string> remoteArgs, ReadOnlyMemory<byte> stdin, TextWriter stderr);
+
+    /// <summary>
+    /// Brief T28: runs <paramref name="remoteArgs"/> (joined as for <see cref="Run"/>) on <paramref name="destination"/> with
+    /// a terminal of its own (<c>ssh -t</c>), the local stdin, stdout and stderr handed through, so sudo and the vault can
+    /// ask there; returns the remote exit code. Throws <see cref="SshTransportException"/> when the call can't be made.
+    /// </summary>
+    int RunInteractive(string destination, IReadOnlyList<string> remoteArgs) =>
+        throw new NotSupportedException("This SSH transport has no interactive form.");
+
+    /// <summary>Brief T28 (A9): the end of one enrolment's calls to <paramref name="destination"/> (closes a shared connection).</summary>
+    void EndSession(string destination)
+    {
+    }
 }
 
 /// <summary>The remote command's exit code and its stdout.</summary>

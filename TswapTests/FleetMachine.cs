@@ -41,6 +41,15 @@ public sealed class FleetMachine : IDisposable
     public bool Sudo { get; set; } = true;
 
     /// <summary>
+    /// Brief T28 (A8): whether this machine's commands see a sudo escalation (privileged with a non-root
+    /// <c>SUDO_USER</c>, <see cref="CliEnvironment.SudoEscalated"/>); <see cref="Sudo"/> is only the sudo bypass.
+    /// </summary>
+    public bool SudoEscalated { get; set; }
+
+    /// <summary>Brief T28: the seams of the staged approve and merge (null: none).</summary>
+    public TswapCli.Commands.StagedFileSeams? StagedSeams { get; set; }
+
+    /// <summary>
     /// Guided init: the chip this machine's <c>init</c> sees, instead of the one <see cref="SecureEnclave"/> /
     /// <see cref="Tpm"/> give (null: those), e.g. a chip that is present but unusable.
     /// </summary>
@@ -163,7 +172,7 @@ public sealed class FleetMachine : IDisposable
         var env = new CliEnvironment
         {
             Prefix = "tswap", ConfigDir = Dir, Verbose = false, CommandArgs = args, YubiKeySerialVariable = YubiKeySerialVariable,
-            AgentSocketVariable = AgentSocket,
+            AgentSocketVariable = AgentSocket, SudoEscalated = SudoEscalated,
         };
         List<IHardwareKeyService> backends = [];
         if (Tpm is not null) backends.Add(new SimulatedHardwareService(HardwareBackend.Tpm, Tpm));
@@ -178,6 +187,7 @@ public sealed class FleetMachine : IDisposable
         var ctx = new CommandContext(console, env, store, Keys, unlocker, TestKey: Tpm ?? SecureEnclave, SudoBypass: Sudo)
         {
             MigrationSeams = MigrationSeams,
+            StagedSeams = StagedSeams,
             Time = Time ?? TimeProvider.System,
             ChipProbe = ChipOverride ?? (() => new MachineChip(SecureEnclave is not null ? HardwareBackend.SecureEnclave : Tpm is not null ? HardwareBackend.Tpm : null, null)),
             Fido2 = fido2,
