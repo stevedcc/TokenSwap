@@ -15,12 +15,18 @@ public interface IConsole
 
     /// <summary>Whether stdout is a pipe or file: guided init asks only when both ends are a terminal.</summary>
     bool IsOutputRedirected { get; }
+
+    /// <summary>
+    /// One line of input. On a terminal (stdin not redirected) what was typed before the read is discarded first
+    /// (#293), so a stray keystroke burst can't become the answer; piped input is read as it is.
+    /// </summary>
     string? ReadLine();
 
     /// <summary>
     /// Reads a password with masked echo (*, backspace handling, Ctrl+C cancels).
     /// <paramref name="echo"/> receives the masking feedback; defaults to <see cref="Out"/>.
-    /// Pass <see cref="Error"/> for commands whose stdout must stay clean when piped.
+    /// Pass <see cref="Error"/> for commands whose stdout must stay clean when piped. On a terminal what was typed
+    /// before the read is discarded first (#293); piped input is read as one line, as it is.
     /// </summary>
     string ReadPassword(TextWriter? echo = null);
 

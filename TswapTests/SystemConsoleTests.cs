@@ -1,0 +1,111 @@
+using TswapCli;
+using Xunit;
+
+namespace TswapTests;
+
+/// <summary>
+/// #293: <see cref="SystemConsole"/> discards what was typed before a read when stdin is a terminal, and never touches
+/// piped input. The console's input side is a seam (<see cref="IConsoleInput"/>); the platform call itself is tested
+/// against a real pseudo-terminal (<c>ControllingTerminalPtyTests.Typeahead_DiscardUnix_DropsWhatWasTypedBeforeIt</c>).
+/// </summary>
+public sealed class SystemConsoleTests
+{
+    [Fact]
+    public void ReadLine_OnATerminal_DiscardsTypeaheadFirst()
+    {
+        var input = new ScriptedInput(redirected: false, lines: ["yes"]);
+        var console = new SystemConsole(input);
+
+        Assert.Equal("yes", console.ReadLine());
+        Assert.Equal(["discard", "line"], input.Log);
+    }
+
+    [Fact]
+    public void ReadLine_Piped_KeepsEveryLine()
+    {
+        var input = new ScriptedInput(redirected: true, lines: ["first", "second"]);
+        var console = new SystemConsole(input);
+
+        Assert.Equal("first", console.ReadLine());
+        Assert.Equal("second", console.ReadLine());
+        Assert.Equal(["line", "line"], input.Log);
+    }
+
+    [Fact]
+    public void ReadPassword_OnATerminal_DiscardsTypeaheadBeforeTheFirstKey()
+    {
+        var input = new ScriptedInput(redirected: false, keys: [Key('p'), Key('w'), Enter]);
+        var console = new SystemConsole(input);
+        var echo = new StringWriter();
+
+        Assert.Equal("pw", console.ReadPassword(echo));
+        Assert.Equal(["discard", "key", "key", "key"], input.Log);
+        Assert.Equal("**" + echo.NewLine, echo.ToString());
+    }
+
+    [Fact]
+    public void ReadPassword_Piped_ReadsTheLineWithoutDiscarding()
+    {
+        var input = new ScriptedInput(redirected: true, lines: ["pw"]);
+        var console = new SystemConsole(input);
+        var echo = new StringWriter();
+
+        Assert.Equal("pw", console.ReadPassword(echo));
+        Assert.Equal(["line"], input.Log);
+        Assert.Equal(echo.NewLine, echo.ToString());
+    }
+
+    [Fact]
+    public void ReadPassword_CtrlC_CancelsAndPutsTheSettingBack()
+    {
+        var input = new ScriptedInput(redirected: false, keys: [Key('p'), CtrlC]);
+        var console = new SystemConsole(input);
+
+        Assert.Throws<OperationCanceledException>(() => console.ReadPassword(new StringWriter()));
+        Assert.Equal([true, false], input.ControlCSets); // on for the read, then back to what it was (false)
+        Assert.False(input.TreatControlCAsInput);
+    }
+
+    private static ConsoleKeyInfo Key(char c) => new(c, ConsoleKey.A + (c - 'a'), shift: false, alt: false, control: false);
+
+    private static readonly ConsoleKeyInfo Enter = new('\r', ConsoleKey.Enter, false, false, false);
+
+    private static readonly ConsoleKeyInfo CtrlC = new('\x03', ConsoleKey.C, shift: false, alt: false, control: true);
+
+    /// <summary>Scripted lines and keys; logs every discard, line read and key read in order.</summary>
+    private sealed class ScriptedInput(bool redirected, string[]? lines = null, ConsoleKeyInfo[]? keys = null) : IConsoleInput
+    {
+        private readonly Queue<string> _lines = new(lines ?? []);
+        private readonly Queue<ConsoleKeyInfo> _keys = new(keys ?? []);
+        private bool _treatControlC;
+
+        public List<string> Log { get; } = [];
+        public List<bool> ControlCSets { get; } = [];
+
+        public bool IsInputRedirected => redirected;
+
+        public void DiscardTypeahead() => Log.Add("discard");
+
+        public string? ReadLine()
+        {
+            Log.Add("line");
+            return _lines.Count > 0 ? _lines.Dequeue() : null;
+        }
+
+        public ConsoleKeyInfo ReadKey()
+        {
+            Log.Add("key");
+            return _keys.Dequeue();
+        }
+
+        public bool TreatControlCAsInput
+        {
+            get => _treatControlC;
+            set
+            {
+                ControlCSets.Add(value);
+                _treatControlC = value;
+            }
+        }
+    }
+}

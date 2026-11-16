@@ -126,10 +126,68 @@ public sealed class ControllingTerminalPtyTests : IDisposable
         Assert.Equal(before, _pty.Flags()); // review PR #298: ReadLine puts .NET's settings back too
     }
 
+    // #293: what a stray touch on a YubiKey's OTP slot types (a one-time code, no Enter), in front of the answer.
+    private const string StrayOtp = "cccccdhevenedcf";
+
+    [Fact]
+    public void Typeahead_DiscardUnix_DropsWhatWasTypedBeforeIt()
+    {
+        if (_pty is null)
+            return;
+        _pty.Type(StrayOtp);
+        Assert.Equal(0, Typeahead.DiscardUnix(_pty.TerminalFd));
+        _pty.Type("yes\n");
+
+        // tcgetattr fails, so the read sets no mode and flushes nothing itself: only DiscardUnix dropped the code.
+        using var tty = ControllingTerminal.UnixTty.OpenPath(_pty.TerminalPath, new FailingGet())!;
+        Assert.Equal("yes", tty.ReadLine()); // without the discard: "cccccdhevenedcfyes"
+    }
+
+    [Fact]
+    public async Task ReadLine_DiscardsWhatWasTypedBeforeTheRead()
+    {
+        if (_pty is null)
+            return;
+        _pty.Type(StrayOtp);
+        var calls = new ObservedTermios();
+        using var tty = ControllingTerminal.UnixTty.OpenPath(_pty.TerminalPath, calls)!;
+
+        var read = Task.Run(tty.ReadLine);
+        Assert.True(calls.FirstSet.Wait(Wait), "the read never set its terminal mode");
+        _pty.Type("yes\r");
+
+        Assert.Equal("yes", await read.WaitAsync(Wait)); // TCSAFLUSH (#296) dropped the code
+    }
+
+    [Fact]
+    public async Task ReadSecret_DiscardsWhatWasTypedBeforeTheRead()
+    {
+        if (_pty is null)
+            return;
+        _pty.Type(StrayOtp);
+        var calls = new ObservedTermios();
+        using var tty = ControllingTerminal.UnixTty.OpenPath(_pty.TerminalPath, calls)!;
+
+        var read = Task.Run(tty.ReadSecret);
+        Assert.True(calls.FirstSet.Wait(Wait), "the read never set its terminal mode");
+        _pty.Type("1234\n");
+
+        var pin = await read.WaitAsync(Wait);
+        Assert.Equal("1234", Encoding.UTF8.GetString(pin!)); // TCSAFLUSH (#296): not a wrong PIN with the code in front
+    }
+
     private static readonly int SigCont = OperatingSystem.IsMacOS() ? 19 : 18;
 
     [DllImport("libc", SetLastError = true)]
     private static extern int kill(int pid, int signal);
+
+    /// <summary>tcgetattr fails (and tcsetattr is never reached): the read takes the terminal as it is.</summary>
+    private sealed class FailingGet : ControllingTerminal.UnixTty.ITermiosCalls
+    {
+        public int Get(int fd, Span<byte> termios) => -1;
+
+        public int Set(int fd, int when, ReadOnlySpan<byte> termios) => throw new InvalidOperationException("no mode is set after a failed tcgetattr");
+    }
 
     /// <summary>The real tcgetattr/tcsetattr, with events for the first and second tcsetattr.</summary>
     private sealed class ObservedTermios : ControllingTerminal.UnixTty.ITermiosCalls
@@ -173,6 +231,9 @@ public sealed class ControllingTerminalPtyTests : IDisposable
         private readonly StringBuilder _shown = new();
 
         public string TerminalPath { get; }
+
+        /// <summary>The terminal side's descriptor, held open by the pair (#293: tcflush on it).</summary>
+        public int TerminalFd => _terminal;
 
         private Pty(int controller, int terminal, string path) => (_controller, _terminal, TerminalPath) = (controller, terminal, path);
 
