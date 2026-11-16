@@ -59,10 +59,40 @@ public sealed class KeyMaterialTests
         Assert.Throws<Xunit.Sdk.TrueException>(() =>
             KeyMaterial.AssertNone($"no vault in {MacTemp}tswap-setup-vMFq0C/pair-81f89a5f", tempRoot: "/tmp/"));
 
+    [Theory]
+    [InlineData("0123456789ABCDEF0123456789ABCDEF")]                 // hex rule
+    [InlineData("q83vEjRWeJCrze8SNFZ4kKvN7xIabcd")]                  // base64 rule, the one that fired on the runner
+    public void AssertNone_AKeyUnderTheTempFolder_IsStillCaught(string key)
+    {
+        AssertFlagged($"wrote {MacTemp}{key}/x.json", MacTemp);
+        AssertFlagged($"wrote {MacTemp.TrimEnd('/')}{key}", MacTemp); // glued to the root, no separator
+    }
+
+    // Review of #346: a root that isn't a multi-part path (an odd TMP=C:\ or TMPDIR=q2) must exempt nothing, or the
+    // replacement could land inside a key and split it below the thresholds.
+    [Theory]
+    [InlineData("", "1234:5678:9ABC:DEF0:1234:5678:9ABC:DEF0")]
+    [InlineData("/", "q83vEjRWeJCrze8SNFZ4q2kKvN7xIabcdq83vEjRWe")]
+    [InlineData(@"C:\", "1234:5678:9ABC:DEF0:1234:5678:9ABC:DEF0")]
+    [InlineData("C:", "1234:5678:9ABC:DEF0:1234:5678:9ABC:DEF0")]
+    [InlineData("q2", "q83vEjRWeJCrze8SNFZ4q2kKvN7xIabcdq83vEjRWe")]
+    [InlineData("/T", "q83vEjRWeJCrze8SNF/TZ4kKvN7xIabcdq83vEjRWexyzw")]
+    public void AssertNone_ARootThatIsNotAPath_ExemptsNothing(string tempRoot, string key) =>
+        AssertFlagged($"wrote /data/{key}/x.json", tempRoot); // inside a path, where each segment is checked alone
+
     [Fact]
-    public void AssertNone_AKeyUnderTheTempFolder_IsStillCaught() =>
-        Assert.Throws<Xunit.Sdk.TrueException>(() => KeyMaterial.AssertNone(
-            $"wrote {MacTemp}{Convert.ToHexString(RandomNumberGenerator.GetBytes(16))}/x.json", tempRoot: MacTemp));
+    public void AssertNone_TheDefault_UsesThisProcesssTempFolder()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), "tswap-setup-x");
+        KeyMaterial.AssertNone($"no vault in {folder}");
+        AssertFlagged($"wrote {Path.Combine(folder, "0123456789ABCDEF0123456789ABCDEF")}", Path.GetTempPath());
+    }
+
+    private static void AssertFlagged(string output, string tempRoot)
+    {
+        var ex = Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => KeyMaterial.AssertNone(output, tempRoot));
+        Assert.Matches("key-like|grouped hex", ex.Message);
+    }
 
     [Fact]
     public void AssertNotEchoed_CatchesTheTypedValue() =>
