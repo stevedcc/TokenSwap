@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using TswapCli;
 using TswapCore;
+using TswapCore.Fields;
 using TswapCore.Keyring;
 using TswapCore.Vault;
 using Xunit;
@@ -132,6 +133,28 @@ public sealed class MigrateToRecordsTests : IDisposable
         Assert.Empty(TempFolders);
         Assert.Contains("Recovery Private Key", output);
         Assert.Equal(10, _m.Ok("", "burned").Split('\n').Count(l => l.Contains("leak ")));
+    }
+
+    /// <summary>
+    /// Issue #311 (spec "Writes", lineage): migrate builds its records directly, so it anchors each one
+    /// itself: an empty <c>Fields</c> extension with <c>Since</c> = the record's version.
+    /// </summary>
+    [Fact]
+    public void Migrate_WritesFieldsAnchor_SinceIsVersion()
+    {
+        var (masterKey, _) = PlainVaultWithFiftySecrets();
+
+        _m.Ok("1\n", "migrate", "--to-records");
+
+        var files = Directory.GetFiles(Path.Combine(DefaultVaultDir, "records"));
+        Assert.Equal(50, files.Length);
+        foreach (var file in files)
+        {
+            var record = SecretRecordCodec.Decode(File.ReadAllBytes(file), masterKey);
+            var extension = Assert.Single(record.Extensions);
+            Assert.Equal(FieldsExtension.Type, extension.Type);
+            Assert.Equal(new FieldSet(record.Version, []), FieldsCodec.Decode(extension.Data));
+        }
     }
 
     [Fact]

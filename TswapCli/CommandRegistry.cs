@@ -29,6 +29,7 @@ public static class CommandRegistry
         new ApplyCommand(),
         new BurnCommand(),
         new BurnedCommand(),
+        new FieldCommand(),
         new PromptCommand(),
         new PromptHashCommand(),
         new InstallScriptCommand(),

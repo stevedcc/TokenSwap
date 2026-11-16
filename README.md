@@ -39,6 +39,10 @@ tswap draws a privilege boundary with sudo:
 - `run` blocks `echo`, `printf`, pipes, redirects, and inline shell or interpreter code
   (`sh -c`, `python -c`, ...), so a command can't simply print the value it was given.
 
+**Fields** are bundled storage for convenience: everything about a credential in one place next to its secret
+(username, URL, where it is used, where the master copy lives), as plain visible data, not a second kind of
+secret and not a way into commands ([fields](docs/commands.md#fields-plain-data-next-to-a-secret)).
+
 tswap prevents accidental leaks and casual exfiltration. It does not attempt to confine a
 determined local actor. What it protects against, and what it doesn't:
 [the security model](docs/security-model.md).

@@ -145,7 +145,7 @@ public class CommandReferenceTests
 
     // ------------------------------------------------------------------ the sudo table
 
-    private static readonly string[] MixedCommands = ["slot", "broker", "vault"];
+    private static readonly string[] MixedCommands = ["slot", "broker", "vault", "field"];
 
     /// <summary>The rows of the "Which commands need sudo" table: the subcommand (backticks dropped) and its Sudo cell.</summary>
     internal static List<(string Row, string Sudo)> SudoTable(string page)
@@ -331,7 +331,7 @@ public class CommandReferenceTests
 internal sealed record SudoDriveResult(int Exit, string Out, string Err, bool? JobDone = null);
 
 /// <summary>
-/// Runs every <c>slot</c> and <c>broker</c> subcommand once without sudo (the sudo bypass off), through
+/// Runs every <c>slot</c>, <c>broker</c> and <c>field</c> subcommand once without sudo (the sudo bypass off), through
 /// <see cref="CliRunner"/> on simulated machines, with the smallest arguments that reach its sudo check. A
 /// subcommand that needs no sudo is driven to what it really does where that ends on its own; the two that run
 /// until a signal (<c>broker serve</c>, <c>broker forward</c>) are driven to an early refusal of their own instead.
@@ -419,6 +419,23 @@ internal static class SudoTableDrive
         // listener on the LAN.
         var fwd = Bounded(() => c.Run("", "broker", "forward", "--listen", "192.0.2.1:8080"), "broker forward");
         results["broker forward"] = R(fwd, fwd.Exit != 0 && fwd.Err.Contains("loopback", StringComparison.Ordinal));
+
+        // ---- field set|unset|show: each driven to its job without sudo, on a vault with one secret; adopt to its refusal.
+        using var f = new FleetMachine("sudo-f", SimulatedYubiKeyService.WithKeys(33333333));
+        f.Ok("", "init", "--yubikey");
+        f.Ok("sudo-table-value-0123", "ingest", "s");
+        f.Sudo = false;
+        var set = f.Run("", "field", "set", "s", "url=https://set.example");
+        results["field set"] = R(set, set.Exit == 0 && f.Run("", "field", "show", "s").Out.Contains("url = \"https://set.example\"", StringComparison.Ordinal));
+        var show = f.Run("", "field", "show", "s");
+        results["field show"] = R(show, show.Exit == 0 && show.Out.Contains("url = \"https://set.example\"", StringComparison.Ordinal));
+        var unset = f.Run("", "field", "unset", "s", "url");
+        results["field unset"] = R(unset, unset.Exit == 0 && f.Run("", "field", "show", "s").Out == "'s' has no fields.\n");
+        // field adopt turns a secret value into a visible field: driven to its sudo refusal with a secret to adopt.
+        f.Sudo = true;
+        f.Ok("sudo-table-user", "ingest", "s-user");
+        f.Sudo = false;
+        results["field adopt"] = R(f.Run("", "field", "adopt", "s", "username", "--from", "s-user"));
 
         // ---- broker unlock|lock|status: a password broker's control socket, the real password proof.
         using var d = new FleetMachine("sudo-d") { Tpm = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32) };

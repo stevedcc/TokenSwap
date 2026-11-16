@@ -18,9 +18,10 @@ public sealed class WriteCommandsWholeVaultScanTests
 
     private static readonly string[] WriteCommandFiles =
     [
-        .. new[] { "Create", "Ingest", "Burn", "Rotate", "Restore", "Add", "Delete", "Import" }
+        .. new[] { "Create", "Ingest", "Burn", "Rotate", "Restore", "Add", "Delete", "Import", "Field" }
             .Select(c => RepoFile("TswapCli", "Commands", $"{c}Command.cs")),
         RepoFile("TswapCli", "SecretRotation.cs"),
+        RepoFile("TswapCli", "ValueCommandFields.cs"),
     ];
 
     private static readonly string[] WholeVaultEntryPoints =

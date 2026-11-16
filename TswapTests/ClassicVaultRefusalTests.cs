@@ -56,6 +56,7 @@ public sealed class ClassicVaultRefusalTests : IDisposable
         "vault" => [command, "reindex"],
         "broker" => [command, "serve"],
         "agent" => [command, "status"],
+        "field" => [command, "show", "db"],
         _ => [command],
     };
 

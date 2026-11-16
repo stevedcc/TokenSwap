@@ -45,10 +45,13 @@ internal static class SecretRotation
     /// <summary>
     /// Writes <paramref name="value"/> as the new version of <paramref name="name"/> (always a new
     /// version, even for an equal value); the replaced value's section is copied, not decrypted.
+    /// Issue #311: with <paramref name="fields"/> given, they go in the same write, every field checked
+    /// first (<see cref="ValueCommandFields.Stage"/>): a refused field leaves the old value.
     /// </summary>
-    public static void Write(CommandContext ctx, VaultWriter writer, string name, string value)
+    public static void Write(CommandContext ctx, byte[] key, VaultWriter writer, ValueCommandFields fields, string name, string value,
+        string command)
     {
-        writer.SetValue(name, value, ctx.Time.GetUtcNow().UtcDateTime, always: true);
+        fields.Stage(ctx, key, writer, name, value, ctx.Time.GetUtcNow().UtcDateTime, always: true, command);
         writer.Commit();
     }
 

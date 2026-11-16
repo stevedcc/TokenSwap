@@ -11,12 +11,13 @@ namespace TswapCli.Commands;
 public sealed class RotateCommand : ICliCommand
 {
     public string Name => "rotate";
-    public string HelpUsage => "rotate <name> [len]";
-    public string Description => "Replace a secret with a new random value (no display); sudo unless it is burned";
+    public string HelpUsage => "rotate <name> [len] [--field FIELD=VALUE]… [--fields JSON|@FILE] [--by LABEL]";
+    public string Description => "Replace a secret with a new random value (no display); sudo unless it is burned; --field (repeatable) or --fields sets plain fields in the same write, --by labels that change";
     public bool RequiresSudo => false;
 
     public int Execute(CommandContext ctx, string[] args)
     {
+        using var fields = ValueCommandFields.Take(args, () => new UsageException($"{ctx.Prefix} rotate <name> [length]"), out args);
         if (args.Length is < 1 or > 2 || args[0].StartsWith("--"))
             throw new UsageException($"{ctx.Prefix} rotate <name> [length]");
         var name = args[0];
@@ -27,6 +28,7 @@ public sealed class RotateCommand : ICliCommand
         Validation.ValidateName(name);
         Validation.ValidateLength(length);
 
+        fields.ResolveWho(ctx);
         var config = ctx.Storage.LoadConfig();
         var key = ctx.Unlock(config);
         // Brief T16-S2b: only this record is read, and no stored value is decrypted.
@@ -36,14 +38,15 @@ public sealed class RotateCommand : ICliCommand
             var existing = SecretRotation.Check(ctx, writer, name, "rotate");
 
             var value = CreateCommand.GenerateValue(ctx, config, length);
-            SecretRotation.Write(ctx, writer, name, value);
+            SecretRotation.Write(ctx, key, writer, fields, name, value, "rotate");
             SecretRotation.Report(ctx, name, existing, $"new {length}-char random value");
+            fields.Report(ctx, warnIfValueInAField: true);
             ValueWarnings.WarnIfShort(ctx, name, value);
             return 0;
         }
         finally
         {
-            FingerprintTexts.WarnFormatTwo(ctx.Console.Error, ctx.Prefix, writer.FormatTwoDecoded, FormatTwoUse.Write);
+            FingerprintTexts.WarnFormatTwo(ctx.Console.Error, ctx.Prefix, writer.FormatTwoDecoded + fields.FormatTwoDecoded, FormatTwoUse.Write);
         }
     }
 }

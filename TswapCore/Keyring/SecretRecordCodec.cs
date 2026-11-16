@@ -95,7 +95,8 @@ public static class SecretRecordCodec
     /// <summary>magic(4) + formatVersion(1) + recordId(32) + hlc(8+4) + origin(16) + payloadLength(4).</summary>
     public const int HeaderSize = 4 + 1 + KeyringFormat.RecordIdSize + 12 + KeyringFormat.OriginIdSize + 4;
 
-    private const int StampSize = 12 + KeyringFormat.OriginIdSize;
+    /// <summary>A stamp's encoded size: HLC physical part 8, logical counter 4, origin id 16.</summary>
+    internal const int StampSize = 12 + KeyringFormat.OriginIdSize;
 
     // recordType(1) + version stamp + createdMs(8) + nameLength(2)
     private const int InnerFixedSize = 1 + StampSize + 8 + 2;
@@ -1003,7 +1004,8 @@ public static class SecretRecordCodec
         }
     }
 
-    private static int WriteStamp(Span<byte> span, int offset, Stamp stamp)
+    /// <summary>Writes <paramref name="stamp"/> in the record layout (also used by the fields extension, issue #311).</summary>
+    internal static int WriteStamp(Span<byte> span, int offset, Stamp stamp)
     {
         BinaryPrimitives.WriteInt64LittleEndian(span.Slice(offset, 8), stamp.Hlc.PhysicalMs);
         BinaryPrimitives.WriteUInt32LittleEndian(span.Slice(offset + 8, 4), stamp.Hlc.Logical);
@@ -1011,10 +1013,11 @@ public static class SecretRecordCodec
         return offset + StampSize;
     }
 
-    private static Stamp ReadStamp(byte[] bytes, int offset) => new(
-        new Hlc(BinaryPrimitives.ReadInt64LittleEndian(bytes.AsSpan(offset, 8)),
-            BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(offset + 8, 4))),
-        bytes.AsSpan(offset + 12, KeyringFormat.OriginIdSize).ToArray());
+    /// <summary>Reads a stamp written by <see cref="WriteStamp"/>; the caller checks the length.</summary>
+    internal static Stamp ReadStamp(ReadOnlySpan<byte> bytes, int offset) => new(
+        new Hlc(BinaryPrimitives.ReadInt64LittleEndian(bytes.Slice(offset, 8)),
+            BinaryPrimitives.ReadUInt32LittleEndian(bytes.Slice(offset + 8, 4))),
+        bytes.Slice(offset + 12, KeyringFormat.OriginIdSize).ToArray());
 
     /// <summary>
     /// Rounds <paramref name="rawLength"/> up to the next multiple of

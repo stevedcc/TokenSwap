@@ -22,12 +22,13 @@ public sealed class CreateCommand : ICliCommand
     private const int MaxHkdfOutputBytes = 255 * 32;
 
     public string Name => "create";
-    public string HelpUsage => "create <name> [len]";
-    public string Description => "Generate random secret (no display)";
+    public string HelpUsage => "create <name> [len] [--field FIELD=VALUE]… [--fields JSON|@FILE] [--by LABEL]";
+    public string Description => "Generate random secret (no display); --field (repeatable) or --fields sets plain fields in the same write, --by labels that change";
     public bool RequiresSudo => false;
 
     public int Execute(CommandContext ctx, string[] args)
     {
+        using var fields = ValueCommandFields.Take(args, () => new UsageException($"{ctx.Prefix} create <name> [length]"), out args);
         if (args is [])
             throw new UsageException($"{ctx.Prefix} create <name> [length]");
         int length;
@@ -45,9 +46,11 @@ public sealed class CreateCommand : ICliCommand
         Validation.ValidateName(name);
         Validation.ValidateLength(length);
 
+        fields.ResolveWho(ctx);
         var config = ctx.Storage.LoadConfig();
         var key = ctx.Unlock(config);
-        // Brief T16-S2b: only this name's record is read (its metadata; existence needs no value).
+        // Brief T16-S2b: only this name's record is read (its metadata; existence needs no value); with fields,
+        // every record's metadata too (guard rail 1), never another value.
         using var writer = ctx.OpenVaultForWrite(key);
         try
         {
@@ -57,17 +60,18 @@ public sealed class CreateCommand : ICliCommand
                     $"Secret '{name}' already exists. To replace its value, use: {ctx.Prefix} rotate {name} [length]");
 
             var value = GenerateValue(ctx, config, length);
-            writer.SetValue(name, value, ctx.Time.GetUtcNow().UtcDateTime);
+            fields.Stage(ctx, key, writer, name, value, ctx.Time.GetUtcNow().UtcDateTime, always: false, "create");
             writer.Commit();
 
             ctx.Console.Out.WriteLine($"\n✓ Secret '{name}' created ({length} chars)");
             ctx.Console.Out.WriteLine("  Value was NOT displayed. Use 'run' to substitute it into commands.");
+            fields.Report(ctx, warnIfValueInAField: false);
             ValueWarnings.WarnIfShort(ctx, name, value);
             return 0;
         }
         finally
         {
-            FingerprintTexts.WarnFormatTwo(ctx.Console.Error, ctx.Prefix, writer.FormatTwoDecoded, FormatTwoUse.Write);
+            FingerprintTexts.WarnFormatTwo(ctx.Console.Error, ctx.Prefix, writer.FormatTwoDecoded + fields.FormatTwoDecoded, FormatTwoUse.Write);
         }
     }
 

@@ -5,17 +5,19 @@ namespace TswapCli.Commands;
 public sealed class AddCommand : ICliCommand
 {
     public string Name => "add";
-    public string HelpUsage => "add <name>";
-    public string Description => "Add a secret (user-provided value)";
+    public string HelpUsage => "add <name> [--field FIELD=VALUE]… [--fields JSON|@FILE] [--by LABEL]";
+    public string Description => "Add a secret (user-provided value); --field (repeatable) or --fields sets plain fields in the same write, --by labels that change";
     public bool RequiresSudo => true;
 
     public int Execute(CommandContext ctx, string[] args)
     {
+        using var fields = ValueCommandFields.Take(args, () => new UsageException($"{ctx.Prefix} add <name>"), out args);
         if (args is not [var name, ..])
             throw new UsageException($"{ctx.Prefix} add <name>");
 
         Validation.ValidateName(name);
         ctx.RequireSudo("add");
+        fields.ResolveWho(ctx);
         var config = ctx.Storage.LoadConfig();
 
         ctx.Console.Out.Write($"Secret value for '{name}': ");
@@ -32,10 +34,11 @@ public sealed class AddCommand : ICliCommand
         using var writer = ctx.OpenVaultForWrite(key);
         try
         {
-            writer.SetValue(name, value, ctx.Time.GetUtcNow().UtcDateTime);
+            fields.Stage(ctx, key, writer, name, value, ctx.Time.GetUtcNow().UtcDateTime, always: false, "add");
             writer.Commit();
 
             ctx.Console.Out.WriteLine($"\n✓ Secret '{name}' added successfully");
+            fields.Report(ctx, warnIfValueInAField: true);
             // Owner decision 5: stored as typed, but trailing whitespace is usually a paste mistake, and
             // run can't always mask such a value. The secret and the reason only: never the value or its length.
             if (Validation.EndsInWhitespace(value))
@@ -49,7 +52,7 @@ public sealed class AddCommand : ICliCommand
         }
         finally
         {
-            FingerprintTexts.WarnFormatTwo(ctx.Console.Error, ctx.Prefix, writer.FormatTwoDecoded, FormatTwoUse.Write);
+            FingerprintTexts.WarnFormatTwo(ctx.Console.Error, ctx.Prefix, writer.FormatTwoDecoded + fields.FormatTwoDecoded, FormatTwoUse.Write);
         }
     }
 }

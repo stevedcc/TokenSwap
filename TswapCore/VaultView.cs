@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using TswapCore.Fields;
 using TswapCore.Fingerprints;
 using TswapCore.Keyring;
 
@@ -77,6 +78,25 @@ public sealed class VaultView(RecordVaultStore store, byte[] vaultKey, TextWrite
     }
 
     /// <summary>
+    /// Issue #311: <paramref name="name"/>'s fields (delete markers included), or null when there is no
+    /// live secret (no record, a tombstone, or a record that can't be read). From metadata, as
+    /// <see cref="Find"/>; decrypts no value. A record written before fields existed has none: an empty
+    /// set with <c>Since</c> = <see cref="Stamp.Zero"/>.
+    /// </summary>
+    public FieldSet? Fields(string name)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (_byName is not null)
+        {
+            if (_byName.TryGetValue(name, out var metadata))
+                return metadata.Type == RecordType.Tombstone ? null : VaultWriter.FieldsOf(metadata);
+            if (_loadedWith == FormatTwoRecords.Decode || _unreadable!.Contains(FileOf(name)))
+                return null;
+        }
+        return Open(name).Entry is { Info: not null } entry ? VaultWriter.FieldsOf(entry.Metadata) : null;
+    }
+
+    /// <summary>
     /// <see cref="SecretsDb.ThrowIfAnyUnreadable"/>'s check over <see cref="LoadAll"/>'s metadata
     /// (loaded with <see cref="FormatTwoRecords.Skip"/> when nothing is loaded yet).
     /// </summary>
@@ -95,17 +115,28 @@ public sealed class VaultView(RecordVaultStore store, byte[] vaultKey, TextWrite
     /// (<see cref="VaultMetadata.NotFingerprinted"/>). From <see cref="LoadAll"/>'s metadata
     /// (loaded with <see cref="FormatTwoRecords.Skip"/> when nothing is loaded yet); decrypts nothing.
     /// The index refers to <paramref name="keys"/>, which the caller keeps undisposed while it is used.
+    /// Issue #311: <paramref name="except"/> leaves that one secret's versions out (<c>field adopt</c>, whose
+    /// source secret is deleted in the same commit).
     /// </summary>
-    public FingerprintIndex BuildIndex(FingerprintKeys keys)
+    public FingerprintIndex BuildIndex(FingerprintKeys keys, string? except = null)
     {
-        var metadata = _metadata ?? LoadAll(FormatTwoRecords.Skip);
+        var metadata = LoadedMetadata();
         return FingerprintIndex.Build(
             from record in metadata.Records
+            where !string.Equals(record.Name, except, StringComparison.Ordinal)
             from version in record.RetainedVersions()
             where version.Fingerprints is not null
             select (record.Name, version.IsPrevious, version.Fingerprints!),
             keys);
     }
+
+    /// <summary>
+    /// The metadata <see cref="LoadAll"/> already loaded, under whichever policy the caller chose, or
+    /// (when nothing is loaded yet) a load with <see cref="FormatTwoRecords.Skip"/>: a reader that
+    /// needs every record's metadata but no particular policy uses this, so it never replaces a
+    /// caller's <see cref="FormatTwoRecords.Decode"/> load.
+    /// </summary>
+    internal VaultMetadata LoadedMetadata() => _metadata ?? LoadAll(FormatTwoRecords.Skip);
 
     /// <summary>True when <paramref name="name"/>'s current value has an outstanding burn (from metadata).</summary>
     public bool IsBurned(string name) => Find(name)?.BurnedAt is not null;

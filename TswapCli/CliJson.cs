@@ -18,6 +18,15 @@ public sealed record CheckEntry(string File, int Line, string Name, string Statu
 
 public sealed record CheckReport(List<CheckEntry> Results, int Ok, int Warning, int Missing);
 
+/// <summary>
+/// Issue #311: one state of a field in <c>field show --history --json</c>: the current state first, then each replaced
+/// state, newest first. <see cref="Value"/> is absent and <see cref="Removed"/> true for a removal.
+/// </summary>
+public sealed record FieldHistoryEntry(string Time, string? User, bool Elevated, bool Terminal, string? By, string Origin, string? Value, bool Removed);
+
+/// <summary>Issue #311: <c>field show --history --json</c>, the fields (as <c>field show --json</c> prints them) and their histories.</summary>
+public sealed record FieldHistoryReport(Dictionary<string, string> Fields, Dictionary<string, List<FieldHistoryEntry>> History);
+
 [JsonSourceGenerationOptions(
     WriteIndented = true,
     PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
@@ -25,6 +34,8 @@ public sealed record CheckReport(List<CheckEntry> Results, int Ok, int Warning, 
 [JsonSerializable(typeof(List<NameEntry>))]
 [JsonSerializable(typeof(List<BurnedEntry>))]
 [JsonSerializable(typeof(CheckReport))]
+[JsonSerializable(typeof(Dictionary<string, string>))]
+[JsonSerializable(typeof(FieldHistoryReport))]
 public partial class CliJsonContext : JsonSerializerContext { }
 
 /// <summary>Helpers for the shared <c>--json</c> flag.</summary>

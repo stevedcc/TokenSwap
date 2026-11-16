@@ -1382,8 +1382,8 @@ password2: """"  # tswap: missing-mixed-secret");
         var written = File.ReadAllText(exportPath);
         // File must not contain the plaintext secret name
         Assert.DoesNotContain("my-secret", written);
-        // Fresh exports now produce v2 with explicit Argon2id KDF params (#30, #108).
-        Assert.Contains("tswap-export-v2", written);
+        // Fresh exports now produce v3 (#311: fields) with explicit Argon2id KDF params (#30, #108).
+        Assert.Contains("tswap-export-v3", written);
         Assert.Contains("argon2id", written);
     }
 
@@ -1758,6 +1758,31 @@ password2: """"  # tswap: missing-mixed-secret");
         Assert.Contains("Imported 1 secret(s)", stdout);
         var (_, namesOut, _) = RunTswap("names");
         Assert.Contains("v2-secret", namesOut);
+    }
+
+    /// <summary>Issue #311: a v2 file (made before fields existed) still imports, and the secret has no fields.</summary>
+    [Fact]
+    public void Import_V2_StillWorks()
+    {
+        RunTswap("init", "--yubikey");
+        const string passphrase = "v2-passphrase";
+        var salt = RandomNumberGenerator.GetBytes(32);
+        var kdf = ExportCrypto.DefaultArgon2idParams;
+        // The payload as v2 wrote it: no "Fields" member.
+        const string dbJson = """
+            { "Secrets": { "v2-secret": { "Value": "v2-value", "Created": "2026-01-02T03:04:05Z", "Modified": "2026-01-02T03:04:05Z" } } }
+            """;
+        var exportFile = new ExportFile(ExportFile.V2, TestTime.Fixed, Convert.ToBase64String(salt),
+            Convert.ToBase64String(Crypto.Encrypt(Encoding.UTF8.GetBytes(dbJson), ExportCrypto.DeriveArgon2id(passphrase, salt, kdf))), kdf);
+        var exportPath = Path.Combine(_tempDir, "v2-nofields.enc");
+        File.WriteAllText(exportPath, JsonSerializer.Serialize(exportFile, TswapJsonContext.Default.ExportFile));
+
+        var (exit, stdout, stderr) = RunTswapWithStdin(passphrase + "\n", "import", exportPath);
+
+        Assert.True(exit == 0, stderr);
+        Assert.Contains("Imported 1 secret(s)", stdout);
+        Assert.Equal("v2-value", RunTswap("get", "v2-secret").stdout.TrimEnd('\n', '\r'));
+        Assert.Equal("{}", RunTswap("field", "show", "v2-secret", "--json").stdout.Trim());
     }
 
     [Fact]

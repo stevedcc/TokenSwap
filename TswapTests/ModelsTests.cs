@@ -207,17 +207,17 @@ public class ModelsTests
     }
 
     [Fact]
-    public void ExportFile_CurrentVersion_IsV2WithExplicitKdfParams()
+    public void ExportFile_CurrentVersion_IsV3WithExplicitKdfParams()
     {
-        // #30 + #108: fresh exports now stamp v2 and explicit Argon2id KDF params.
+        // #30 + #108: explicit Argon2id KDF params since v2; #311: fresh exports now stamp v3 (fields).
         Assert.Equal("tswap-export-v2", ExportFile.V2);
-        Assert.Equal(ExportFile.V2, ExportFile.CurrentVersion);
+        Assert.Equal(ExportFile.V3, ExportFile.CurrentVersion);
 
         var kdf = new KdfParams(KdfAlgorithm.Argon2id, MemoryKiB: 19 * 1024, TimeCost: 2, Parallelism: 1);
         var export = new ExportFile(ExportFile.CurrentVersion, TestTime.Fixed, "c2FsdA==", "Y2lwaGVy", kdf);
         var json = JsonSerializer.Serialize(export, TswapJsonContext.Default.ExportFile);
 
-        Assert.Contains("\"Version\": \"tswap-export-v2\"", json);
+        Assert.Contains("\"Version\": \"tswap-export-v3\"", json);
         Assert.Contains("\"Algorithm\": \"argon2id\"", json);
         Assert.Contains("\"MemoryKiB\": 19456", json);
 

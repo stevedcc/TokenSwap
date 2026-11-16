@@ -88,13 +88,13 @@ public static class ExportCrypto
     /// Derives the export/import key for <paramref name="exportFile"/>, dispatching on its
     /// <see cref="ExportFile.Version"/>: <see cref="ExportFile.V1"/> uses the original hardcoded
     /// PBKDF2 path unchanged (bit-for-bit as always — see <see cref="Crypto.DeriveKeyFromPassphrase"/>),
-    /// <see cref="ExportFile.V2"/> uses Argon2id with the parameters stored in the file itself.
-    /// Unrecognized versions throw a clear <see cref="TswapException"/> rather than guessing.
+    /// <see cref="ExportFile.V2"/> and <see cref="ExportFile.V3"/> use Argon2id with the parameters stored
+    /// in the file itself. Unrecognized versions throw a clear <see cref="TswapException"/> rather than guessing.
     /// </summary>
     public static byte[] DeriveKey(string passphrase, byte[] salt, ExportFile exportFile) => exportFile.Version switch
     {
         ExportFile.V1 => Crypto.DeriveKeyFromPassphrase(passphrase, salt),
-        ExportFile.V2 => DeriveArgon2id(passphrase, salt,
+        ExportFile.V2 or ExportFile.V3 => DeriveArgon2id(passphrase, salt,
             exportFile.Kdf ?? throw new TswapException("Export file is missing required KDF parameters")),
         _ => throw new TswapException($"Unsupported export version: {exportFile.Version}"),
     };

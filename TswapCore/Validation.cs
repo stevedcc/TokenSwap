@@ -20,6 +20,45 @@ public static class Validation
                     $"Unknown token '{{{{{m.Groups[1].Value}}}}}': the only suffix is ':previous' (the value the last rotation replaced).");
     }
 
+    // A '{{…}}' without braces inside that starts with a secret name followed by a dot. Anything else with a dot
+    // ('{{.State.Pid}}', '{{range .items}}', '{{ .Name }}', a '{{@file}}' token) is left alone, as before #311.
+    private static readonly Regex DottedTokenRegex = new(@"\{\{([a-zA-Z0-9_-]+\.[^{}]*)\}\}");
+
+    /// <summary>
+    /// #311 (owner decision A): commands never substitute fields. Throws for a <c>{{…}}</c> token that starts
+    /// with a secret name and a dot: <c>{{NAME.FIELD}}</c> (a valid field name) with the field message, any
+    /// other such shape (<c>{{a.b.c}}</c>, <c>{{x.}}</c>, <c>{{a.B}}</c>, <c>{{a.b:previous}}</c>) as not a valid
+    /// token. Final review I1 (ruling): text with no secret name right after <c>{{</c> (<c>{{.x}}</c>, Go
+    /// templates such as <c>{{.State.Pid}}</c> or <c>{{range .items}}</c>) passes through literally.
+    /// </summary>
+    public static void ThrowIfFieldOrMalformedToken(string command)
+    {
+        foreach (Match m in DottedTokenRegex.Matches(command))
+        {
+            var inner = m.Groups[1].Value;
+            var shown = Printable(m.Value);
+            var dot = inner.IndexOf('.');
+            var name = inner[..dot];
+            var field = inner[(dot + 1)..];
+            if (inner.Count(ch => ch == '.') == 1 && ValidNameRegex.IsMatch(name) && IsFieldName(field))
+                throw new TswapException(FieldTokenMessage(shown, name));
+            throw new TswapException(
+                $"'{shown}' is not a valid token: a token is {{{{NAME}}}} or {{{{NAME:previous}}}}, " +
+                "and fields aren't substituted into commands.");
+        }
+    }
+
+    /// <summary>Text echoed in a message: anything outside printable ASCII becomes '?' (no terminal or log injection).</summary>
+    public static string Printable(string text) => Regex.Replace(text, @"[^\x20-\x7E]", "?");
+
+    /// <summary>True when <paramref name="text"/> is a valid field name.</summary>
+    public static bool IsFieldName(string text) => TswapCore.Fields.FieldRules.ValidateName(text) is null;
+
+    /// <summary>The refusal for a field named where a command (token or marker) would substitute it.</summary>
+    public static string FieldTokenMessage(string shown, string name) =>
+        $"'{shown}' is a field: fields aren't substituted into commands. " +
+        $"Read it with 'tswap field show {name}' and write the value into the command.";
+
     private static readonly Regex ValidNameRegex = new(@"^[a-zA-Z0-9_-]+$");
     private const int MaxNameLength = 64;
     private const int MaxGeneratedLength = 4096;

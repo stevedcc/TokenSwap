@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using TswapCore.Fields;
 using TswapCore.Fingerprints;
 using TswapCore.Keyring;
 
@@ -490,13 +491,23 @@ public sealed class RecordVaultStore : IFileVaultStore
         _warnings = warnings;
         var loaded = LoadRecords(key, warnings);
         Dictionary<string, Secret> secrets = [];
+        var unreadable = loaded.Values.Where(r => r.UnreadableReason is not null).Select(r => r.FileName).ToHashSet(StringComparer.Ordinal);
         foreach (var record in loaded.Values)
         {
             if (record.State is not { Type: not RecordType.Tombstone } state)
                 continue;
-            secrets[state.Name] = ToSecret(state);
+            try
+            {
+                secrets[state.Name] = ToSecret(state);
+            }
+            catch (RecordConflictException ex)
+            {
+                // Issue #311 ruling: a damaged Fields extension makes this record unreadable, on its own.
+                // Loading's merge rejects one first today (RecordMerge.MergeExtensions); this keeps the rule if it doesn't.
+                warnings?.WriteLine(UnreadableText(record.FileName, ex.Message));
+                unreadable.Add(record.FileName);
+            }
         }
-        var unreadable = loaded.Values.Where(r => r.UnreadableReason is not null).Select(r => r.FileName).ToHashSet(StringComparer.Ordinal);
         var namesKey = RecordKeyDerivation.DeriveNamesKey(key);
         return new SecretsDb(secrets)
         {
@@ -841,7 +852,9 @@ public sealed class RecordVaultStore : IFileVaultStore
                     var next = write switch
                     {
                         ValueWrite v => NextRecord(state, recordId, write.Name, v.Value, v.Always, v.Restored, v.Created, v.ImportedBurnAt,
-                            v.ImportedBurnReason, origin, NextStamp),
+                            v.ImportedBurnReason, origin, NextStamp, v.Fields, v.Who, v.CheckFieldCaps),
+                        FieldsWrite f when SetFieldsRecord(state!, f.Edits, f.Who, NextStamp) is var withFields
+                            && !withFields.Extensions.SequenceEqual(state!.Extensions) => withFields,
                         BurnWrite b when state is { Type: not RecordType.Tombstone } =>
                             NextRecord(state, recordId, write.Name, state.Value, rotated: false, restored: false, default, DateTime.UnixEpoch,
                                 b.Reason, origin, NextStamp),
@@ -849,7 +862,7 @@ public sealed class RecordVaultStore : IFileVaultStore
                         _ => null,
                     };
                     if (next is not null)
-                        records.Add(new RecordWrite(fileName, next, MainBytes: entry?.MainBytes, Copies: entry?.FoldedCopies));
+                        records.Add(new RecordWrite(fileName, next, MainBytes: entry?.MainBytes, Copies: entry?.FoldedCopies, ForceV3: CarriesEdits(write)));
                     continue;
                 }
 
@@ -863,9 +876,15 @@ public sealed class RecordVaultStore : IFileVaultStore
                         var keys = fingerprintKeys ??= FingerprintKeys.Derive(key);
                         if (RecordWrites.Next(current, held, recordId, write.Name, () => SameValue(write.Name, entry, v.Value, keys), v.Always,
                                 v.Restored, v.Created, v.ImportedBurnAt, v.ImportedBurnReason, origin, NextStamp,
-                                version => (SecretRecordCodec.SealValue(recordId, version, v.Value, key), Fingerprinter.Compute(v.Value, keys)))
+                                version => (SecretRecordCodec.SealValue(recordId, version, v.Value, key), Fingerprinter.Compute(v.Value, keys)),
+                                v.Fields, v.Who, v.CheckFieldCaps)
                             is { } next)
                             (metadata, sections) = next;
+                        break;
+                    case FieldsWrite f:
+                        var withFields = RecordWrites.SetFields(current, f.Edits, f.Who, NextStamp);
+                        if (!withFields.Extensions.SequenceEqual(current.Extensions))
+                            metadata = withFields;
                         break;
                     case BurnWrite b when isLive && current.Burns.All(burn => !burn.Version.Equals(current.Version)):
                         metadata = RecordWrites.Burn(current, NextStamp(), b.Reason);
@@ -879,7 +898,7 @@ public sealed class RecordVaultStore : IFileVaultStore
                     continue;
                 fingerprintKeys ??= FingerprintKeys.Derive(key);
                 metadata = WithMissingSets(write.Name, fileName, metadata, sections, key, fingerprintKeys);
-                records.Add(new RecordWrite(fileName, null, metadata, sections, entry.MainBytes, entry.FoldedCopies));
+                records.Add(new RecordWrite(fileName, null, metadata, sections, entry.MainBytes, entry.FoldedCopies, CarriesEdits(write)));
             }
         }
         finally
@@ -894,6 +913,12 @@ public sealed class RecordVaultStore : IFileVaultStore
             ProbeFormatThree(session);
         return WriteAll(records, key, reindex: false, written: null);
     }
+
+    /// <summary>
+    /// Issue #311: a write that carries field edits is written in format 3 whatever the folder's format
+    /// (format 2 stores no extensions), as the non-sudo <c>burn</c> converts a format 2 record.
+    /// </summary>
+    private static bool CarriesEdits(PendingWrite write) => write is FieldsWrite or ValueWrite { Fields.Count: > 0 };
 
     /// <summary>
     /// <c>add</c>'s question, without the stored value where possible: the value is the same when the
@@ -1067,14 +1092,28 @@ public sealed class RecordVaultStore : IFileVaultStore
         new(state.RecordId, state.Write, state.Type, state.Version, state.Name, state.CreatedMs, state.Burns,
             Fingerprints: null, state.Previous?.Version, PreviousFingerprints: null, state.Extensions);
 
-    /// <summary>A record's secret for <see cref="SecretsDb"/>, built on <see cref="SecretInfo.From"/>.</summary>
+    /// <summary>
+    /// A record's secret for <see cref="SecretsDb"/>, built on <see cref="SecretInfo.From"/>. Issue #311: with its
+    /// live fields (no history, no delete markers; null for none), which <c>export</c> carries.
+    /// </summary>
+    /// <exception cref="RecordConflictException">The Fields extension can't be decoded (the record is unreadable).</exception>
     internal static Secret ToSecret(SecretRecord state)
     {
         var info = SecretInfo.From(MetadataOf(state))
             ?? throw new InvalidOperationException("A tombstone is no secret.");
+        Dictionary<string, string>? fields;
+        try
+        {
+            fields = FieldsCodec.TryGet(state.Extensions)?.Live.ToDictionary(e => e.Name, e => e.Value!, StringComparer.Ordinal);
+        }
+        catch (TswapException ex) when (ex is not RecordConflictException)
+        {
+            throw new RecordConflictException($"its fields extension can't be read ({ex.Message})");
+        }
         return new Secret(Encoding.UTF8.GetString(state.Value), info.Created, info.Modified, info.BurnedAt, info.BurnReason)
         {
             History = info.History.Count == 0 ? null : info.History,
+            Fields = fields is { Count: > 0 } ? fields : null,
             PreviousValue = state.Previous is null ? null : Encoding.UTF8.GetString(state.Previous.Value),
             PreviousBurned = info.PreviousBurned,
         };
@@ -1474,8 +1513,13 @@ public sealed class RecordVaultStore : IFileVaultStore
     /// <param name="restored"><c>restore</c>: the previous value's burns become outstanding again on the new version.</param>
     /// <param name="created">The creation time of a secret that has no live record (its record's own is kept otherwise).</param>
     /// <param name="burnedAt">A burn to add: on the current version (burn), or on the new version with this time (import).</param>
+    /// <param name="edits">
+    /// Issue #311: field edits written with the value (stamped after the new version), or, when the value
+    /// is the same, as a metadata-only field write (<see cref="SetFieldsRecord"/>).
+    /// </param>
     internal static SecretRecord? NextRecord(SecretRecord? state, byte[] recordId, string name, byte[] value, bool rotated, bool restored,
-        DateTime created, DateTime? burnedAt, string? burnReason, byte[] origin, Func<Stamp> nextStamp)
+        DateTime created, DateTime? burnedAt, string? burnReason, byte[] origin, Func<Stamp> nextStamp,
+        IReadOnlyList<FieldEdit>? edits = null, FieldWho? who = null, bool checkFieldCaps = true)
     {
         SecretRecord? next = null;
         if (state is null || state.Type == RecordType.Tombstone || rotated || !state.Value.AsSpan().SequenceEqual(value))
@@ -1506,21 +1550,48 @@ public sealed class RecordVaultStore : IFileVaultStore
                 : new DateTimeOffset(DateTime.SpecifyKind(created, DateTimeKind.Utc)).ToUnixTimeMilliseconds();
             next = new SecretRecord(recordId, Stamp.Zero, RecordType.Value, version, name, createdMs, value, burns, previous)
             {
-                Extensions = state?.Extensions ?? [], // ruling 6: unknown extensions survive every rewrite
+                // Ruling 6: unknown extensions survive every rewrite. Issue #311: a new life gets a fresh
+                // Fields anchor (Since = this version), then the edits, stamped after the version.
+                Extensions = FieldEdits.ForWrite(state?.Extensions ?? [], live ? null : version, edits, who, nextStamp, name, checkFieldCaps),
                 Sealed = sealedPrevious,
             };
         }
-        else if (burnedAt is not null && state.OutstandingBurn is null)
+        else
         {
-            next = state with { Burns = [.. state.Burns, new BurnEntry(state.Version, nextStamp(), burnReason)] };
+            // The same value: a burn when it has none, then the field edits as a metadata-only write.
+            var same = state;
+            if (burnedAt is not null && state.OutstandingBurn is null)
+                same = state with { Burns = [.. state.Burns, new BurnEntry(state.Version, nextStamp(), burnReason)] };
+            if (edits is { Count: > 0 })
+                same = SetFieldsRecord(same, edits, who ?? throw new ArgumentNullException(nameof(who)), nextStamp, checkFieldCaps);
+            if (!ReferenceEquals(same, state) && !(same.Burns.SequenceEqual(state.Burns) && same.Extensions.SequenceEqual(state.Extensions)))
+                next = same;
         }
         return next is null ? null : RecordMerge.Normalize(next);
     }
 
-    /// <summary>The tombstone a delete writes over the live record <paramref name="state"/> (burns kept as history).</summary>
+    /// <summary>
+    /// Issue #311: <see cref="RecordWrites.SetFields"/> on a record held as plaintext (decoded whole: a
+    /// format 2 record, or copies only plaintext can merge): the edits applied to its <c>Fields</c>
+    /// extension, everything else kept; the write stamp is the commit's.
+    /// </summary>
+    /// <exception cref="TswapException"><paramref name="state"/> is a tombstone (<c>No secret 'NAME'.</c>), or a refusal of <see cref="FieldEdits.Apply"/>.</exception>
+    internal static SecretRecord SetFieldsRecord(SecretRecord state, IReadOnlyList<FieldEdit> edits, FieldWho who, Func<Stamp> nextStamp,
+        bool checkCaps = true)
+    {
+        if (state.Type == RecordType.Tombstone)
+            throw new TswapException($"No secret '{state.Name}'.");
+        return state with { Extensions = FieldEdits.ForWrite(state.Extensions, null, edits, who, nextStamp, state.Name, checkCaps) };
+    }
+
+    /// <summary>
+    /// The tombstone a delete writes over the live record <paramref name="state"/> (burns kept as
+    /// history; issue #311: no <c>Fields</c> extension, every other extension kept).
+    /// </summary>
     internal static SecretRecord Tombstone(SecretRecord state, Stamp version) => RecordMerge.Normalize(state with
     {
         Type = RecordType.Tombstone, Version = version, Value = [], Previous = null, Fingerprints = null, Sealed = null,
+        Extensions = FieldEdits.ForTombstone(state.Extensions),
     });
 
     /// <summary>
@@ -1549,8 +1620,12 @@ public sealed class RecordVaultStore : IFileVaultStore
                 burns.Add(new BurnEntry(version, burn, secret.BurnReason));
             }
             var recordId = FilenameHasher.ComputeRecordId(namesKey, name);
+            // Issue #311: the lineage anchor every created record carries (its target is always format 3).
             writes.Add((FilenameHasher.ToFilename(recordId), RecordMerge.Normalize(new SecretRecord(
-                recordId, Stamp.Zero, RecordType.Value, version, name, UnixMs(secret.Created), Encoding.UTF8.GetBytes(secret.Value), burns))));
+                recordId, Stamp.Zero, RecordType.Value, version, name, UnixMs(secret.Created), Encoding.UTF8.GetBytes(secret.Value), burns)
+            {
+                Extensions = FieldsCodec.With([], new FieldSet(version, [])),
+            })));
         }
         WriteRecords(writes, key, loaded);
         return _highestSeen;
@@ -1885,7 +1960,8 @@ public sealed class RecordVaultStore : IFileVaultStore
     /// bytes it was read as (the guard's reference) and the conflicted copies folded into it.
     /// </summary>
     private sealed record RecordWrite(string FileName, SecretRecord? State, RecordMetadata? Metadata = null,
-        IReadOnlyDictionary<Stamp, byte[]>? Sections = null, byte[]? MainBytes = null, IReadOnlyList<(string Path, byte[] Bytes)>? Copies = null);
+        IReadOnlyDictionary<Stamp, byte[]>? Sections = null, byte[]? MainBytes = null, IReadOnlyList<(string Path, byte[] Bytes)>? Copies = null,
+        bool ForceV3 = false);
 
     /// <summary>
     /// <see cref="WriteRecords"/>' body for either form of record, shared by every write: the newer-marker
@@ -1907,7 +1983,7 @@ public sealed class RecordVaultStore : IFileVaultStore
         _owner.CreateDirectory(recordsDir);
         var origin = OriginId();
         List<RecordMetadata> result = [];
-        using var fingerprintKeys = WritesV3 || reindex ? FingerprintKeys.Derive(key) : null;
+        using var fingerprintKeys = WritesV3 || reindex || writes.Any(w => w.ForceV3) ? FingerprintKeys.Derive(key) : null;
         foreach (var write in writes)
         {
             var hlc = Hlc.Next(_highestSeen, _time.GetUtcNow().ToUnixTimeMilliseconds());
@@ -1927,9 +2003,9 @@ public sealed class RecordVaultStore : IFileVaultStore
             else
             {
                 next = write.State! with { Write = stamp };
-                if (fingerprintKeys is not null)
+                if (WritesV3 || reindex || write.ForceV3)
                 {
-                    next = PrepareV3(next, fingerprintKeys, recomputeOlderSets: reindex);
+                    next = PrepareV3(next, fingerprintKeys!, recomputeOlderSets: reindex);
                     bytes = SecretRecordCodec.Encode(next, key, KeyringFormat.RecordFormatVersion);
                     next = next with { Sealed = next.Type == RecordType.Tombstone ? null : SecretRecordCodec.SectionsOf(bytes, next) };
                 }
@@ -2056,6 +2132,12 @@ public sealed class RecordVaultStore : IFileVaultStore
             return null;
         }
     }
+
+    /// <summary>
+    /// This machine's origin id in the short form <see cref="Stamp.ToString"/> shows (its first 8 hex digits), read from
+    /// the machine config alone (no keyring), for the who-record of a field change.
+    /// </summary>
+    public string ShortOriginId() => Convert.ToHexStringLower(OriginId())[..8];
 
     private byte[] OriginId()
     {
