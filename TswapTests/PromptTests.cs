@@ -67,6 +67,17 @@ public class PromptTests
     }
 
     [Fact]
+    public void Template_ListsSlotEnrollUnderNever()
+    {
+        // Brief T27: slot enroll needs no sudo here, but it adds a way into a vault on another machine: human use only.
+        var text = Prompt.GetText("tswap");
+        var never = text[text.IndexOf("## Commands you must NEVER use", StringComparison.Ordinal)..text.IndexOf("## Key rules", StringComparison.Ordinal)];
+        Assert.Contains(
+            "- `tswap slot enroll --via <user@host>` — Adds this machine's key or chip to the vault on another machine over SSH (human use only)",
+            never);
+    }
+
+    [Fact]
     public void Template_TellsTheAgentToReplaceABurnedSecretWithRotate()
     {
         // Brief T6 decision 7: replacing a burned secret is the agent's job, and needs no sudo.

@@ -67,6 +67,9 @@ public sealed class FleetMachine : IDisposable
     /// <summary>FIDO2 plan, task 8: the OS the guided init words and orders its list for (null: this one).</summary>
     public System.Runtime.InteropServices.OSPlatform? Os { get; set; }
 
+    /// <summary>Brief T27: the SSH transport this machine's <c>slot enroll --via</c> uses (null: the context's default).</summary>
+    internal TswapCli.Ssh.ISshTransport? Ssh { get; set; }
+
     /// <summary>Brief T6: the record store's time seam (null: the system clock).</summary>
     public Func<DateTimeOffset>? Clock { get; set; }
 
@@ -172,7 +175,7 @@ public sealed class FleetMachine : IDisposable
         var store = VaultStores.Open(Dir, Ownership, storeTime, console.Error);
         if (store is RecordVaultStore records)
             StoreOpened?.Invoke(records);
-        return new CommandContext(console, env, store, Keys, unlocker, TestKey: Tpm ?? SecureEnclave, SudoBypass: Sudo)
+        var ctx = new CommandContext(console, env, store, Keys, unlocker, TestKey: Tpm ?? SecureEnclave, SudoBypass: Sudo)
         {
             MigrationSeams = MigrationSeams,
             Time = Time ?? TimeProvider.System,
@@ -181,6 +184,7 @@ public sealed class FleetMachine : IDisposable
             Terminal = Terminal is { } terminal ? terminal.Open : null,
             Os = Os ?? YubiKeyAccessTexts.CurrentOs(),
         };
+        return Ssh is null ? ctx : ctx with { Ssh = Ssh };
     }
 
     /// <summary>Runs and asserts success, returning stdout.</summary>

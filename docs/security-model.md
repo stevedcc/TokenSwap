@@ -102,6 +102,29 @@ the vault is open, would hand code running as you root and every secret. So:
 YubiKeys never go through libfido2 on Linux and macOS (Yubico's SDK, built into the binary, handles
 them; libfido2 skips Yubico's USB vendor id), so none of this applies to them.
 
+### Enrolling over SSH: what `slot enroll --via` trusts
+
+`tswap slot enroll --via <user@host>` ([multi-machine.md](multi-machine.md#enrolling-over-ssh)) runs
+`slot request` and `slot accept` on the new machine without sudo, and `slot approve - -` and
+`slot merge -` on the host over SSH, under the host's sudo. What it relies on:
+
+- **SSH authenticates the channel**: the host key (checked by ssh, as for any login) and your user key.
+  tswap passes the destination after `--` (never an option), builds the remote command from fixed words
+  and a checked program path, and handles no password.
+- **The files are the same reviewed formats** as the hand-carried ones (request, approve file,
+  receipt), so nothing new is parsed. The joining side still checks the approve file against its
+  pending request (slot id, echoed public key, backend, hardware blob), and the host merges only the
+  slot it approved (`slot merge` without `--yes`, with stdin not a terminal, refuses any other).
+- **The host's output is untrusted text.** Its lines are shown labelled `[<user@host>] ` (control
+  characters replaced), and no failure message quotes what the host printed: a partial approve file is
+  a way into the vault while this machine's pending private key is in its config.
+
+**The sudoers trade-off.** The recommended sudoers rule lets the SSH user run exactly
+`tswap --version`, `tswap slot approve - -` and `tswap slot merge -` as root without a password. Any
+process running as that user on the host can then approve a request, which hands out a way into the
+vault: the same class of risk as `export`, and the reason `slot approve` needs sudo at all. Give the
+rule only to a host account that runs nothing else untrusted.
+
 ## Threat model and non-goals
 
 tswap prevents **accidental leaks and casual exfiltration**. It does not attempt to confine a

@@ -38,15 +38,15 @@ namespace TswapCli.Commands;
 /// vault's secrets — see <see cref="RequiresSudo"/>'s doc comment for how that mixed reality maps
 /// onto this type's single <c>RequiresSudo</c> flag.</para>
 /// </summary>
-public sealed class SlotCommand : ICliCommand
+public sealed partial class SlotCommand : ICliCommand
 {
     public string Name => "slot";
     public string HelpUsage => $"{Forms} (approve, merge and add take --recovery-key-stdin)";
 
     /// <summary>The subcommand forms, shared by the help line and the no-argument usage so the two can't drift.</summary>
     private static string Forms =>
-        $"slot request [--tpm|{SecureEnclaveTouchChoice.Flags}] {VaultPasswordChoice.Flags} [--vault-dir <folder>] <file> | slot approve <request-file> <approve-file> | slot accept <file> [--receipt <file>] [--vault-dir <shared folder>] | slot merge <receipt> [--yes] | slot add --tpm {VaultPasswordChoice.Flags} | slot add {SecureEnclaveTouchChoice.Flags} {VaultPasswordChoice.Flags} | slot add --fido2 [--serial <n>] | slot add --yubikey";
-    public string Description => "Enroll another machine into a keyring vault via hand-carried files (request, approve, accept, merge), or add this machine's TPM or Secure Enclave (--tpm, --secure-enclave with --with-touch or --no-touch; it then opens the vault on this machine) or a plugged-in YubiKey or other security key to this machine's keyring as its own slot (--yubikey: a YubiKey's OTP challenge-response; --fido2: a FIDO2 credential on a key of any brand, its PIN and a touch on every unlock, read at the terminal; --serial picks a YubiKey by its serial on Linux and macOS); slot request --secure-enclave and slot add --secure-enclave need --with-touch (Touch ID or password on every unlock) or --no-touch (no prompt; read its warning)";
+        $"slot request [--tpm|{SecureEnclaveTouchChoice.Flags}] {VaultPasswordChoice.Flags} [--vault-dir <folder>] <file> | slot approve <request-file> <approve-file> | slot approve - - | slot accept <file> [--receipt <file>] [--vault-dir <shared folder>] | slot merge <receipt> [--yes] | slot merge - | {EnrollForm} | slot add --tpm {VaultPasswordChoice.Flags} | slot add {SecureEnclaveTouchChoice.Flags} {VaultPasswordChoice.Flags} | slot add --fido2 [--serial <n>] | slot add --yubikey";
+    public string Description => "Enroll another machine into a keyring vault via hand-carried files (request, approve, accept, merge), or in one command run on the new machine over SSH (slot enroll --via <user@host>: request and accept there, approve and merge on the machine that opens the vault, under its sudo -n; --remote-tswap names tswap's path there, --no-remote-sudo drops sudo, --fresh starts a new enrolment instead of continuing a kept one; for a person, never an agent), or add this machine's TPM or Secure Enclave (--tpm, --secure-enclave with --with-touch or --no-touch; it then opens the vault on this machine) or a plugged-in YubiKey or other security key to this machine's keyring as its own slot (--yubikey: a YubiKey's OTP challenge-response; --fido2: a FIDO2 credential on a key of any brand, its PIN and a touch on every unlock, read at the terminal; --serial picks a YubiKey by its serial on Linux and macOS); slot request --secure-enclave and slot add --secure-enclave need --with-touch (Touch ID or password on every unlock) or --no-touch (no prompt; read its warning). A '-' file is stdin or stdout: slot approve - - reads the request from stdin and writes the approve file to stdout (every other line goes to stderr), as do slot approve - <approve-file> and slot approve <request-file> - for one of the two, and slot merge - reads the receipt from stdin";
 
     /// <summary>
     /// <c>true</c> even though only <c>approve</c> actually calls <c>ctx.RequireSudo</c>
@@ -78,6 +78,7 @@ public sealed class SlotCommand : ICliCommand
             "accept" => ExecuteAccept(ctx, rest),
             "add" => ExecuteAdd(ctx, rest),
             "merge" => ExecuteMerge(ctx, rest),
+            "enroll" => ExecuteEnroll(ctx, rest),
             _ => throw new UsageException(Usage(ctx)),
         };
     }
@@ -100,7 +101,7 @@ public sealed class SlotCommand : ICliCommand
     /// pending-enrollment guard refuses ordinary use of this config until <c>slot accept</c> runs.
     /// No test-mode branch: in test mode <see cref="TestKeyYubiKeyService"/> answers the challenge.
     /// </summary>
-    private static int ExecuteRequest(CommandContext ctx, string[] args)
+    private static int ExecuteRequest(CommandContext ctx, string[] args, RequestHooks? hooks = null)
     {
         // Brief T5 decision 2: --tpm / --secure-enclave enroll this machine's own hardware
         // instead of a YubiKey (no flag: the one-YubiKey request, unchanged). Checked before any
@@ -124,9 +125,10 @@ public sealed class SlotCommand : ICliCommand
         }
         var flags = args.Where(a => a.StartsWith("--")).ToArray();
         var positional = args.Where(a => !a.StartsWith("--")).ToArray();
-        if (positional.Length != 1 || flags.Length > 1 || flags.Any(f => f is not ("--tpm" or "--secure-enclave")))
+        // Brief T27: 'slot enroll' names no file; the path is made from the slot id (hooks.PathFor) after the save.
+        if (positional.Length != (hooks?.PathFor is null ? 1 : 0) || flags.Length > 1 || flags.Any(f => f is not ("--tpm" or "--secure-enclave")))
             throw new UsageException(usage);
-        var path = positional[0];
+        var path = hooks?.PathFor is null ? positional[0] : null;
         HardwareBackend? hardware = flags switch
         {
             ["--tpm"] => HardwareBackend.Tpm,
@@ -136,14 +138,14 @@ public sealed class SlotCommand : ICliCommand
         // Brief T11 decision 7: as soon as the flags are valid, before any prompt or write.
         SecureEnclaveTouchChoice.WarnIfNoTouch(ctx.Console, requirePresence);
         if (hardware is not null)
-            return ExecuteHardwareRequest(ctx, hardware.Value, path, requirePresence ?? true, passwordFlag, passwordFolder);
+            return ExecuteHardwareRequest(ctx, hardware.Value, path, requirePresence ?? true, passwordFlag, passwordFolder, hooks);
         var c = ctx.Console;
 
         var fileStore = ctx.Storage as IFileVaultStore;
         if (fileStore is not null && fileStore.Owner.FileExists(fileStore.ConfigFile))
         {
             if (!YesNo.Ask(c.Out.Write, c.ReadLine, "This machine already has a config. Overwrite and start a new slot request?", defaultAnswer: null))
-                return 0;
+                return Declined(hooks);
         }
 
         c.Out.WriteLine("\n╔════════════════════════════════════════╗");
@@ -194,13 +196,18 @@ public sealed class SlotCommand : ICliCommand
 
         if (fileStore is not null && fileStore.Owner.FileExists(fileStore.ConfigFile))
         {
-            fileStore.BackupConfig();
+            var backup = fileStore.BackupConfig();
+            if (hooks is not null)
+                hooks.BackupPath = backup;
         }
         ctx.Storage.SaveConfig(config);
         // No SaveSecrets call: there is no vault yet — 'slot accept' is what first creates one,
         // once it has a real K_v to encrypt an empty database under.
 
+        path = SavedRequest(hooks, path, slotId);
         WriteRequestFile(ctx, path, slotId, slotKeyPair.PublicKey, hwBlob);
+        if (hooks is not null)
+            hooks.Written = true;
 
         c.Out.WriteLine("\n╔════════════════════════════════════════╗");
         c.Out.WriteLine("║  ✓ SLOT REQUEST CREATED                ║");
@@ -227,8 +234,8 @@ public sealed class SlotCommand : ICliCommand
     /// blob in the request file. <c>KEK_slot</c> itself is zeroed: <c>slot accept</c> recovers it
     /// from the blob. No YubiKey is touched.
     /// </summary>
-    private static int ExecuteHardwareRequest(CommandContext ctx, HardwareBackend backend, string path, bool requirePresence,
-        bool? passwordFlag, string? passwordFolder)
+    private static int ExecuteHardwareRequest(CommandContext ctx, HardwareBackend backend, string? path, bool requirePresence,
+        bool? passwordFlag, string? passwordFolder, RequestHooks? hooks)
     {
         var c = ctx.Console;
         // Throws a clear TswapException on an OS without this hardware, before any output.
@@ -239,7 +246,7 @@ public sealed class SlotCommand : ICliCommand
         if (fileStore is not null && fileStore.Owner.FileExists(fileStore.ConfigFile))
         {
             if (!YesNo.Ask(c.Out.Write, c.ReadLine, "This machine already has a config. Overwrite and start a new slot request?", defaultAnswer: null))
-                return 0;
+                return Declined(hooks);
         }
 
         c.Out.WriteLine("\n╔════════════════════════════════════════╗");
@@ -289,10 +296,17 @@ public sealed class SlotCommand : ICliCommand
         config = SecurityWarnings.Acknowledge(config); // brief T7 item 5: a YubiKey's posture is explained below
 
         if (fileStore is not null && fileStore.Owner.FileExists(fileStore.ConfigFile))
-            fileStore.BackupConfig();
+        {
+            var backup = fileStore.BackupConfig();
+            if (hooks is not null)
+                hooks.BackupPath = backup;
+        }
         ctx.Storage.SaveConfig(config);
 
+        path = SavedRequest(hooks, path, slotId);
         WriteRequestFile(ctx, path, slotId, slotKeyPair.PublicKey, hwBlob, backend);
+        if (hooks is not null)
+            hooks.Written = true;
 
         c.Out.WriteLine("\n╔════════════════════════════════════════╗");
         c.Out.WriteLine("║  ✓ SLOT REQUEST CREATED                ║");
@@ -315,6 +329,37 @@ public sealed class SlotCommand : ICliCommand
         c.Out.WriteLine("then bring the resulting approve file back here and run:");
         c.Out.WriteLine($"  {ctx.Prefix} slot accept <approve-file>");
         return 0;
+    }
+
+    /// <summary>
+    /// Brief T27: what <c>slot enroll</c> learns from its request step. <see cref="PathFor"/> makes the request file's path
+    /// from the new slot id, after the pending config is saved; the other fields report what happened.
+    /// </summary>
+    private sealed class RequestHooks
+    {
+        public Func<byte[], string>? PathFor { get; init; }
+        public bool Declined { get; set; }
+        public string? BackupPath { get; set; }
+        public bool Saved { get; set; }
+        public bool Written { get; set; }
+        public string? RequestPath { get; set; }
+    }
+
+    private static int Declined(RequestHooks? hooks)
+    {
+        if (hooks is not null)
+            hooks.Declined = true;
+        return 0;
+    }
+
+    /// <summary>The request file's path once the pending config is saved (brief T27: from the slot id, for enroll).</summary>
+    private static string SavedRequest(RequestHooks? hooks, string? path, byte[] slotId)
+    {
+        if (hooks is null)
+            return path!;
+        hooks.Saved = true;
+        hooks.RequestPath = path ?? hooks.PathFor!(slotId);
+        return hooks.RequestPath;
     }
 
     /// <summary>Ruling 16: <c>slot request --password</c> without a vault folder that has a <c>vault-password</c> file.</summary>
@@ -411,22 +456,41 @@ public sealed class SlotCommand : ICliCommand
     private static int ExecuteApprove(CommandContext ctx, string[] args)
     {
         var (positional, withRecoveryKey) = SplitRecoveryKeyFlag(args);
+        var approveUsage = $"{ctx.Prefix} slot approve <request-file> <approve-file> [{RecoveryKeyFlag}]";
         if (positional.Length != 2 || positional.Any(a => a.StartsWith("--")))
-            throw new UsageException($"{ctx.Prefix} slot approve <request-file> <approve-file> [{RecoveryKeyFlag}]");
+            throw new UsageException(approveUsage);
         var requestPath = positional[0];
         var approvePath = positional[1];
-        var c = ctx.Console;
+        // Brief T27: a '-' request file is read from stdin, which then can't carry the recovery key too.
+        if (requestPath == StdioPath && withRecoveryKey)
+            throw new UsageException(approveUsage + StdinCarriesOneText("request file"));
 
         // Security-critical: this unlocks the *existing* vault and produces an artifact that
         // decrypts K_v for whoever holds the private key matching the (attacker-suppliable)
         // request file's public key — exactly export's threat model. Must run before anything
-        // else: reading the request file, unlocking, and writing output are all gated on this.
+        // else: reading the request file (or stdin), unlocking, and writing output are all gated on this.
         ctx.RequireSudo("slot approve");
 
-        if (!File.Exists(requestPath))
-            throw new TswapException($"Slot request file not found: {requestPath}");
+        // Brief T27: with an approve file of '-', stdout carries the serialised approve file and nothing else: every
+        // human line of this command (the unlock's included) goes to stderr, and the file is written to the original
+        // stdout once, at the end.
+        TextWriter? approveOut = null;
+        if (approvePath == StdioPath)
+        {
+            approveOut = ctx.Console.Out;
+            ctx = ctx with { Console = new HumanLinesToStderrConsole(ctx.Console) };
+        }
+        var c = ctx.Console;
 
-        var request = SlotEnrollmentFileCodec.DeserializeRequest(File.ReadAllText(requestPath));
+        string requestText;
+        if (requestPath == StdioPath)
+            requestText = ReadStdinFile(ctx, "slot approve", "request file");
+        else if (!File.Exists(requestPath))
+            throw new TswapException($"Slot request file not found: {requestPath}");
+        else
+            requestText = File.ReadAllText(requestPath);
+
+        var request = SlotEnrollmentFileCodec.DeserializeRequest(requestText);
         var requesterPublicKey = SlotEnrollmentFileCodec.DecodeFixed(request.PublicKey, SlotKeyPair.KeySize, "slot request file's public key");
         var newSlotId = SlotEnrollmentFileCodec.DecodeFixed(request.SlotId, KeyringFormat.SlotIdSize, "slot request file's slot id");
         // Brief T4 decision 6: the request enrolls one YubiKey and carries its blob (strictly
@@ -453,7 +517,7 @@ public sealed class SlotCommand : ICliCommand
             enrolled = requestedBackend == HardwareBackend.Tpm ? "its TPM" : "its Secure Enclave";
         }
 
-        c.Out.WriteLine($"Read slot request from: {requestPath}");
+        c.Out.WriteLine($"Read slot request from: {(requestPath == StdioPath ? "stdin" : requestPath)}");
         c.Out.WriteLine($"The requesting machine enrolls {enrolled} as its own slot.");
         PrintFingerprint(c, "Requesting machine's slot", requesterPublicKey);
         c.Out.WriteLine("Compare this against the fingerprint shown on the requesting machine before continuing.\n");
@@ -506,7 +570,9 @@ public sealed class SlotCommand : ICliCommand
             request.Backend,
             vaultPassword is null ? null : Convert.ToBase64String(vaultPassword));
 
-        ctx.WriteOutputFile(approvePath, SlotEnrollmentFileCodec.SerializeApprove(approveFile));
+        var approveText = SlotEnrollmentFileCodec.SerializeApprove(approveFile);
+        if (approveOut is null)
+            ctx.WriteOutputFile(approvePath, approveText);
 
         // Brief T5 decision 1: remember what was approved, so 'slot merge' can add the finished
         // slot without asking. Only after the approve file is written: a failed approve records
@@ -518,7 +584,15 @@ public sealed class SlotCommand : ICliCommand
             .ToList();
         ctx.Storage.SaveConfig(config with { ApprovedSlots = approved });
 
-        c.Out.WriteLine($"✓ Approved. Approve file written to: {approvePath}");
+        if (approveOut is not null)
+        {
+            // Brief T27: once, after the ApprovedSlots save, to the original stdout.
+            approveOut.Write(approveText);
+            approveOut.Flush();
+            c.Out.WriteLine("✓ Approved. Approve file written to stdout.");
+        }
+        else
+            c.Out.WriteLine($"✓ Approved. Approve file written to: {approvePath}");
         c.Out.WriteLine("This machine's own keyring is unchanged until the requesting machine's receipt is merged:");
         c.Out.WriteLine("'slot accept' there writes a receipt; bring it back here and run");
         c.Out.WriteLine($"  sudo {ctx.Prefix} slot merge <receipt-file>");
@@ -1537,6 +1611,9 @@ public sealed class SlotCommand : ICliCommand
         if (positional.Length != 1 || positional[0].StartsWith("--") || rest.Count(a => a == "--yes") > 1)
             throw new UsageException(usage);
         var path = positional[0];
+        // Brief T27: a '-' receipt is read from stdin, which then can't carry the recovery key too.
+        if (path == StdioPath && withRecoveryKey)
+            throw new UsageException(usage + StdinCarriesOneText("receipt"));
         var c = ctx.Console;
 
         // config.json is not secret: refuse what can never take a slot before sudo or any unlock.
@@ -1550,7 +1627,9 @@ public sealed class SlotCommand : ICliCommand
 
         ctx.RequireSudo("slot merge");
 
-        var (incoming, source) = ReadMergeFile(path, ctx.Prefix);
+        var (incoming, source) = path == StdioPath
+            ? ReadMergeText(ReadStdinFile(ctx, "slot merge", "receipt"), "stdin", ctx.Prefix)
+            : ReadMergeFile(path, ctx.Prefix);
         if (incoming.FormatVersion != keyring.FormatVersion)
             throw new TswapException(
                 $"The {source} is for a keyring format version {incoming.FormatVersion}; this vault's is version " +
@@ -1666,7 +1745,15 @@ public sealed class SlotCommand : ICliCommand
             throw new TswapException($"File not found: {path}");
         if (new FileInfo(path).Length > MaxMergeFileSize)
             throw new TswapException($"{path} is too large to be a slot receipt or a config.json (over {MaxMergeFileSize} bytes).");
-        var json = File.ReadAllText(path);
+        return ReadMergeText(File.ReadAllText(path), path, prefix);
+    }
+
+    /// <summary>
+    /// <see cref="ReadMergeFile"/>'s parse of the text <paramref name="json"/>; <paramref name="path"/> names where it came
+    /// from in messages (a path, or <c>stdin</c> for brief T27's <c>slot merge -</c>).
+    /// </summary>
+    private static (TswapCore.Keyring.Keyring Keyring, string Source) ReadMergeText(string json, string path, string prefix)
+    {
 
         System.Text.Json.Nodes.JsonObject? root;
         try
@@ -1800,6 +1887,53 @@ public sealed class SlotCommand : ICliCommand
         YubiKeySlotKind.Corrupt(var error) => throw new TswapException(error),
         _ => YubiKeySlotBlob.Decode(hwBlob), // not a TSYK blob: throws "wrong magic" or "truncated", as before
     };
+
+    // --- the '-' forms of approve and merge (brief T27) ---
+
+    /// <summary>The file argument of <c>slot approve</c> and <c>slot merge</c> that means stdin or stdout.</summary>
+    internal const string StdioPath = "-";
+
+    /// <summary>Largest file a <c>-</c> argument reads from stdin, in bytes (UTF-8).</summary>
+    internal const int MaxStdinFileSize = 1024 * 1024;
+
+    /// <summary>The usage note for a <c>-</c> input given with <see cref="RecoveryKeyFlag"/>.</summary>
+    private static string StdinCarriesOneText(string what) =>
+        $" ('-' reads the {what} from stdin, and stdin can carry only one of them: the {what} or the recovery key)";
+
+    /// <summary>
+    /// Brief T27: the file a <c>-</c> argument names, read from stdin: refused when stdin is a terminal and when it is
+    /// larger than <see cref="MaxStdinFileSize"/> (nothing past that is read). The caller parses it as it would the file.
+    /// </summary>
+    private static string ReadStdinFile(CommandContext ctx, string command, string what)
+    {
+        if (!ctx.Console.IsInputRedirected)
+            throw new TswapException(
+                $"{command}: '-' reads the {what} from stdin, and stdin is a terminal here. Pipe the file in, or name it.");
+        var buffer = new char[MaxStdinFileSize + 1];
+        var read = ctx.Console.In.ReadBlock(buffer, 0, buffer.Length);
+        // A UTF-8 character is at least one byte, so more characters than the limit is more bytes too.
+        if (read > MaxStdinFileSize || System.Text.Encoding.UTF8.GetByteCount(buffer, 0, read) > MaxStdinFileSize)
+            throw new TswapException($"{command}: stdin is larger than 1 MiB, so it is not a {what}. Nothing was changed.");
+        return new string(buffer, 0, read);
+    }
+
+    /// <summary>
+    /// Brief T27: the console of <c>slot approve &lt;request&gt; -</c>, whose stdout is the approve file: every human
+    /// line (<see cref="Out"/>, password echo) goes to the original stderr instead.
+    /// </summary>
+    private sealed class HumanLinesToStderrConsole(IConsole inner) : IConsole
+    {
+        public TextWriter Out => inner.Error;
+        public TextWriter Error => inner.Error;
+        public TextReader In => inner.In;
+        public bool IsInputRedirected => inner.IsInputRedirected;
+        public bool IsOutputRedirected => true;
+        public string? ReadLine() => inner.ReadLine();
+        public string ReadPassword(TextWriter? echo = null) => inner.ReadPassword(echo ?? inner.Error);
+        // No colours: on a terminal they are escape sequences written to stdout.
+        public void SetForeground(ConsoleColor color) { }
+        public void ResetColor() { }
+    }
 
     // --- the recovery key (brief T5 decision 3, issue #187) ---
 
