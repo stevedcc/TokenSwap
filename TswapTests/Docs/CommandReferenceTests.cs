@@ -199,7 +199,7 @@ public class CommandReferenceTests
     [Fact]
     public void Subcommands_TokenisesBothUsageShapes()
     {
-        Assert.Equal(["request", "approve", "accept", "merge", "add"],
+        Assert.Equal(["request", "approve", "accept", "merge", "enroll", "add"],
             CommandReference.Subcommands(CommandRegistry.All.Single(c => c.Name == "slot")));
         Assert.Equal(["serve", "unlock", "lock", "status", "forward", "call", "route", "socket", "template"],
             CommandReference.Subcommands(CommandRegistry.All.Single(c => c.Name == "broker")));
@@ -370,6 +370,16 @@ internal static class SudoTableDrive
         a.Ok("", "slot", "approve", request, approve); // with sudo: what the new machine needs next
         var acc = b.Run("", "slot", "accept", approve);
         results["slot accept"] = R(acc, acc.Exit == 0 && b.Run("", "names").Exit == 0);
+
+        // slot enroll (brief T27): a third machine (G) enrols into A over the loopback SSH double, without sudo here;
+        // the double runs A's approve and merge as sudo would there. Its job: G joined and A's keyring has G's slot.
+        using (var g = new FleetMachine("sudo-g", SimulatedYubiKeyService.WithKeys(44444444)) { Sudo = false })
+        {
+            g.Ssh = new LoopbackSshTransport(a, "sudo", "-n", "tswap");
+            var enroll = g.Run("", "slot", "enroll", "--via", "me@host");
+            results["slot enroll"] = R(enroll, enroll.Exit == 0 && g.Config.PendingSlotId is null
+                && a.Keyring.Slots.Any(s => Convert.ToBase64String(s.SlotId) == g.Config.KeyringSlotId));
+        }
 
         a.Sudo = false;
         results["slot approve"] = R(a.Run("", "slot", "approve", a.PathOf("other-request.json"), a.PathOf("other-approve.json")));

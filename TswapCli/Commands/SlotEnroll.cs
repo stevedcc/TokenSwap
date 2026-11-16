@@ -28,9 +28,12 @@ public sealed partial class SlotCommand
     [GeneratedRegex(@"^[A-Za-z0-9_./:\\-]+$")]
     private static partial Regex RemoteProgramPattern();
 
-    private static string EnrollUsage(CommandContext ctx) =>
-        $"{ctx.Prefix} slot enroll --via <user@host> [--tpm|{SecureEnclaveTouchChoice.Flags}] {VaultPasswordChoice.Flags} " +
+    /// <summary>The help form of <c>slot enroll</c>, shared by <see cref="Forms"/> and its own usage.</summary>
+    private static string EnrollForm =>
+        $"slot enroll --via <user@host> [--tpm|{SecureEnclaveTouchChoice.Flags}] {VaultPasswordChoice.Flags} " +
         "[--vault-dir <folder>] [--remote-tswap <path>] [--no-remote-sudo] [--fresh]";
+
+    private static string EnrollUsage(CommandContext ctx) => $"{ctx.Prefix} {EnrollForm}";
 
     private static int ExecuteEnroll(CommandContext ctx, string[] args)
     {

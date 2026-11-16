@@ -46,6 +46,11 @@ terminal: they are for the human. An AI agent whose command fails with "needs th
 asks the user to run `tswap agent start` and never handles the password itself. Setting up the
 password and the agent: [vault-password-and-agent.md](vault-password-and-agent.md).
 
+`slot enroll --via <user@host>` needs no sudo on the machine it runs on either, but it is the human's
+too: it adds this machine's key or chip to the vault on another machine over SSH, where approve and
+merge run under that machine's sudo, so it creates a new way into that vault. The skill lists it among
+the commands an agent must never use ([multi-machine.md](multi-machine.md#enrolling-over-ssh)).
+
 ### Fields
 
 Fields are bundled storage for convenience: everything about a credential is kept in one place next to its
