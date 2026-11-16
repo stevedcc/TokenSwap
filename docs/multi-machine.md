@@ -83,6 +83,12 @@ prints the steps for your vault, as commands for "there" and "here":
   there is no merge step.
 - On Windows, run the `sudo` steps from an administrator prompt, without `sudo`.
 
+## Enrolling over SSH
+
+With SSH from the new machine to a machine that opens the vault, `tswap slot enroll --via <user@host>`
+runs the four steps above in one command, on the new machine: request and accept here, approve and
+merge on the other machine over SSH.
+
 ## Remote enrolment of a YubiKey into a TPM vault, step by step
 
 The vault lives on a machine with a TPM (say a router VM), and the YubiKey stays at your desk: no

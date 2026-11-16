@@ -38,7 +38,7 @@ namespace TswapCli.Commands;
 /// vault's secrets — see <see cref="RequiresSudo"/>'s doc comment for how that mixed reality maps
 /// onto this type's single <c>RequiresSudo</c> flag.</para>
 /// </summary>
-public sealed class SlotCommand : ICliCommand
+public sealed partial class SlotCommand : ICliCommand
 {
     public string Name => "slot";
     public string HelpUsage => $"{Forms} (approve, merge and add take --recovery-key-stdin)";
@@ -78,6 +78,7 @@ public sealed class SlotCommand : ICliCommand
             "accept" => ExecuteAccept(ctx, rest),
             "add" => ExecuteAdd(ctx, rest),
             "merge" => ExecuteMerge(ctx, rest),
+            "enroll" => ExecuteEnroll(ctx, rest),
             _ => throw new UsageException(Usage(ctx)),
         };
     }
@@ -100,7 +101,7 @@ public sealed class SlotCommand : ICliCommand
     /// pending-enrollment guard refuses ordinary use of this config until <c>slot accept</c> runs.
     /// No test-mode branch: in test mode <see cref="TestKeyYubiKeyService"/> answers the challenge.
     /// </summary>
-    private static int ExecuteRequest(CommandContext ctx, string[] args)
+    private static int ExecuteRequest(CommandContext ctx, string[] args, RequestHooks? hooks = null)
     {
         // Brief T5 decision 2: --tpm / --secure-enclave enroll this machine's own hardware
         // instead of a YubiKey (no flag: the one-YubiKey request, unchanged). Checked before any
@@ -124,9 +125,10 @@ public sealed class SlotCommand : ICliCommand
         }
         var flags = args.Where(a => a.StartsWith("--")).ToArray();
         var positional = args.Where(a => !a.StartsWith("--")).ToArray();
-        if (positional.Length != 1 || flags.Length > 1 || flags.Any(f => f is not ("--tpm" or "--secure-enclave")))
+        // Brief T27: 'slot enroll' names no file; the path is made from the slot id (hooks.PathFor) after the save.
+        if (positional.Length != (hooks?.PathFor is null ? 1 : 0) || flags.Length > 1 || flags.Any(f => f is not ("--tpm" or "--secure-enclave")))
             throw new UsageException(usage);
-        var path = positional[0];
+        var path = hooks?.PathFor is null ? positional[0] : null;
         HardwareBackend? hardware = flags switch
         {
             ["--tpm"] => HardwareBackend.Tpm,
@@ -136,14 +138,14 @@ public sealed class SlotCommand : ICliCommand
         // Brief T11 decision 7: as soon as the flags are valid, before any prompt or write.
         SecureEnclaveTouchChoice.WarnIfNoTouch(ctx.Console, requirePresence);
         if (hardware is not null)
-            return ExecuteHardwareRequest(ctx, hardware.Value, path, requirePresence ?? true, passwordFlag, passwordFolder);
+            return ExecuteHardwareRequest(ctx, hardware.Value, path, requirePresence ?? true, passwordFlag, passwordFolder, hooks);
         var c = ctx.Console;
 
         var fileStore = ctx.Storage as IFileVaultStore;
         if (fileStore is not null && fileStore.Owner.FileExists(fileStore.ConfigFile))
         {
             if (!YesNo.Ask(c.Out.Write, c.ReadLine, "This machine already has a config. Overwrite and start a new slot request?", defaultAnswer: null))
-                return 0;
+                return Declined(hooks);
         }
 
         c.Out.WriteLine("\n╔════════════════════════════════════════╗");
@@ -194,13 +196,18 @@ public sealed class SlotCommand : ICliCommand
 
         if (fileStore is not null && fileStore.Owner.FileExists(fileStore.ConfigFile))
         {
-            fileStore.BackupConfig();
+            var backup = fileStore.BackupConfig();
+            if (hooks is not null)
+                hooks.BackupPath = backup;
         }
         ctx.Storage.SaveConfig(config);
         // No SaveSecrets call: there is no vault yet — 'slot accept' is what first creates one,
         // once it has a real K_v to encrypt an empty database under.
 
+        path = SavedRequest(hooks, path, slotId);
         WriteRequestFile(ctx, path, slotId, slotKeyPair.PublicKey, hwBlob);
+        if (hooks is not null)
+            hooks.Written = true;
 
         c.Out.WriteLine("\n╔════════════════════════════════════════╗");
         c.Out.WriteLine("║  ✓ SLOT REQUEST CREATED                ║");
@@ -227,8 +234,8 @@ public sealed class SlotCommand : ICliCommand
     /// blob in the request file. <c>KEK_slot</c> itself is zeroed: <c>slot accept</c> recovers it
     /// from the blob. No YubiKey is touched.
     /// </summary>
-    private static int ExecuteHardwareRequest(CommandContext ctx, HardwareBackend backend, string path, bool requirePresence,
-        bool? passwordFlag, string? passwordFolder)
+    private static int ExecuteHardwareRequest(CommandContext ctx, HardwareBackend backend, string? path, bool requirePresence,
+        bool? passwordFlag, string? passwordFolder, RequestHooks? hooks)
     {
         var c = ctx.Console;
         // Throws a clear TswapException on an OS without this hardware, before any output.
@@ -239,7 +246,7 @@ public sealed class SlotCommand : ICliCommand
         if (fileStore is not null && fileStore.Owner.FileExists(fileStore.ConfigFile))
         {
             if (!YesNo.Ask(c.Out.Write, c.ReadLine, "This machine already has a config. Overwrite and start a new slot request?", defaultAnswer: null))
-                return 0;
+                return Declined(hooks);
         }
 
         c.Out.WriteLine("\n╔════════════════════════════════════════╗");
@@ -289,10 +296,17 @@ public sealed class SlotCommand : ICliCommand
         config = SecurityWarnings.Acknowledge(config); // brief T7 item 5: a YubiKey's posture is explained below
 
         if (fileStore is not null && fileStore.Owner.FileExists(fileStore.ConfigFile))
-            fileStore.BackupConfig();
+        {
+            var backup = fileStore.BackupConfig();
+            if (hooks is not null)
+                hooks.BackupPath = backup;
+        }
         ctx.Storage.SaveConfig(config);
 
+        path = SavedRequest(hooks, path, slotId);
         WriteRequestFile(ctx, path, slotId, slotKeyPair.PublicKey, hwBlob, backend);
+        if (hooks is not null)
+            hooks.Written = true;
 
         c.Out.WriteLine("\n╔════════════════════════════════════════╗");
         c.Out.WriteLine("║  ✓ SLOT REQUEST CREATED                ║");
@@ -315,6 +329,37 @@ public sealed class SlotCommand : ICliCommand
         c.Out.WriteLine("then bring the resulting approve file back here and run:");
         c.Out.WriteLine($"  {ctx.Prefix} slot accept <approve-file>");
         return 0;
+    }
+
+    /// <summary>
+    /// Brief T27: what <c>slot enroll</c> learns from its request step. <see cref="PathFor"/> makes the request file's path
+    /// from the new slot id, after the pending config is saved; the other fields report what happened.
+    /// </summary>
+    private sealed class RequestHooks
+    {
+        public Func<byte[], string>? PathFor { get; init; }
+        public bool Declined { get; set; }
+        public string? BackupPath { get; set; }
+        public bool Saved { get; set; }
+        public bool Written { get; set; }
+        public string? RequestPath { get; set; }
+    }
+
+    private static int Declined(RequestHooks? hooks)
+    {
+        if (hooks is not null)
+            hooks.Declined = true;
+        return 0;
+    }
+
+    /// <summary>The request file's path once the pending config is saved (brief T27: from the slot id, for enroll).</summary>
+    private static string SavedRequest(RequestHooks? hooks, string? path, byte[] slotId)
+    {
+        if (hooks is null)
+            return path!;
+        hooks.Saved = true;
+        hooks.RequestPath = path ?? hooks.PathFor!(slotId);
+        return hooks.RequestPath;
     }
 
     /// <summary>Ruling 16: <c>slot request --password</c> without a vault folder that has a <c>vault-password</c> file.</summary>

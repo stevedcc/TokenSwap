@@ -1,3 +1,4 @@
+using TswapCli.Ssh;
 using TswapCore;
 using TswapCore.Vault;
 using TswapCore.Vault.Fido2;
@@ -167,6 +168,12 @@ public sealed record CommandContext(
     /// <see cref="Environment.IsPrivilegedProcess"/>; tests set it, so they never read the real privilege).
     /// </summary>
     public Func<bool>? ElevationLookup { get; init; }
+
+    /// <summary>
+    /// Brief T27: how <c>slot enroll --via</c> reaches the other machine (the <c>ssh</c> client from <c>PATH</c>; tests
+    /// run the host's commands in process).
+    /// </summary>
+    public ISshTransport Ssh { get; init; } = new ProcessSshTransport();
 
     /// <summary>Brief T6 test seams for <c>migrate --to-records</c> (null outside tests).</summary>
     public RecordMigrationSeams? MigrationSeams { get; init; }
