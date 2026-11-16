@@ -16,7 +16,9 @@ simulated services, `TSWAP_CONFIG_DIR` and temp folders only. Commits end with
 report when the brief can't be built as written. Never change an existing test's assertion except where this brief
 sanctions it by name (say so in the commit). British spelling in new text.
 
-**Review history.** Round 1 (MiMo, GLM-5.3: both "no"; design judged sound). Their findings are folded in as the
+**Review history.** Round 2 (both "no" on one-line points: the host fingerprint over the written buffer, not a
+re-read; usage errors exit 1, not 2; the swap test's expectation; stale body text): folded, body edited in place, A14
+added. Round 1 (MiMo, GLM-5.3: both "no"; design judged sound). Their findings are folded in as the
 binding **Amendments** section at the end; where it differs from the text above, the amendments win.
 
 ## Why
@@ -29,8 +31,8 @@ where a person logs in with a password or key and sudo asks for their password, 
 ## The design (decided; rulings marked)
 
 **Two modes.** The default, **interactive**, needs a terminal on the joining machine and gives the host's commands a
-terminal of their own (`ssh -t`), so sudo's password, the host's vault password, a recovery key prompt or a touch
-prompt all work there. `--batch` is T27's flow, unchanged (`ssh -T`, `-` forms, `sudo -n`, no prompt on the host).
+terminal of their own (`ssh -t`), so sudo's password, the host's vault password and a touch
+prompt (done at the host) work there. `--batch` is T27's flow, unchanged (`ssh -T`, `-` forms, `sudo -n`, no prompt on the host).
 `enroll` without a local terminal (stdin or stdout not a terminal) and without `--batch` refuses before anything:
 ``slot enroll needs a terminal here, because the host's sudo and vault may ask for a password. In a script, add
 --batch (the host then must need no password: docs/multi-machine.md#enrolling-over-ssh). Nothing was changed.``
@@ -52,13 +54,13 @@ remote command is fixed words plus the `--remote-tswap` path, nothing quoted):
   fingerprint line), and writes `approve.json` into the staging folder through `WriteOutputFile` (under sudo that
   writer keeps the folder owner's ownership, so `stage get` can read it). `RequireSudo` stays first.
 - `slot merge --staged <id> --expect <sha256-hex>`: the same for `receipt.json`; no `--yes` is ever passed.
-- Ruling: the `--expect` hash is why staging is safe. Another process of the same user on the host could swap a staged
-  file between `put` and `approve`; the hash, which the joining machine computed over the bytes it sent on the
-  authenticated SSH channel, makes approve and merge refuse any other file. Under sudo the staging folder is
-  `SUDO_USER`'s config folder (`CliEnvironment`), so `put` as the user and `approve` under sudo see the same folder.
-  On Windows (no sudo; an elevated administrator session) it is the same user's folder anyway.
+- Ruling: the `--expect` hash binds what the joining machine **sends** (A1); the approve file coming back is bound
+  only by a fingerprint the person compares (A3). Under sudo the staging folder is normally `SUDO_USER`'s config
+  folder (`CliEnvironment`), so `put` as the user and `approve` under sudo see the same folder; A6 covers when they
+  differ. On Windows (no sudo; an elevated administrator session) it is the same user's folder anyway.
 
-**The interactive sequence**, replacing T27's steps 3 and 5 (steps 1, 2, 4 and 6 and the machine states unchanged):
+**The interactive sequence**, replacing T27's steps 1, 3 and 5 (steps 2, 4 and 6 and the
+machine states unchanged):
 - Pre-flight: `<remote tswap> --version`, without sudo, in batch form (stdout captured).
 - Step 3: `stage <id> put request` (batch form, request on stdin), then `ssh -t` `<sudo> <remote tswap> slot approve
   --staged <id> --expect <hash>` (interactive form, below), then `stage <id> get approve` (batch form, stdout is the
@@ -68,7 +70,7 @@ remote command is fixed words plus the `--remote-tswap` path, nothing quoted):
 - `<sudo>` is `sudo` (no `-n`: sudo asks on the terminal), or nothing under `--no-remote-sudo`.
 - After each interactive step the joining side checks the remote exit code; non-zero is that step's failure, with
   T27's messages (the hand commands now name the staged forms or the file forms; and `stage <id> clean` is added to
-  them). A failure after `put` leaves the staging folder; the message names it and the `clean` command.
+  them). A failure after `put` leaves the staging folder; the message names the `clean` command (A10).
 - Before each interactive step print one local line, `On <destination>: <the remote command> (it may ask for your
   sudo password or the vault's unlock there).`, and after it `Back on this machine.`, so the person can tell whose
   prompt they're answering. No `[<destination>] ` prefix in the interactive step (a terminal stream can't be
@@ -96,8 +98,8 @@ why the hash makes it safe; `--batch` for scripts, with T27's sudoers rule and t
 CoreOS's `core` (passwordless sudo, key-only SSH) sees no prompts in either mode. `docs/security-model.md`: the
 staging folder and the `--expect` binding; the sudoers rule is needed only for `--batch`. The sudo table: `slot stage`
 row (`no`; "Moves the enrolment files between the SSH session and the host's staging folder; refused under sudo on
-Unix") with its `SudoTableDrive` driver. `Prompt.cs`: no change (`slot enroll` is already human only); `slot stage` is
-plumbing for `enroll` and is named in the NEVER list beside it, "(human use only, run by `slot enroll`)".
+Unix") with its `SudoTableDrive` driver. `Prompt.cs`: the `slot enroll` line
+unchanged; one `slot stage` line added to the NEVER list beside it, "(human use only, run by `slot enroll`)".
 
 ## Task 1: `slot stage`, and `--staged/--expect` on approve and merge
 
@@ -111,14 +113,13 @@ Tests (`TswapTests/SlotStageTests.cs`, two `FleetMachine`s as in `SlotEnrollTest
   request, then approve with the first one's hash: refused; nothing approved.
 - `stage` refusals: a bad `<id>` (`../x`, `ABCDEF12`, 7 or 9 characters), `put` on a terminal stdin, over 1 MiB, an
   unknown verb, under sudo on Unix (a context with sudo detected: return early when `Environment.IsPrivilegedProcess`
-  and use the sudo-detection seam the other "refused under sudo" tests use, e.g. `vault move`'s).
+  and test A8's predicate through `CliEnvironment.Create`'s
+  `getEnv`/`isPrivileged` seams).
 - `approve --staged` with a host vault that needs its vault password: the password is read from the (fake) terminal
   and the approve succeeds; the same host with `approve - -` (T27) still refuses because stdin isn't a terminal. This
   is the outcome T28 exists for.
-- `--staged` combined with a positional file, with `-`, or with `--recovery-key-stdin`: usage error. (Ruling: the
-  recovery key over the interactive terminal is typed at its prompt as for the file form; `--recovery-key-stdin` stays
-  a file-form and `-`-form option.)
-- Break-it-once: skip the hash comparison; the swap test fails.
+- `--staged` combined with a positional file, with `-`, or with `--recovery-key-stdin`: usage error (A4).
+- Break-it-once: skip the hash comparison; the swap test fails. (A1 and A3 add two more.)
 
 ## Task 2: interactive `enroll`, `--batch`, connection sharing
 
@@ -150,7 +151,7 @@ against the host with a terminal-like fake console fed by the test, and records 
 ## Task 3: docs, help, sudo table
 
 As in "Docs" above; `Forms`, `Description`, usage texts for `slot stage` and the new approve/merge options (as
-**additional** `Forms` entries, the pinned literals unchanged as in T27); regenerate `docs/commands.md`; the
+**additional** `Forms` entries; the pinned literals stay, except the subcommand list A5 sanctions); regenerate `docs/commands.md`; the
 `slot stage` sudo-table row and driver; `SlotCommand`'s and `SlotEnroll`'s doc comments; the follow-up issue #331's
 docs points that this rewrite touches anyway (the label also covers ssh's own stderr in batch mode; "readable by you
 only" exact on Unix, the config folder's ACLs on Windows).
@@ -160,9 +161,10 @@ only" exact on Unix, the config folder's ACLs on Windows).
 **A1. One read, then hash, then parse (MiMo C1).** `approve --staged` and `merge --staged` read the staged file
 **once** into a byte buffer, compare the buffer's SHA-256 with `--expect`, and parse **that buffer**; the path is never
 read again (no `File.ReadAllText(path)` after the check). Route the staged read through a seam (in the style of
-`RequestHooks`) so a test can swap the file **after** the hash check and before any later read; assert nothing is
-approved or merged and `ApprovedSlots`/keyring bytes are unchanged. Task 1's break-it-once becomes: re-read the file
-after hashing; the swap-under-the-read test fails. `put` writes the stdin bytes verbatim (no newline, BOM or CRLF
+`RequestHooks`) so a test can swap the file **after** the hash check; assert the swap **changed nothing**: the run
+ends exactly as the happy path does, the approved (merged) slot is the one in the bytes matching `--expect`, and the
+swapped-in request's slot appears nowhere (`ApprovedSlots`, the approve file, the keyring). Task 1's break-it-once:
+re-read the file after hashing; the swap-under-the-read test fails. `put` writes the stdin bytes verbatim (no newline, BOM or CRLF
 normalisation), so the hash the joiner computed over what it sent matches.
 
 **A2. `--staged` and `--expect` are a pair (MiMo I3, GLM M-5).** Both or neither, else a usage error; `--expect` must
@@ -177,11 +179,27 @@ checks is public, and the wrap's associated data (format version, vault id, k, s
 approve file can wrap an attacker-chosen key to the joiner's public key. That gives the attacker no way into the real
 vault, but a joiner that then writes secrets would write them under a key the attacker knows. This is the same exposure
 as the hand-carried flow, where `approve.json` sits in the user's folder too; state it so in `docs/security-model.md`
-instead of "the hash makes staging safe". Proportionate binding, specified: `approve --staged` prints on its terminal,
-as its last line, `Approve file fingerprint: <first 16 hex of its SHA-256, in groups of 4>`; after `get`, `enroll`
-prints `Approve file received: <the same rendering of what get returned>. It must match the fingerprint the host
-printed above; if it doesn't, stop (Ctrl-C) before the vault password or touch here.` and then waits for Enter before
-step 4 (accept). A test pins both lines and that they agree in the happy path. The docs explain what a mismatch means.
+instead of "the hash makes staging safe". Proportionate binding, specified:
+- `approve --staged` serialises the approve file once into a byte buffer (UTF-8 of `SerializeApprove`'s result),
+  writes **that buffer** to `approve.json`, and computes its fingerprint over **that buffer**, never a re-read of the
+  file. The rendering is `SlotFingerprint`'s style over the SHA-256's first 8 bytes (upper-case hex, groups of 4
+  joined by `-`, e.g. `A1B2-C3D4-E5F6-0718`); one helper renders both sides, so the two lines are byte-identical when
+  the files are.
+- In staged mode approve's closing lines are, instead of the file form's tail (`Approve file written to`, the
+  hand-carry and `slot merge <receipt-file>` lines): `✓ Approved. The joining machine collects the approve file next.`
+  and, last, `Approve file fingerprint: <rendering>`. The requester-fingerprint line stays as the file form prints it.
+- `enroll` computes its line over the exact bytes `get` returned, writes those bytes to the local `approve.json` and
+  hands accept those bytes (no re-read either), then prints `Approve file received: <rendering>. It must match the
+  approve file fingerprint the host printed above; if it doesn't, press Ctrl-C now (the host's staging folder is then
+  left; remove it with '<host tswap> slot stage <id> clean').` and waits for Enter before step 4 (accept).
+- Tests: the happy path pins both lines and that they agree; a seam on the host side swaps `approve.json` after it
+  is written and before `get`: the two lines differ (the person would see it), and EOF at the Enter leaves the joining
+  machine's pending request as T27's approve-failed state does. Break-it-once: compute the host's fingerprint from a
+  re-read of the file; the swap test's lines agree and it fails.
+- `--batch` has no such gate: there the approve file travels on the SSH session and never rests on the host.
+- The docs frame it as `PrintFingerprint` and `SshRelay` frame theirs: a human check, not a boundary (a same-user
+  process on the host can also write to the session's terminal), raising the bar from swapping a file to spoofing a
+  terminal; the same exposure as the hand-carried flow.
 
 **A4. No recovery-key prompt exists (both, MiMo I1/GLM I-2).** Drop "a recovery key prompt" from "Why" and "Two
 modes", and drop the Task 1 recovery-key ruling. The recovery key stays stdin-only and refused on a terminal;
@@ -214,8 +232,9 @@ merge, separate terminals); the host's vault unlock twice (approve and merge eac
 host's own YubiKey or Secure Enclave, which someone must do **at the host**); the joining machine's own prompts
 (request's, accept's); the Enter after comparing the approve fingerprint. A recovery-key-only host is not covered.
 
-**A8. `slot stage` refuses real sudo escalation only (MiMo I6).** Refused when `SUDO_USER` is set and isn't root (the
-rule `CliEnvironment` uses), not for every root process: a root SSH login with `--no-remote-sudo` is the SSH user
+**A8. `slot stage` refuses real sudo escalation only (MiMo I6).** Refused when the process is privileged **and**
+`SUDO_USER` names a non-root user (reuse `CliEnvironment`'s `CheckInvokingUser` rule; a non-privileged process ignores
+`SUDO_USER`), not for every root process: a root SSH login with `--no-remote-sudo` is the SSH user
 there and may stage. Tests: sudo-escalated → refused; a root process without `SUDO_USER` (seam) → runs.
 
 **A9. Closing the shared connection, and the socket folder (both, M1/M-2).** `ISshTransport` gains `void
@@ -233,9 +252,12 @@ same-user process on the joining machine can reuse the connection (no sudo, no s
   T27's text and `sudo -n`.
 - A failed `put` or `get`: T27's approve-failed message (put of the request, get) or merge-failed message (put of the
   receipt), with `<reason>` as T27 defines it; a `get` whose output doesn't parse is `its output is not an approve
-  file`. When the remote exit code is 2 (usage) on `stage` or `--staged`, the reason is `the host's tswap has no 'slot
-  stage' (update it to this version)`.
-- Messages never name a host path (the joiner can't know it); they name `<host tswap> slot stage <id> clean`.
+  file`. An older host answers `slot stage` or `--staged` with a usage error, exit 1 (tswap has no separate
+  usage exit code). So when the pre-flight's `--version` output differs from this build's version, every interactive
+  step's failure message adds `(the host runs tswap <its version>, this machine <this version>; 'slot stage' needs
+  this version or newer there)`; otherwise the reason stays T27's.
+- The joining machine's messages never name a host path (it can't know it); they name `<host tswap> slot stage <id>
+  clean`. Host-side messages (A6) may name the host's resolved path.
 - A failed `stage clean` after a successful merge: a note, ``Note: couldn't remove the host's staging folder; run
   '<host tswap> slot stage <id> clean' there.``, exit 0 (the enrolment is done).
 - `--fresh`: the docs say an abandoned enrolment may leave a staging folder on the host, removed with `slot stage <old
@@ -253,6 +275,20 @@ for both modes.
 (the batch-form calls, `get` included), and `slot stage <id> get approve` run by hand at a terminal puts the approve
 file in the scrollback. `--remote-tswap`: the non-sudo calls find `tswap` on the SSH session's PATH, the sudo calls on
 sudo's `secure_path`; a full path serves both.
+
+**A14. Round-2 details (both).**
+- "`RequireSudo` stays first" means first after argument parsing: usage errors (A2) come before it, as in today's
+  approve.
+- `LoopbackSshTransport` sets the host's sudo flag from each call's prefix (`sudo`/`sudo -n` → sudo; bare `tswap` →
+  not), so `stage` calls don't trip A8. `ProcessSshTransport` takes connection sharing as a constructor parameter
+  defaulting to **off** (existing tests construct it unchanged); `enroll`'s production composition turns it on.
+  `ISshTransport.RunInteractive`'s default implementation throws `NotSupportedException`; `EndSession`'s does nothing.
+- The joining machine's terminal in tests: `FleetMachine.RunOnTerminal` (or its equivalent) for interactive runs, the
+  plain run for the no-terminal refusal.
+- The Task 2 happy-path call list ends with the recorded `EndSession`.
+- `docs/security-model.md`'s "the host's output is untrusted text … control characters replaced" is batch-mode
+  behaviour; interactive steps are a raw terminal: scope the sentence when rewording it (A11).
+- `docs/commands.md`'s `XDG_RUNTIME_DIR` row gains the socket-folder use.
 
 **A13. Owner check before release (MiMo M7).** One real interactive `slot enroll --via` against a host whose sudo asks
 for a password (and, if available, whose vault has a password slot). The Windows-host and Windows-client paths are
