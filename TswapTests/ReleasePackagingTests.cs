@@ -1596,4 +1596,23 @@ public class ReleasePackagingTests : IDisposable
         Assert.Equal("does not have a usable Secure Enclave", expected);
         Assert.Contains(expected, File.ReadAllText(RepoFile("TswapCore", "Vault", "Interop", "AppleSecureEnclaveInterop.cs")));
     }
+
+    /// <summary>
+    /// A prerelease tag (<c>v0.3.1-rc.1</c>) is published as a GitHub prerelease, never as the latest release: every
+    /// release step marks the release a prerelease when the tag carries a suffix (SemVer: a '-' after the version).
+    /// </summary>
+    [Fact]
+    public void ReleaseSteps_MarkSuffixedTagsAsPrereleases()
+    {
+        var release = Workflow("release.yml");
+        var steps = release.Split("uses: softprops/action-gh-release@").Skip(1).ToList();
+        Assert.Equal(2, steps.Count);
+        foreach (var step in steps)
+        {
+            // The step's own lines: up to the next step ("- name:") or the end of the job, whichever comes first.
+            var end = step.IndexOf("\n      - ", StringComparison.Ordinal);
+            var own = end < 0 ? step : step[..end];
+            Assert.Contains("\n          prerelease: ${{ contains(github.ref_name, '-') }}\n", own);
+        }
+    }
 }
