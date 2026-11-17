@@ -83,6 +83,16 @@ public class WindowsTpmHardwareServiceTests
     }
 
     [Fact]
+    public void Enrol_Blob_ClassifiesAsWindowsTpm()
+    {
+        // Brief T36 (#350): a password-free Windows slot is the header-less package, told by its CNG key name.
+        IHardwareEnrolmentService enrolment = new WindowsTpmHardwareService();
+        var (_, hwBlob) = enrolment.Enrol(password: null);
+
+        Assert.Equal(TswapCore.Keyring.HardwareSlotKind.WindowsTpm, TswapCore.Keyring.HardwareSlotKinds.Classify(hwBlob));
+    }
+
+    [Fact]
     public void KeyringVault_HwBlobInTheMachineSlot_UnlocksToTheVaultKey()
     {
         // Issue #154: what 'tswap init' writes now. The blob is the machine slot's hwBlob in a
