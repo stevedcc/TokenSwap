@@ -500,7 +500,7 @@ file only if the file and its conflict copies on disk are still exactly what the
 otherwise it writes nothing and refuses (`The vault-password file changed while this command ran. Nothing was written;
 run it again.`). This is a new store method; today's `WriteVaultPassword` refuses every replacement
 (`RecordVaultStore.cs:431-434`). Before replacing, the command copies the old file into this machine's config folder
-(`vault-password.<UTC timestamp>.bak`, as `BackupConfig` does for `config.json`, `RecordVaultStore.cs:175`), not into
+(`vault-password.<UTC timestamp>.bak`, as `BackupConfig` does for `config.json`, `RecordVaultStore.cs:174`), not into
 the synced vault folder (round 1, MiMo M5).
 
 `change`, in order:
