@@ -81,6 +81,16 @@ design stands; every finding was wording or test detail:
 - MiMo Minor 7 (fifo, socket or device under a shimmed name falls outside the three cases): valid. A16 keeps today's
   behaviour of binding over any non-directory that isn't a symlink.
 
+Round 3 (scoped, on 55a0d0d; GLM: ready, no findings of weight; MiMo: not ready, 4 Minors), all valid and folded:
+- MiMo Minor 1 (A12 says `build`'s Linux entries were pinned; only `linux-x64` was, and `linux-arm64` was already on
+  `ubuntu-24.04-arm`): A17.
+- MiMo Minor 2 (the symlink branch had A16's gap: `shim_paths` added even with no bind, and nothing said about a link to a
+  non-regular or missing target; the preamble contradicted itself; a case title repeated it): A18 binds and adds only
+  together, adds the non-regular/dangling case (bind nothing, add nothing), and rewords the preamble and the first case.
+- MiMo Minor 3 (the parallel-briefs merge note still said the AGENTS.md edit was two words, after A13 widened it): A19.
+- MiMo Minor 4 (the other new tests' temp artefacts had no cleanup stated): A20, the sudo stand-in's folder and the
+  socket tests' folders are removed in a `finally`.
+
 **Parallel briefs.** T34 (enrol follow-ups: `SlotEnrol*.cs`, `SlotStage.cs`, `ProcessSshTransport.cs`, `SlotCommand.cs`'s
 request/accept output, `docs/multi-machine.md`'s enrolling-over-SSH section, `SlotEnrolTests`/`SlotStdioTests`), T35
 (Windows output: `run`'s hints and refusals, console encoding and glyphs, ConPTY, `InitCommand`'s `--yubikey` Windows
@@ -89,8 +99,9 @@ listing, loose record-vault files, `docs/multi-machine.md`'s Sync transports sec
 `evals/skill/**`, `SkillEvalTests.cs`, `BrokerTemplateProgramAndEnvTests.cs`, `InstallScriptUpgradeTests.cs`,
 `SshAgentTestSupport.cs`, `SshAgentFramingTests.cs`, the new `SshAgentTestClientTests.cs` and `.github/workflows/*`,
 plus one line of `TswapTests/BrokerContainerGateTests.cs` (in `TheSshAgentSocketOfAMismatchingSocket_ClosesBeforeTheFirstFrame`),
-which no other brief tonight touches (A5). One shared file, said so the merge is expected: AGENTS.md (one phrase in the
-skill-eval paragraph, "the Linux CI job" becomes "the Linux CI jobs"; T35 and T36 may edit other paragraphs). No production code changes in this brief unless Task 5's CI run turns up a real 26.04 bug
+which no other brief tonight touches (A5). One shared file, said so the merge is expected: AGENTS.md (one sentence in the
+skill-eval paragraph: the subject and verbs of the `CI_REQUIRE_BWRAP=1` clause, as Task 5 gives it (A13); T35 and T36
+may edit other paragraphs) (A19). No production code changes in this brief unless Task 5's CI run turns up a real 26.04 bug
 (then see Task 5).
 
 ## Why
@@ -103,7 +114,7 @@ skill-eval paragraph, "the Linux CI job" becomes "the Linux CI jobs"; T35 and T3
 `BrokerTemplateProgramAndEnvTests.ABindOverUsr_WithTheProgramInIt_AsksForANarrowerFolder` and
 `InstallScriptUpgradeTests.InstallBinary_ReplacesARunningBinary_AndTheRunningProcessKeepsGoing`. The build and test legs
 of both workflows were pinned to `ubuntu-24.04` the same day (ci.yml's matrix, and release.yml's `test` job and
-`build`'s Linux entries). release.yml's `verify-version`, `release` and `bump-version` jobs still run on `ubuntu-latest`,
+`build`'s `linux-x64`; `build`'s `linux-arm64` was already on `ubuntu-24.04-arm`) (A17). release.yml's `verify-version`, `release` and `bump-version` jobs still run on `ubuntu-latest`,
 so on 26.04 already; they only check versions, create the release and open a PR, and Task 5 leaves them as they are
 (A12). The failing step stopped the job, so the later steps (AOT publish,
 package smoke, E2E) have **never run on 26.04**; Task 5 is where they first do.
@@ -201,13 +212,13 @@ Steps:
 bind the shim over, each once. `shim_paths` is the set of paths at which the shim then runs inside the sandbox (host
 and sandbox paths are the same, since the folders are bound at the same place). For each `name`, and each `d` in
 `system_dirs`, take `path = os.path.join(os.path.realpath(d), name)`, skipping paths that don't `lexists` and
-directories. Anything else that isn't a symlink (a regular file, or a fifo, socket or device node under a shimmed name)
-is bound over as today, which binds any `lexists` non-directory (A16):
-- **A regular file (or another non-directory that isn't a symlink):** bind over `path` (as today). Add to `shim_paths` `os.path.join(dd, name)` for every `dd` in
+directories. Today's code binds over any `lexists` non-directory that isn't a symlink (a regular file, or a fifo,
+socket or device node under a shimmed name), and so does the new one (A16, worded in A18). The cases:
+- **Not a symlink:** bind over `path` (as today). Add to `shim_paths` `os.path.join(dd, name)` for every `dd` in
   `system_dirs` with `os.path.realpath(dd) == os.path.dirname(path)` (as today's second loop does).
-- **A symlink:** `target = os.path.realpath(path)`. Bind over `target` when it is a regular file and its basename is
-  `name` or another of `names` (sudo-rs's `/usr/lib/cargo/bin/sudo`, uutils' `.../coreutils/cat`, `gawk` for `awk`).
-  Then add to `shim_paths` the `target` itself and `os.path.join(dd, name)` for every `dd` in `system_dirs` with
+- **A symlink to a regular file whose basename is `name` or another of `names`** (sudo-rs's `/usr/lib/cargo/bin/sudo`,
+  uutils' `.../coreutils/cat`, `gawk` for `awk`; `target = os.path.realpath(path)`): bind over `target`. Only when that
+  bind happens, add to `shim_paths` the `target` itself and `os.path.join(dd, name)` for every `dd` in `system_dirs` with
   `os.path.realpath(dd) == os.path.dirname(path)`. These are the link's own paths (`/usr/bin/sudo`, `/bin/sudo`), which
   is what `LogServer.genuine` sees in `argv[2]`, because the interpreter gets the path that was executed, not the
   resolved one.
@@ -215,6 +226,9 @@ is bound over as today, which binds any `lexists` non-directory (A16):
   and add nothing. Ruling: shimming such a binary would turn every other tool that links to it into the shim. Leaving
   it is safe: for `tswap`, `sudo`, `su`, `doas` and `pkexec` the isolation check then aborts the run (exit 2), and for a
   reader it is the blind spot below (controller default; owner may change).
+- **A symlink whose target isn't a regular file, or doesn't exist** (a dangling link, a fifo, socket or device): bind
+  nothing and add nothing, so `shim_paths` holds only paths where the shim really runs. For a shimmed name the isolation
+  check decides as above (A18).
 
 `bwrap_args` calls `shim_mounts(SHIMMED + PASSTHROUGH + CANNED, SYSTEM_DIRS)`. It adds `--ro-bind <shim> <target>` for
 each target, keeps the `/eval/bin/<name>` entries and the `HOME/.local/bin` part as they are, and keeps the
@@ -257,7 +271,8 @@ name** (busybox style). It isn't shimmed, because shimming the binary would shim
   Break-it-once: restore the `continue` for a symlink whose target is in another folder. The test fails on the missing
   cargo `sudo` and `cat` targets.
 - `IsolationCheck_AbortsWhenARealSudoIsReachable` (behind `CanRun`): this is "a real sudo is still refused". It writes
-  a stand-in `#!/bin/sh` script in a temp folder and binds it with `EVAL_TEST_EXTRA_RO_BIND` over
+  a stand-in `#!/bin/sh` script in a temp folder, removed in a `finally` as
+  `IsolationCheck_AbortsWhenARealTswapIsReachable` removes its folder (A20), and binds it with `EVAL_TEST_EXTRA_RO_BIND` over
   `realpath("/usr/bin/sudo")` (`/usr/bin/sudo` on Fedora and 24.04, `/usr/lib/cargo/bin/sudo` on 26.04, so the test works
   on both layouts). It runs scenario `01-secret-in-log` and asserts exit 2 and, with `Assert.Contains` as
   `IsolationCheck_AbortsWhenARealTswapIsReachable` does (the check prints one line per path, so `/bin/sudo` too where
@@ -336,7 +351,8 @@ Either outcome of the send is correct there, so the result is discarded on purpo
 EPIPE the receive sees end of stream. No catch anywhere else, no retries, no waits.
 
 **New tests**, in a new `TswapTests/SshAgentTestClientTests.cs` (`[UnixFact]`; own `Socket` listener on a
-`UnixDomainSocketEndPoint` in a temp folder, no broker):
+`UnixDomainSocketEndPoint` in a temp folder, no broker; each test disposes its sockets and removes the folder (with the
+socket file) in a `finally` (A20)):
 - `SendFrameUnlessClosed_AfterThePeerClosed_ReturnsFalse_AndReadsAsClosed`: accept, dispose the accepted socket, then
   `SendFrameUnlessClosedAsync([11])` returns false and `ClosedWithoutReplyAsync()` returns true. This makes #332's race
   certain: on a Unix stream socket a send after the peer's close fails with EPIPE every time. Break-it-once: remove the
