@@ -185,6 +185,9 @@ public sealed record CommandContext(
     /// <summary>Brief T28 test seams of <c>slot approve|merge --staged</c> (null outside tests).</summary>
     public Commands.StagedFileSeams? StagedSeams { get; init; }
 
+    /// <summary>Brief T34 test seam of <c>slot enrol</c>'s local file access (null outside tests).</summary>
+    public Commands.EnrolFileSeams? EnrolSeams { get; init; }
+
     /// <summary>Brief T6 test seams for <c>migrate --to-records</c> (null outside tests).</summary>
     public RecordMigrationSeams? MigrationSeams { get; init; }
 

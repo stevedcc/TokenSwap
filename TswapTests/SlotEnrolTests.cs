@@ -397,8 +397,8 @@ public class SlotEnrolTests : IDisposable
     // ------------------------------------------------------------------ accept's receipt write fails
 
     /// <summary>Makes the receipt path a folder once the enrolment folder exists (at the approve call).</summary>
-    private void ReceiptPathIsAFolder() =>
-        _ssh.BeforeCall = rest =>
+    private void ReceiptPathIsAFolder(LoopbackSshTransport? ssh = null) =>
+        (ssh ?? _ssh).BeforeCall = rest =>
         {
             if (rest is ["slot", "approve", ..])
                 Directory.CreateDirectory(Path.Combine(Assert.Single(EnrolFolders), "receipt.json"));
@@ -1086,6 +1086,220 @@ public class SlotEnrolTests : IDisposable
 
         Assert.True(exit == 0, stderr + stdout);
         Assert.Equal([Via], _ssh.Ended);
+    }
+
+    // ------------------------------------------------------------------ brief T34 task 3: local failures and exact hints
+
+    /// <summary>The joiner's enrol seam throws <c>IOException("locked")</c> for every path <paramref name="fails"/> picks.</summary>
+    private void LocalAccessFails(Func<string, bool> fails) =>
+        _joiner.EnrolSeams = new TswapCli.Commands.EnrolFileSeams
+        {
+            BeforeLocalAccess = path =>
+            {
+                if (fails(path))
+                    throw new IOException("locked");
+            },
+        };
+
+    private bool IsAnEnrolmentFolder(string path) =>
+        Path.GetFullPath(Path.GetDirectoryName(path)!) == Path.GetFullPath(EnrolRoot);
+
+    /// <summary>Enrolled, asserted without <see cref="AssertEnrolled"/> (which asserts the folders are gone).</summary>
+    private void AssertEnrolledKeepingFolders(string stdout)
+    {
+        var config = _joiner.Config;
+        Assert.Null(config.PendingSlotId);
+        Assert.True(HasSlot(_host.Keyring, config.KeyringSlotId!), "the host's keyring doesn't have the new slot");
+        var publicKey = _joiner.Keyring.Slots.Single(s => Convert.ToBase64String(s.SlotId) == config.KeyringSlotId).PublicKey;
+        Assert.Contains($"This machine's slot: {SlotFingerprint.Compute(publicKey)}", stdout);
+        Assert.Contains($"✓ Enrolled: {Via}'s vault now opens with YubiKey {SerialB}, and this machine has its copy.", stdout);
+    }
+
+    [Fact]
+    public void FolderNotDeletable_StillEnrolled_SaysTheFolderIsKept()
+    {
+        LocalAccessFails(IsAnEnrolmentFolder);
+
+        var (exit, stdout, stderr) = Enrol("");
+
+        Assert.True(exit == 0, stderr + stdout);
+        AssertEnrolledKeepingFolders(stdout);
+        var folder = Assert.Single(EnrolFolders);
+        Assert.Contains($"Note: the enrolment folder is kept: {folder} (locked). Delete it by hand.", stderr);
+        Assert.True(Directory.Exists(folder));
+    }
+
+    [Fact]
+    public void Fresh_AnOldFolderNotDeletable_GoesOn()
+    {
+        var old = FailedApprove();
+        LocalAccessFails(path => Path.GetFullPath(path) == Path.GetFullPath(old));
+
+        var (exit, stdout, stderr) = Enrol("yes\n", "--fresh");
+
+        Assert.True(exit == 0, stderr + stdout);
+        AssertEnrolledKeepingFolders(stdout);
+        Assert.Contains($"Note: couldn't delete the earlier enrolment folder {old} (locked); delete it by hand.", stderr);
+        Assert.True(Directory.Exists(old));
+    }
+
+    private static bool IsFile(string path, string name) => Path.GetFileName(path) == name;
+
+    private static string ApproveNotSavedOpening(string folder) =>
+        "The host approved the request, but this machine couldn't save the approve file (couldn't write " +
+        $"{Path.Combine(folder, "approve.json")}: locked).";
+
+    [Fact]
+    public void ApproveFileNotSaved_Interactive_TheRequestIsKept()
+    {
+        var ssh = InteractiveSsh();
+        _joiner.Ssh = ssh;
+        LocalAccessFails(path => IsFile(path, "approve.json"));
+        var hostKeyring = HostKeyringBytes();
+
+        var (exit, stdout, stderr) = EnrolOnTerminal(TerminalAnswers);
+
+        Assert.NotEqual(0, exit);
+        var folder = Assert.Single(EnrolFolders);
+        Assert.Contains(ApproveNotSavedOpening(folder), stderr);
+        Assert.NotNull(_joiner.Config.PendingSlotId);
+        Assert.True(File.Exists(Path.Combine(folder, "request.json")));
+        Assert.Equal(hostKeyring, HostKeyringBytes());
+        Assert.DoesNotContain(ssh.Log, l => l.Contains("merge"));
+
+        _joiner.EnrolSeams = null;
+        var (again, againOut, againErr) = EnrolOnTerminal("\n");
+        Assert.True(again == 0, againErr + againOut);
+        AssertEnrolled(againOut, $"YubiKey {SerialB}");
+    }
+
+    [Fact]
+    public void ApproveFileNotSaved_Batch_TheRequestIsKept()
+    {
+        LocalAccessFails(path => IsFile(path, "approve.json"));
+        var hostKeyring = HostKeyringBytes();
+
+        var (exit, stdout, stderr) = Enrol("");
+
+        Assert.NotEqual(0, exit);
+        var folder = Assert.Single(EnrolFolders);
+        Assert.Contains(ApproveNotSavedOpening(folder), stderr);
+        Assert.NotNull(_joiner.Config.PendingSlotId);
+        Assert.Equal(hostKeyring, HostKeyringBytes());
+        Assert.DoesNotContain(CallLines, l => l.Contains("merge"));
+
+        _joiner.EnrolSeams = null;
+        var (again, againOut, againErr) = Enrol("");
+        Assert.True(again == 0, againErr + againOut);
+        AssertEnrolled(againOut, $"YubiKey {SerialB}");
+    }
+
+    [Fact]
+    public void ReceiptNotReadable_Interactive_SaysTheMergeIsLeft()
+    {
+        var ssh = InteractiveSsh();
+        _joiner.Ssh = ssh;
+        LocalAccessFails(path => IsFile(path, "receipt.json"));
+        var hostKeyring = HostKeyringBytes();
+
+        var (exit, _, stderr) = EnrolOnTerminal(TerminalAnswers);
+
+        Assert.NotEqual(0, exit);
+        var receipt = Path.Combine(Assert.Single(EnrolFolders), "receipt.json");
+        Assert.Contains($"This machine has its copy of the vault, but {Via} didn't add the slot (couldn't read {receipt}: locked), so the " +
+                        "host's own keyring doesn't know it yet.", stderr);
+        Assert.Null(_joiner.Config.PendingSlotId);
+        Assert.NotNull(_joiner.Config.KeyringSlotId);
+        Assert.Equal(hostKeyring, HostKeyringBytes());
+        AssertJoinerReadsTheHostsSecret();
+    }
+
+    [Fact]
+    public void RequestNotReadable_Batch_SaysTheApproveIsLeft()
+    {
+        LocalAccessFails(path => IsFile(path, "request.json"));
+
+        var (exit, _, stderr) = Enrol("");
+
+        Assert.NotEqual(0, exit);
+        var request = Path.Combine(Assert.Single(EnrolFolders), "request.json");
+        Assert.Contains($"The host didn't approve the request (couldn't read {request}: locked). This machine's pending request is kept; " +
+                        $"nothing was added on {Via}.", stderr);
+        Assert.Equal(["sudo -n tswap --version"], CallLines);
+    }
+
+    [Fact]
+    public void AcceptFails_WithVaultDir_TheHintNamesTheFolder()
+    {
+        var other = new FleetMachine("enrol-other", SimulatedYubiKeyService.WithKeys(SerialC));
+        _others.Add(other);
+        other.Ok("", "slot", "request", other.PathOf("request.json"));
+        var otherApprove = _host.Ok("", "slot", "approve", other.PathOf("request.json"), "-");
+        _ssh.Override = rest => rest is ["slot", "approve", ..] ? new SshResult(0, Encoding.UTF8.GetBytes(otherApprove)) : null;
+        var full = Path.GetFullPath(_host.VaultDir!);
+
+        var (exit, _, stderr) = Enrol("", "--vault-dir", _host.VaultDir!);
+
+        Assert.NotEqual(0, exit);
+        var approve = Path.Combine(Assert.Single(EnrolFolders), "approve.json");
+        Assert.Contains($"slot accept {approve} --vault-dir \"{full}\"' here", stderr);
+    }
+
+    [Fact]
+    public void Interactive_AcceptFails_TheHintNamesTheFileFormOfMerge()
+    {
+        var other = new FleetMachine("enrol-other", SimulatedYubiKeyService.WithKeys(SerialC));
+        _others.Add(other);
+        other.Ok("", "slot", "request", other.PathOf("request.json"));
+        var crafted = _host.Ok("", "slot", "approve", other.PathOf("request.json"), "-");
+        _host.StagedSeams = new TswapCli.Commands.StagedFileSeams { AfterApproveWritten = path => File.WriteAllText(path, crafted) };
+        _joiner.Ssh = InteractiveSsh();
+
+        var (exit, _, stderr) = EnrolOnTerminal(TerminalAnswers);
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("This approve file targets a different slot id than this machine's pending request.", stderr);
+        Assert.Contains($"then carry the receipt to {Via} and run 'sudo tswap slot merge receipt.json' there.", stderr);
+        Assert.DoesNotContain("slot merge - <", stderr);
+    }
+
+    [Fact]
+    public void ReceiptNotWritten_TheHintUsesTheRemoteProgram()
+    {
+        var ssh = new LoopbackSshTransport(_host, "/opt/tswap/tswap");
+        _joiner.Ssh = ssh;
+        ReceiptPathIsAFolder(ssh);
+
+        var (exit, _, stderr) = Enrol("", "--no-remote-sudo", "--remote-tswap", "/opt/tswap/tswap");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("'/opt/tswap/tswap vault merge <folder>'", stderr);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Password_FolderRefusals_ComeBeforeAnySshCall(bool emptyFolder)
+    {
+        var folder = emptyFolder ? Directory.CreateTempSubdirectory("tswap-enrol-empty-").FullName : null;
+        try
+        {
+            string[] flags = folder is null ? ["--password"] : ["--password", "--vault-dir", folder];
+
+            var (exit, _, stderr) = Enrol("", flags);
+
+            Assert.NotEqual(0, exit);
+            Assert.Contains(folder is null
+                ? TswapCli.Commands.SlotCommand.RequestNeedsFolderText
+                : TswapCli.Commands.SlotCommand.RequestNotAVaultFolderText(Path.GetFullPath(folder)), stderr);
+            Assert.Empty(CallLines);
+            Assert.False(Directory.Exists(EnrolRoot));
+        }
+        finally
+        {
+            if (folder is not null)
+                Directory.Delete(folder, true);
+        }
     }
 
     // ------------------------------------------------------------------ the process transport

@@ -49,6 +49,9 @@ public sealed class FleetMachine : IDisposable
     /// <summary>Brief T28: the seams of the staged approve and merge (null: none).</summary>
     public TswapCli.Commands.StagedFileSeams? StagedSeams { get; set; }
 
+    /// <summary>Brief T34: the seam of <c>slot enrol</c>'s local file access (null: none).</summary>
+    public TswapCli.Commands.EnrolFileSeams? EnrolSeams { get; set; }
+
     /// <summary>
     /// Guided init: the chip this machine's <c>init</c> sees, instead of the one <see cref="SecureEnclave"/> /
     /// <see cref="Tpm"/> give (null: those), e.g. a chip that is present but unusable.
@@ -195,6 +198,7 @@ public sealed class FleetMachine : IDisposable
         {
             MigrationSeams = MigrationSeams,
             StagedSeams = StagedSeams,
+            EnrolSeams = EnrolSeams,
             Time = Time ?? TimeProvider.System,
             ChipProbe = ChipOverride ?? (() => new MachineChip(SecureEnclave is not null ? HardwareBackend.SecureEnclave : Tpm is not null ? HardwareBackend.Tpm : null, null)),
             Fido2 = fido2,
