@@ -445,7 +445,7 @@ internal static class GuidedInit
 
             // Step 8: the summary, the vault folder, and last the recovery key's warning.
             c.Out.WriteLine("\n╔════════════════════════════════════════╗");
-            c.Out.WriteLine("║  ✓ INITIALIZATION COMPLETE            ║");
+            c.Out.WriteLine("║  ✓ INITIALISATION COMPLETE             ║");
             c.Out.WriteLine("╚════════════════════════════════════════╝\n");
             c.Out.WriteLine("Slots (each opens the vault on its own):");
             foreach (var slot in enrolled)
