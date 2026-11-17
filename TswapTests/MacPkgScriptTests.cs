@@ -117,11 +117,11 @@ public sealed partial class MacPkgScriptTests : IDisposable
     private string Dist => Path.Combine(_fake.Dir, "dist");
     private string Pkg => Path.Combine(Dist, "tswap-osx-arm64.pkg");
 
-    private (int ExitCode, string Output) Build(string publish)
+    private (int ExitCode, string Output) Build(string publish, string version = "0.3.0")
     {
         _fake.Environment["INSTALLER_IDENTITY"] = MacFakeTools.InstallerHash;
         _fake.Environment["KC"] = Path.Combine(_fake.RunnerTemp, "tswap-signing.keychain-db");
-        return _fake.Run(_script, "build", publish, "0.3.0", Dist);
+        return _fake.Run(_script, "build", publish, version, Dist);
     }
 
     /// <summary>A pkg (the fake's payload) and a tarball holding the same two files; returns the tarball.</summary>
@@ -193,6 +193,35 @@ public sealed partial class MacPkgScriptTests : IDisposable
         Assert.Contains("libtswapse.dylib is missing", output);
         Assert.Empty(_fake.Log("pkgbuild"));
         Assert.False(Directory.Exists(Dist) && Directory.EnumerateFileSystemEntries(Dist).Any(), "no pkg may be left behind");
+    }
+
+    /// <summary>
+    /// A release candidate's version (tag <c>v0.3.1-rc.1</c>) reaches pkgbuild and the distribution unchanged (MiMo's rc.1
+    /// review, minor 3): the first pkg built with a suffixed version.
+    /// </summary>
+    [UnixFact]
+    public void Build_PrereleaseVersion_ReachesPkgbuildAndTheDistribution()
+    {
+        var (exitCode, output) = Build(Publish(), "0.3.1-rc.1");
+
+        Assert.True(exitCode == 0, output);
+        Assert.Matches(@" --version 0\.3\.1-rc\.1 ", Assert.Single(_fake.Log("pkgbuild")));
+        Assert.Contains("version=\"0.3.1-rc.1\"", File.ReadAllText(Path.Combine(_fake.Dir, "distribution.used")));
+        Assert.True(File.Exists(Pkg), output);
+    }
+
+    [UnixTheory]
+    [InlineData("v0.3.1")]
+    [InlineData("0.3")]
+    [InlineData("0.3.1 rc")]
+    [InlineData("0.3.1/rc")]
+    public void Build_NotAVersion_Refused(string version)
+    {
+        var (exitCode, output) = Build(Publish(), version);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains($"not a version: '{version}'", output);
+        Assert.Empty(_fake.Log("pkgbuild"));
     }
 
     [UnixFact]
