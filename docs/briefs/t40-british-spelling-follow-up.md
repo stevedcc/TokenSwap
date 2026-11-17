@@ -139,8 +139,8 @@ local note (a report, a scratch file) can fail the unit suite. Add one paragraph
 > **Docs and spelling guards** (`TswapTests/Docs/`): the doc-link tests and the British-spelling tests
 > (`SpellingTests`, allowlist `TswapTests/Docs/us-spellings-allowed.txt`) read every file git tracks *or would
 > track*: untracked files that `.gitignore` doesn't exclude count too. A stray local note with a US spelling or a
-> broken link fails the unit suite; keep such notes outside the repository or in an ignored path (the
-> both guards already skip `wip-*.md` notes and build output).
+> broken link fails the unit suite; keep such notes outside the repository or in an ignored path
+> (both guards already skip `wip-*.md` notes and build output).
 
 No test for this task (documentation only); say so in the commit message.
 
