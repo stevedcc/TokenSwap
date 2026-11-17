@@ -21,6 +21,9 @@ namespace TswapCli;
 /// <em>short forms</em>, matched here rather than as RedactingPty replacements. An occurrence ending at the
 /// window's end lies in the held tail and is decided by the next window; the pending point never splits a
 /// word it can hold (<see cref="TokenBoundary.HoldOutsideWord"/>), so the next window starts on a word's start.
+/// The short forms are held by class as the scanner holds its entries: the trailing run of non-whitespace
+/// characters (at most a 256-quantised bound) for forms without whitespace, the 256-quantised bound itself for
+/// forms with it (brief T39, #341).
 /// </para>
 /// </summary>
 internal sealed class FingerprintStreamMatcher : IStreamMatcher, IDisposable
@@ -29,9 +32,10 @@ internal sealed class FingerprintStreamMatcher : IStreamMatcher, IDisposable
 
     private readonly FingerprintScanner _scanner;
     private readonly (string Text, string Label)[] _shortForms;
-    // Amendment A2: how much the short forms hold back, rounded up to a multiple of 256 like the scanner's
-    // caps, never a figure derived exactly from a value's length (0: no short forms).
-    private readonly int _shortHold;
+    // Brief T39 (#341), after T30's amendment A2: how much each class of short forms holds back at most,
+    // forms without whitespace and forms with it, each rounded up to a multiple of 256 like the scanner's
+    // caps, never a figure derived exactly from a value's length (0: no short forms of that class).
+    private readonly int _shortHoldWhitespaceFree, _shortHoldWithWhitespace;
     private readonly ThreadLocal<FingerprintScanner.ScanState> _state = new(() => new(), trackAllValues: true);
 
     private FingerprintStreamMatcher(FingerprintScanner scanner, IReadOnlyDictionary<string, string>? shortForms)
@@ -39,10 +43,16 @@ internal sealed class FingerprintStreamMatcher : IStreamMatcher, IDisposable
         _scanner = scanner;
         _shortForms = shortForms is null ? [] : [.. shortForms.Where(f => f.Key.Length > 0).Select(f => (f.Key, f.Value))];
         var longest = _shortForms.Length == 0 ? 0 : _shortForms.Max(f => f.Text.Length);
-        // At least the longest short form is held (an occurrence ending at the window's end waits there for
-        // its right neighbour): RoundUp(longest + 1) - 1, which is RoundUp(longest) - 1 unless longest is a
-        // multiple of 256, and never less than longest.
-        _shortHold = longest == 0 ? 0 : (longest + Quantum) / Quantum * Quantum - 1;
+        // Per class, at least its longest short form is held (an occurrence ending at the window's end waits
+        // there for its right neighbour): RoundUp(longest + 1) - 1, which is RoundUp(longest) - 1 unless
+        // longest is a multiple of 256, and never less than longest.
+        static int Hold(IEnumerable<string> forms)
+        {
+            var longest = forms.Select(f => f.Length).DefaultIfEmpty(0).Max();
+            return longest == 0 ? 0 : (longest + Quantum) / Quantum * Quantum - 1;
+        }
+        _shortHoldWhitespaceFree = Hold(_shortForms.Select(f => f.Text).Where(t => !t.Any(IsWhitespace)));
+        _shortHoldWithWhitespace = Hold(_shortForms.Select(f => f.Text).Where(t => t.Any(IsWhitespace)));
         MaxMatchLength = Math.Max(1, Math.Max(scanner.MaxRawLength, longest));
     }
 
@@ -85,10 +95,16 @@ internal sealed class FingerprintStreamMatcher : IStreamMatcher, IDisposable
 
     public int PendingFrom(ReadOnlySpan<char> window)
     {
+        var n = window.Length;
         var pending = _scanner.PendingFrom(window, _state.Value);
-        if (_shortHold > 0)
-            pending = Math.Min(pending, Math.Max(0, window.Length - _shortHold));
-        if (_scanner.MaxRawLength > 0 || _shortHold > 0)
+        // Brief T39: an occurrence of a form without whitespace that reaches the window's end lies inside the
+        // trailing non-whitespace run, so holding from that run's start (or the class's bound, when the run is
+        // longer) keeps it whole; a window that ends in a line break holds nothing for this class.
+        if (_shortHoldWhitespaceFree > 0)
+            pending = Math.Min(pending, Math.Max(TrailingNonWhitespace(window), n - _shortHoldWhitespaceFree));
+        if (_shortHoldWithWhitespace > 0)
+            pending = Math.Min(pending, Math.Max(0, n - _shortHoldWithWhitespace));
+        if (_scanner.MaxRawLength > 0 || _shortForms.Length > 0)
             pending = TokenBoundary.HoldOutsideWord(window, pending);
         return pending;
     }
@@ -99,6 +115,20 @@ internal sealed class FingerprintStreamMatcher : IStreamMatcher, IDisposable
         foreach (var state in _state.Values)
             state.Clear();
         _state.Dispose();
+    }
+
+    /// <summary>
+    /// The whitespace <see cref="SecretVariants"/> strips: CR, LF, space, tab (the twin of
+    /// <c>FingerprintScanner.IsWhitespace</c>). The class of a short form and the trailing run read this one set.
+    /// </summary>
+    private static bool IsWhitespace(char c) => c is '\r' or '\n' or ' ' or '\t';
+
+    /// <summary>The start of the trailing run of characters other than whitespace (the text's length when it ends in whitespace).</summary>
+    private static int TrailingNonWhitespace(ReadOnlySpan<char> text)
+    {
+        var start = text.Length;
+        while (start > 0 && !IsWhitespace(text[start - 1])) start--;
+        return start;
     }
 
     private static string Label(FingerprintHit hit) =>

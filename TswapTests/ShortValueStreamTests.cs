@@ -33,8 +33,12 @@ public class ShortValueStreamTests(ITestOutputHelper output)
 
     private static VaultMetadata Vault(params RecordMetadata[] records) => new(records, 0, 0, []);
 
-    private static string Redacted(IStreamMatcher matcher, IEnumerable<string> chunks)
+    /// <summary>
+    /// Issue #343: a fresh matcher per run, so no run reuses the carried scan state another run left behind.
+    /// </summary>
+    private static string Redacted(Func<FingerprintStreamMatcher> newMatcher, IEnumerable<string> chunks)
     {
+        using var matcher = newMatcher();
         var redactor = new StreamRedactor([], [matcher]);
         var sb = new StringBuilder();
         foreach (var chunk in chunks)
@@ -49,11 +53,11 @@ public class ShortValueStreamTests(ITestOutputHelper output)
     }
 
     /// <summary>Two chunks cut at every position, and one character at a time: each joined output is <paramref name="expected"/>.</summary>
-    private static void AssertEveryCut(IStreamMatcher matcher, string text, string expected)
+    private static void AssertEveryCut(Func<FingerprintStreamMatcher> newMatcher, string text, string expected)
     {
         for (var cut = 0; cut <= text.Length; cut++)
-            Assert.True(expected == Redacted(matcher, [text[..cut], text[cut..]]), $"cut at {cut}: {Redacted(matcher, [text[..cut], text[cut..]])}");
-        Assert.Equal(expected, Redacted(matcher, Chunk(text, 1)));
+            Assert.True(expected == Redacted(newMatcher, [text[..cut], text[cut..]]), $"cut at {cut}: {Redacted(newMatcher, [text[..cut], text[cut..]])}");
+        Assert.Equal(expected, Redacted(newMatcher, Chunk(text, 1)));
     }
 
     private static List<FingerprintHit> Scan(FingerprintScanner scanner, string text)
@@ -103,21 +107,23 @@ public class ShortValueStreamTests(ITestOutputHelper output)
     public void Matcher_ShortValue_EveryCut(string input, string expected)
     {
         using var keys = NewKeys();
-        var matcher = FingerprintStreamMatcher.For(Vault(Record("p", Set("465", keys)), Record("long", Set(LongValue, keys))), keys);
+        FingerprintStreamMatcher NewMatcher() =>
+            FingerprintStreamMatcher.For(Vault(Record("p", Set("465", keys)), Record("long", Set(LongValue, keys))), keys);
 
-        AssertEveryCut(matcher, input, expected);
+        AssertEveryCut(NewMatcher, input, expected);
     }
 
     [Fact]
     public void Matcher_LongJsonLine_EveryChunkSize_Unchanged()
     {
         using var keys = NewKeys();
-        var matcher = FingerprintStreamMatcher.For(Vault(Record("p", Set("465", keys)), Record("long", Set(LongValue, keys))), keys);
+        FingerprintStreamMatcher NewMatcher() =>
+            FingerprintStreamMatcher.For(Vault(Record("p", Set("465", keys)), Record("long", Set(LongValue, keys))), keys);
         var line = "{\"n\":[" + string.Join(",", Enumerable.Repeat("65465", 1200)) + "]}";
 
         for (var size = 1; size <= 300; size++)
         {
-            var redacted = Redacted(matcher, Chunk(line, size));
+            var redacted = Redacted(NewMatcher, Chunk(line, size));
             Assert.True(line == redacted, $"chunk size {size}");
         }
         using (JsonDocument.Parse(line)) { }
@@ -134,10 +140,11 @@ public class ShortValueStreamTests(ITestOutputHelper output)
     public void Matcher_ShortForms_WholeTokenOnly()
     {
         using var keys = NewKeys();
-        var matcher = FingerprintStreamMatcher.For(Vault(), keys, WebForms);
+        FingerprintStreamMatcher NewMatcher() => FingerprintStreamMatcher.For(Vault(), keys, WebForms);
+        using var matcher = NewMatcher();
 
         Assert.True(matcher.MaxMatchLength >= 4);
-        AssertEveryCut(matcher,
+        AssertEveryCut(NewMatcher,
             "web-ngx /home/webster user=web b64=d2Vi xd2Vi q=a\"b ok",
             "web-ngx /home/webster user=[REDACTED: user] b64=[REDACTED: user] xd2Vi q=[REDACTED: q] ok");
     }
@@ -163,6 +170,122 @@ public class ShortValueStreamTests(ITestOutputHelper output)
         {
             var text = RandomString(rng, rng.Next(0, 700), Filler + Word);
             Assert.Equal(a.PendingFrom(text), b.PendingFrom(text));
+        }
+    }
+
+    /// <summary>
+    /// Every form <c>run</c> builds for <paramref name="value"/> (<see cref="Redaction.Variants"/>), each to
+    /// <paramref name="label"/>; merged into <paramref name="into"/> with <c>TryAdd</c> when given.
+    /// </summary>
+    private static Dictionary<string, string> Forms(string value, string label, Dictionary<string, string>? into = null)
+    {
+        into ??= new(StringComparer.Ordinal);
+        foreach (var variant in Redaction.Variants(value))
+            into.TryAdd(variant, label);
+        return into;
+    }
+
+    /// <summary>
+    /// Brief T39 (#341): a short form without whitespace holds only the trailing run of non-whitespace
+    /// characters, so a line that ends in a line break comes out in the chunk that brings it.
+    /// </summary>
+    [Fact]
+    public void Matcher_ShortForm_LineEmittedInTheSameChunk()
+    {
+        using var keys = NewKeys();
+        using var matcher = FingerprintStreamMatcher.For(
+            Vault(Record("p", Set("465", keys)), Record("long", Set(LongValue, keys))), keys, Forms("web", "[REDACTED: user]"));
+        var redactor = new StreamRedactor([], [matcher]);
+
+        Assert.Equal("user=[REDACTED: user] port=[REDACTED: p]\n", redactor.ProcessChunk("user=web port=465\n"));
+        Assert.Equal("a=[REDACTED: user]\r\n", redactor.ProcessChunk("a=web\r\n"));
+        Assert.Equal("ok ", redactor.ProcessChunk("ok web"));
+        Assert.Equal("[REDACTED: user]", redactor.Flush());
+    }
+
+    [Fact]
+    public void Matcher_ShortFormWithWhitespace_EveryCut()
+    {
+        using var keys = NewKeys();
+        var forms = Forms("x\ny", "[REDACTED: m]", Forms("a b", "[REDACTED: s]"));
+        FingerprintStreamMatcher NewMatcher() => FingerprintStreamMatcher.For(Vault(), keys, forms);
+
+        AssertEveryCut(NewMatcher, "q=a b, z a bc\nv=x\ny ok", "q=[REDACTED: s], z a bc\nv=[REDACTED: m] ok");
+    }
+
+    /// <summary>
+    /// Brief T39's ruling: a short form with whitespace keeps the flat 255-character hold; one without
+    /// holds only the trailing non-whitespace run (nothing after a line break).
+    /// </summary>
+    [Fact]
+    public void Matcher_ShortFormWithWhitespace_KeepsTheFlatHold()
+    {
+        using var keys = NewKeys();
+        var dots = new string('.', 300) + "\n";
+        using var withWhitespace = FingerprintStreamMatcher.For(Vault(), keys, Forms("a b", "[REDACTED: s]"));
+        using var without = FingerprintStreamMatcher.For(Vault(), keys, Forms("ab", "[REDACTED: s]"));
+
+        Assert.Equal(0, withWhitespace.PendingFrom("ok\n"));
+        Assert.Equal(46, withWhitespace.PendingFrom(dots));
+        Assert.Equal(3, without.PendingFrom("ok\n"));
+        Assert.Equal(301, without.PendingFrom(dots));
+    }
+
+    /// <summary>
+    /// A run of non-whitespace characters longer than the hold: the 256-quantised bound keeps a form with a
+    /// non-word character inside it whole (<see cref="TokenBoundary.HoldOutsideWord"/> cannot), at every
+    /// chunk size, and still decides its right neighbour.
+    /// </summary>
+    [Fact]
+    public void Matcher_ShortForm_LongNonWhitespaceRun_EveryChunkSize()
+    {
+        using var keys = NewKeys();
+        var forms = Forms("a\"b", "[REDACTED: q]");
+        FingerprintStreamMatcher NewMatcher() => FingerprintStreamMatcher.For(Vault(), keys, forms);
+        string Text(string middle) => string.Concat(Enumerable.Repeat("x,", 200)) + middle + string.Concat(Enumerable.Repeat(",y", 150)) + "\n";
+        var text = Text("a\"b");
+        var expected = Text("[REDACTED: q]");
+        var inWord = Text("a\"bc");
+
+        for (var size = 1; size <= 300; size++)
+        {
+            Assert.True(expected == Redacted(NewMatcher, Chunk(text, size)), $"chunk size {size}");
+            Assert.True(inWord == Redacted(NewMatcher, Chunk(inWord, size)), $"chunk size {size}, inside a word");
+        }
+    }
+
+    /// <summary>
+    /// Brief T39 (A2's property generalised): the short forms' hold says nothing about the substituted values
+    /// beyond their classes' 256-buckets, whatever the values and how many there are.
+    /// </summary>
+    [Fact]
+    public void Matcher_ShortFormsHold_DependsOnClassAndBucketOnly()
+    {
+        var rng = new Random(39_341);
+        using var keys = NewKeys();
+        for (var pair = 0; pair < 200; pair++)
+        {
+            var withSpace = pair % 2 == 0;
+            Dictionary<string, string> Side(string label)
+            {
+                var forms = new Dictionary<string, string>(StringComparer.Ordinal);
+                for (var n = rng.Next(1, 4); n > 0; n--)
+                    Forms(RandomString(rng, rng.Next(1, 8), ShortAlphabet), label, forms);
+                if (withSpace)
+                {
+                    var value = RandomString(rng, rng.Next(2, 8), ShortAlphabet);
+                    Forms(value.Insert(rng.Next(1, value.Length), " "), label, forms);
+                }
+                return forms;
+            }
+            using var a = FingerprintStreamMatcher.For(Vault(), keys, Side("[REDACTED: a]"));
+            using var b = FingerprintStreamMatcher.For(Vault(), keys, Side("[REDACTED: b]"));
+
+            for (var i = 0; i < 50; i++)
+            {
+                var text = RandomString(rng, rng.Next(0, 700), Filler + Word);
+                Assert.True(a.PendingFrom(text) == b.PendingFrom(text), $"pair {pair}, text {i}");
+            }
         }
     }
 
@@ -214,7 +337,7 @@ public class ShortValueStreamTests(ITestOutputHelper output)
                 foreach (var variant in Redaction.Variants(value))
                     shortForms.TryAdd(variant, $"[REDACTED: f{shortForms.Count}]");
             }
-            var matcher = FingerprintStreamMatcher.For(Vault([.. records]), keys, shortForms);
+            FingerprintStreamMatcher NewMatcher() => FingerprintStreamMatcher.For(Vault([.. records]), keys, shortForms);
 
             List<string> pieces = [.. shortValues.SelectMany(v => SecretVariants.For(v).Select(x => x.Text)), .. longValues];
             var text = new StringBuilder();
@@ -240,15 +363,15 @@ public class ShortValueStreamTests(ITestOutputHelper output)
             }
             var content = text.ToString();
 
-            var whole = Redacted(matcher, [content]);
+            var whole = Redacted(NewMatcher, [content]);
             for (var size = 1; size <= 64; size++)
-                Assert.True(whole == Redacted(matcher, Chunk(content, size)), $"round {round}, size {size}:\n{content}");
+                Assert.True(whole == Redacted(NewMatcher, Chunk(content, size)), $"round {round}, size {size}:\n{content}");
             for (var list = 0; list < 20; list++)
             {
                 var cuts = Enumerable.Range(0, rng.Next(1, 8)).Select(_ => rng.Next(0, content.Length + 1)).Append(0).Append(content.Length)
                     .Distinct().Order().ToList();
                 var chunks = cuts.Zip(cuts.Skip(1), (from, to) => content[from..to]).ToList();
-                Assert.True(whole == Redacted(matcher, chunks), $"round {round}, cuts {string.Join(",", cuts)}:\n{content}");
+                Assert.True(whole == Redacted(NewMatcher, chunks), $"round {round}, cuts {string.Join(",", cuts)}:\n{content}");
             }
 
             if (ShortLabelled(whole, records, shortForms)) labelled++;
@@ -322,6 +445,32 @@ public class ShortValueStreamTests(ITestOutputHelper output)
                 text.Append(RandomString(rng, rng.Next(0, rng.Next(2) == 0 ? 40 : 400), ShortAlphabet)).Append(Filler[rng.Next(Filler.Length)]);
             var t = rng.Next(2) == 0 ? text.ToString().TrimEnd() : text.ToString();
             var p = scanner.PendingFrom(t);
+            if (p <= 0 || p >= t.Length || !TokenBoundary.IsWordChar(t[p - 1]) || !TokenBoundary.IsWordChar(t[p]))
+                continue;
+            var start = p - 1;
+            while (start > 0 && TokenBoundary.IsWordChar(t[start - 1])) start--;
+            Assert.True(p - start > TokenBoundary.WordHoldLimit, $"text {i}: pending {p} splits a word starting at {start}");
+        }
+    }
+
+    /// <summary>
+    /// <see cref="PendingFrom_WholeToken_NeverSplitsAWordItCanHold"/> for the matcher's short forms (brief T39,
+    /// amendment A1): the class-based hold never leaves the next window starting inside a word it can hold.
+    /// </summary>
+    [Fact]
+    public void Matcher_PendingFrom_NeverSplitsAWordItCanHold()
+    {
+        var rng = new Random(256);
+        using var keys = NewKeys();
+        using var matcher = FingerprintStreamMatcher.For(Vault(), keys, Forms("a\"b", "[REDACTED: q]", Forms("465", "[REDACTED: p]")));
+
+        for (var i = 0; i < 2000; i++)
+        {
+            var text = new StringBuilder();
+            for (var part = rng.Next(1, 8); part > 0; part--)
+                text.Append(RandomString(rng, rng.Next(0, rng.Next(2) == 0 ? 40 : 400), ShortAlphabet)).Append(Filler[rng.Next(Filler.Length)]);
+            var t = rng.Next(2) == 0 ? text.ToString().TrimEnd() : text.ToString();
+            var p = matcher.PendingFrom(t);
             if (p <= 0 || p >= t.Length || !TokenBoundary.IsWordChar(t[p - 1]) || !TokenBoundary.IsWordChar(t[p]))
                 continue;
             var start = p - 1;

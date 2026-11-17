@@ -104,13 +104,13 @@ public sealed class RunRedactionThroughputTests(ITestOutputHelper output)
     private static IReadOnlyList<StreamReplacement> TokenForms(string token) =>
         [.. Redaction.Variants(token).OrderByDescending(v => v.Length).Select(v => new StreamReplacement(v, "[REDACTED: token]"))];
 
-    private static FingerprintStreamMatcher Matcher(IEnumerable<string> values, FingerprintKeys keys)
+    private static FingerprintStreamMatcher Matcher(IEnumerable<string> values, FingerprintKeys keys, IReadOnlyDictionary<string, string>? shortForms = null)
     {
         var records = values.Index().Select(p => new TswapCore.Keyring.RecordMetadata(
             RandomNumberGenerator.GetBytes(32), TswapCore.Keyring.Stamp.Zero, TswapCore.Keyring.RecordType.Value,
             TswapCore.Keyring.Stamp.Zero, $"secret-{p.Index:0000}", 0, [], Fingerprinter.Compute(Encoding.UTF8.GetBytes(p.Item), keys),
             null, null, [])).ToList();
-        return FingerprintStreamMatcher.For(new VaultMetadata(records, 0, 0, []), keys);
+        return FingerprintStreamMatcher.For(new VaultMetadata(records, 0, 0, []), keys, shortForms);
     }
 
     [Fact]
@@ -134,6 +134,9 @@ public sealed class RunRedactionThroughputTests(ITestOutputHelper output)
             ("after A (200 x 16-64, 10 multi-line 1.7-3.3K)", Matcher(Values(rng, 200, 16, 64, 10), keys)),
             ("after B (2,000 x 16-128, 1% multi-line)", Matcher(Values(rng, 2000, 16, 128, 20), keys)),
             ("after C (200 x 16-5,000, no multi-line)", Matcher(Values(rng, 200, 16, 5000, 0), keys)),
+            // Brief T39: last, so the cases above draw the same random numbers as before.
+            ("after D (A + a 5-character token's forms)", Matcher(Values(rng, 200, 16, 64, 10), keys,
+                Redaction.Variants(RandomString(rng, 5, Word)).ToDictionary(v => v, _ => "[REDACTED: short]", StringComparer.Ordinal))),
         };
         foreach (var (name, matcher) in cases)
         {
