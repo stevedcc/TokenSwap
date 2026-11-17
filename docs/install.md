@@ -254,10 +254,14 @@ pwsh installTswap.ps1
 
 ## Windows notes
 
+- **PowerShell and `{{tokens}}`.** In PowerShell (Windows PowerShell 5.1 and PowerShell 7) quote every
+  argument that holds a token: `tswap run psql -h db -U app '--password={{db-pw}}'`, `-f '{{@values.yaml}}'`.
+  Unquoted, PowerShell reads `{...}` as a script block and passes `{{db-pw}}` on as `{db-pw}`; `run` then
+  finds no token and shows the quoted form. cmd needs no quotes.
 - **Privileged commands** (`add`, `get`, `list`, `delete`, `export`, `import`, and the others that
   need sudo, listed in [commands.md](commands.md#which-commands-need-sudo)) run from an **elevated
   command prompt** (right-click → "Run as administrator") instead of `sudo`.
 - **Process substitution** (`<(…)`) is a bash feature and is not available in cmd or PowerShell,
   and `apply` needs an elevated prompt. For a file with `# tswap:` markers use
-  `tswap run helm upgrade --install app ./chart -f {{@values.yaml}}`, which works in cmd and
-  PowerShell: see the [Helm deployment patterns](examples.md#helm-deployment-patterns).
+  `tswap run helm upgrade --install app ./chart -f {{@values.yaml}}` (in PowerShell
+  `-f '{{@values.yaml}}'`), which works in cmd and PowerShell: see the [Helm deployment patterns](examples.md#helm-deployment-patterns).

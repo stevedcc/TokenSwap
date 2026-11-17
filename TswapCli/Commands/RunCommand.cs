@@ -1,10 +1,11 @@
+using System.Text.RegularExpressions;
 using RedactingPty;
 using TswapCore;
 using TswapCore.Fingerprints;
 
 namespace TswapCli.Commands;
 
-public sealed class RunCommand : ICliCommand
+public sealed partial class RunCommand : ICliCommand
 {
     public string Name => "run";
     public string HelpUsage => Usage;
@@ -71,8 +72,10 @@ public sealed class RunCommand : ICliCommand
         var envTokens = envPairs.Select(p => p.Token).Distinct(StringComparer.Ordinal).ToList();
         var allTokens = tokens.Union(envTokens, StringComparer.Ordinal).ToList();
 
+        // Brief T35 (#348.1): arguments PowerShell stripped a pair of braces from (shape only, nothing opened).
+        var braced = BracedTokens(commandArgs);
         if (allTokens.Count == 0 && fileTokens.Count == 0)
-            throw new TswapException("No {{tokens}} or {{@file}} tokens found in command");
+            throw new TswapException(NoTokensText + string.Concat(braced.Select(arg => "\n" + BracesHint(arg))));
 
         // Block obvious attempts to exfiltrate secrets via run: the blocklist, and shells or
         // interpreters given inline code (#105). Pre-substitution check catches them in the template.
@@ -98,6 +101,11 @@ public sealed class RunCommand : ICliCommand
         if (filesEnv is not null && !OperatingSystem.IsWindows() && filesEnv.EffectiveUid() == 0)
             throw new TswapException(
                 $"'{ctx.Prefix} run' with a {{{{@file}}}} token doesn't run as root: run it as your own user, without sudo.");
+
+        // Brief T35 (A17): after every refusal made before the vault opens, before any verbose line. Warn, not refuse:
+        // the argument may be meant literally.
+        foreach (var arg in braced)
+            ctx.Console.Error.WriteLine(BracesWarning(arg));
 
         if (ctx.Verbose)
         {
@@ -436,6 +444,42 @@ public sealed class RunCommand : ICliCommand
         return culprit is not null
             ? $"the value of {{{{{culprit}}}}} {one}"
             : $"the values of {string.Join(", ", secretValues.Keys.Select(t => $"{{{{{t}}}}}"))} {together}";
+    }
+
+    /// <summary>The refusal of a command with no token at all.</summary>
+    public const string NoTokensText = "No {{tokens}} or {{@file}} tokens found in command";
+
+    // Brief T35 (#348.1): a whole argument that is a token with one pair of braces removed, as PowerShell does to an
+    // unquoted {{name}} (a script block): {name}, {name:previous} or {@path}. Never part of a longer argument.
+    [GeneratedRegex(@"^\{[a-zA-Z0-9_-]{1,64}(?::previous)?\}$")]
+    private static partial Regex BracedNameRegex { get; }
+
+    [GeneratedRegex(@"^\{@[^{}]+\}$")]
+    private static partial Regex BracedFileRegex { get; }
+
+    /// <summary>
+    /// Brief T35: the distinct arguments, in argument order, that look like a token with one pair of braces removed.
+    /// By shape only: no vault is opened to check the name.
+    /// </summary>
+    internal static IReadOnlyList<string> BracedTokens(IReadOnlyList<string> commandArgs) =>
+        commandArgs.Where(arg => BracedNameRegex.IsMatch(arg) || BracedFileRegex.IsMatch(arg))
+            .Distinct(StringComparer.Ordinal).ToList();
+
+    /// <summary>Brief T35: the line added to <see cref="NoTokensText"/> for each braced argument.</summary>
+    internal static string BracesHint(string argument)
+    {
+        // A2: a {@path} can carry control characters; echoed text is printable ASCII only.
+        var shown = Validation.Printable(argument);
+        return $"The argument {shown} looks like the token {{{shown}}} with one pair of braces removed, as PowerShell " +
+               $"does to an unquoted token. Quote it: '{{{shown}}}'.";
+    }
+
+    /// <summary>Brief T35: the stderr warning for a braced argument next to real tokens (run goes on).</summary>
+    internal static string BracesWarning(string argument)
+    {
+        var shown = Validation.Printable(argument);
+        return $"Warning: the argument {shown} looks like the token {{{shown}}} with one pair of braces removed, as " +
+               $"PowerShell does to an unquoted token; it is passed on as it is. Quote it: '{{{shown}}}'.";
     }
 
     private static void ThrowIfBlocked(Validation.BlockedInvocation? blocked)
