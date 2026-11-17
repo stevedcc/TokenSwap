@@ -19,8 +19,14 @@ open.
 **No existing assertion changes.** Several tests assert that a US form is *absent* from output
 (`Assert.DoesNotContain("Reinitialize?", stdout)` and the `"Initialization"` / `"INITIALIZATION"` checks in
 `BannerAlignmentTests`, `GuidedInitTests`, `CommandTests`, `InitRecordVaultTests`). They guard earlier respellings;
-leave them exactly as they are and allowlist each line (reason below). No other test's assertion changes either; the
-only test code that changes is `SpellingTests.cs` itself and the allowlist.
+leave them exactly as they are and allowlist each line (reason below). No other test's assertions or logic change:
+`SpellingTests.cs` and the allowlist change, and comments in test files are respelt as part of the sweep (A3).
+
+**Review history.** Round 1 (GLM, 480f902): ready; every count and line verified against 35edf93 (26 cased lines,
+2 ALL-CAPS, 1 lowercase; zero false positives). Minors folded in as A1 (ALL-CAPS `Authoriz…` excluded too), A2 (own
+identifiers in uncovered shapes), A3 (test-file comments are part of the sweep), A4 (`OtherUsWords`' comment named,
+stems-and-suffixes clause kept, failure message extended), A5 (cased catch-all), A6 (Task 2 names the existing
+scratch exemptions).
 
 ## Task 1: capitalised and ALL-CAPS forms, and the missing word families
 
@@ -43,9 +49,13 @@ In `SpellingTests.cs`:
    - `judg`: `ment`, `ments` (British `judgement`, `judgements`)
    - the other rows (`gr`, `cancel`, `acknowledg`, `fulfil`, `travel`, `label`, `model`, `analy`) unchanged.
 
-   Replace the doc comment's first sentence so it says the scope is deliberate: "Brief T33 task 2 and T40: the US forms
-   tswap has used or is likely to use, not every US spelling; the list is deliberate and grows when a review finds a
-   new one." Keep the `-ize` sentence.
+   In `OtherUsWords`' doc comment (not the class comment), replace the first sentence's opening so it says the scope
+   is deliberate, keeping its clause about stems and suffixes (A4): "Brief T33 task 2 and T40: the US forms tswap has
+   used or is likely to use, not every US spelling; the list is deliberate and grows when a review finds a new one.
+   The words are lowercase whole words (case-sensitive, a word boundary each side), built from stems and suffixes so
+   that no US word appears whole in this file." Keep the rest, including the `-ize` sentence. Extend
+   `NoOtherUsSpellings_InProse`' failure message with the new British forms (neighbour, rumour, endeavour, litre,
+   judgement); its assertion is unchanged.
 
 2. **Cased forms.** Add `internal static readonly Regex CasedUsForm`, built from the same `OtherUsWords` (so a family
    added later is guarded in all cases at once). For each word `w` it matches, as a whole word (`\b` each side,
@@ -55,7 +65,7 @@ In `SpellingTests.cs`:
      `JsonSerializer.Serialize`, `System.Text.Json.Serialization`) and not when it is directly followed by `(` or `<`
      (a call, a declaration, a generic: `Normalize(SecretRecord record)`, `Deserialize<T>`). Use a lookbehind
      `(?<!\.)` and a lookahead `(?![(<])`.
-   - **`Authorization`:** the capitalised `Authoriz…` forms are not matched at all. `Authorization` is the HTTP
+   - **`Authorization`:** the capitalised and the ALL-CAPS `Authoriz…` forms are not matched at all (A1). `Authorization` is the HTTP
      header name (RFC 9110), which other software owns, and tswap names it in code, docs and tests; the lowercase
      forms stay guarded. The doc comment says so.
 
@@ -72,7 +82,7 @@ In `SpellingTests.cs`:
        `"Hon" + "ored here"`, `"NEIGHB" + "OR"`;
      - no match: `"JsonSerializer." + "Serial" + "ize(x)"`, `"System.Text.Json." + "Serial" + "ization;"`,
        `"Normal" + "ize(record)"`, `"Deserial" + "ize<T>"`, `"Author" + "ization: Bearer x"`,
-       `"Proxy-Author" + "ization"`, and the British forms `"Serialises, Initialisation, INITIALISATION, Honoured"`;
+       `"Proxy-Author" + "ization"`, `"AUTHORIZ" + "ATION"`, and the British forms `"Serialises, Initialisation, INITIALISATION, Honoured"`;
      - lowercase is not this regex's job: `"serial" + "izes"` does not match `CasedUsForm`.
    - Extend `OtherUsForm_MatchesLowercaseWholeWordsOnly` with matches for one new word of each added family
      (`"hon" + "ored"`, `"neighb" + "or"`, `"rum" + "or"`, `"endeav" + "or"`, `"lit" + "ers"`, `"defen" + "ses"`,
@@ -100,9 +110,15 @@ quoting the old prompt: respell to the current prompt text `Reinitialise?`), `Ts
   :105, `TswapTests/MacFakeTools.cs:286`, `TswapTests/MacPkgScriptTests.cs:331`) and pkgutil's `Notarization:` line
   (`TswapTests/MacPkgScriptTests.cs:52`): reason "Apple's tool output, quoted verbatim";
 - the released anchor below: reason "released anchor";
-- anything else the guard finds that is a name another tool owns or text quoted from another tool: stop and list it
-  in the report with your reasoning; allowlist it only if it clearly is (a JSON field a library writes, another
-  tool's option or message). Never rename an external name.
+- anything else the guard finds that is a name another tool owns, tswap's own identifier in a shape the exclusions
+  don't cover (`nameof(...)`, a method group, a `cref`; out of scope as in T33), or text quoted from another tool:
+  list it in the report with your reasoning and allowlist it only if it clearly is one of those, with the matching
+  reason ("name another tool owns", "tswap identifier, out of scope", "quoted tool output"). Otherwise stop and report.
+  Never rename an external name (A2).
+
+**Catch-all, once, before the sweep (A5).** Run `\b[A-Z][a-z]+iz(e|es|ed|ing|ation|ations|er|ers)\b` and its ALL-CAPS
+variant over the same files. Add any further stem it shows to `OtherUsWords` (ignore `Size`, `Prize`, `Seize` and words
+the same in both spellings) and list the result, even "none", in the report. The brief reviewer found none at 35edf93.
 
 **Anchors.** `AGENTS.md`'s heading `### Code Organization (TswapCli)` was released in v0.3.0
 (`git show v0.3.0:AGENTS.md`), so respelling it changes a released anchor. Respell the heading and put
@@ -123,7 +139,8 @@ local note (a report, a scratch file) can fail the unit suite. Add one paragraph
 > **Docs and spelling guards** (`TswapTests/Docs/`): the doc-link tests and the British-spelling tests
 > (`SpellingTests`, allowlist `TswapTests/Docs/us-spellings-allowed.txt`) read every file git tracks *or would
 > track*: untracked files that `.gitignore` doesn't exclude count too. A stray local note with a US spelling or a
-> broken link fails the unit suite; keep such notes outside the repository or in an ignored path.
+> broken link fails the unit suite; keep such notes outside the repository or in an ignored path (the doc-link
+> tests already skip `wip-*.md` notes and build output).
 
 No test for this task (documentation only); say so in the commit message.
 
