@@ -469,6 +469,17 @@ public sealed partial class SlotCommand : ICliCommand
         ctx.WriteOutputFile(path, SlotEnrolmentFileCodec.SerializeRequest(file));
     }
 
+    /// <summary>
+    /// Brief T34 (#337.3): the staged approve's note under the requester's fingerprint: approve doesn't wait, and the check
+    /// that counts is the approve file's fingerprint, which the joining machine asks the person to confirm.
+    /// </summary>
+    internal static readonly string[] StagedApproveFingerprintNote =
+    [
+        "(The joining machine shows the same fingerprint. Nothing here waits for you:",
+        " the check to make is the approve file fingerprint below, which the joining",
+        " machine asks you to confirm.)",
+    ];
+
     // --- slot approve (runs on an already-enrolled machine) ---
 
     /// <summary>
@@ -485,17 +496,6 @@ public sealed partial class SlotCommand : ICliCommand
     /// machine's local keyring ends up a complete (if manually-propagated) picture of the fleet.
     /// </para>
     /// </summary>
-    /// <summary>
-    /// Brief T34 (#337.3): the staged approve's note under the requester's fingerprint: approve doesn't wait, and the check
-    /// that counts is the approve file's fingerprint, which the joining machine asks the person to confirm.
-    /// </summary>
-    internal static readonly string[] StagedApproveFingerprintNote =
-    [
-        "(The joining machine shows the same fingerprint. Nothing here waits for you:",
-        " the check to make is the approve file fingerprint below, which the joining",
-        " machine asks you to confirm.)",
-    ];
-
     private static int ExecuteApprove(CommandContext ctx, string[] args)
     {
         var approveUsage = $"{ctx.Prefix} slot approve <request-file> <approve-file> [{RecoveryKeyFlag}]";

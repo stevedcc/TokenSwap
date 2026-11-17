@@ -1442,9 +1442,9 @@ public class SlotEnrolTests : IDisposable
             var ex = Assert.Throws<SshTransportException>(() => run());
 
             Assert.Equal("its error output was larger than 1 MiB, so ssh was stopped", ex.Message);
-            var lines = RelayedLines(stderr);
-            Assert.True(lines.Length <= 1, $"{lines.Length} lines relayed");
-            Assert.All(lines, l => Assert.EndsWith(" [line cut]", l));
+            // Review round 1 (M1): exactly the one cut line, written when the line passed 4096 characters.
+            var line = Assert.Single(RelayedLines(stderr));
+            Assert.EndsWith(" [line cut]", line);
         }
         finally
         {

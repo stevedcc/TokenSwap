@@ -148,14 +148,15 @@ public class SlotStageTests : IDisposable
     public void EnrolmentFiles_AreAscii_SoNoConsoleEncodingChangesThem()
     {
         var approve = StagedApprove(_joiner);
-        var receipt = Accept(_joiner, approve);
+        Accept(_joiner, approve);
 
         Assert.Null(_joiner.Config.PendingSlotId);
         var files = new Dictionary<string, byte[]>
         {
             ["request"] = File.ReadAllBytes(_joiner.PathOf("request.json")),
             ["approve"] = File.ReadAllBytes(Path.Combine(StagedFolder(_host), "approve.json")),
-            ["receipt"] = Encoding.UTF8.GetBytes(receipt),
+            // Review round 1 (M2): the receipt's bytes as written (ReadAllText would hide a BOM).
+            ["receipt"] = File.ReadAllBytes(_joiner.PathOf("approve.json") + ".receipt.json"),
         };
         foreach (var (name, bytes) in files)
         {

@@ -7,7 +7,7 @@ namespace TswapTests;
 
 /// <summary>
 /// Brief T34 (#337.6): <c>init</c>'s banners line up and are in British spelling; and every banner literal in
-/// <c>TswapCli</c> is as wide as its box, including those no test prints (<c>migrate</c>'s).
+/// <c>TswapCli</c> (side and bottom rows) is as wide as its box, including those no test prints (<c>migrate</c>'s).
 /// </summary>
 public sealed partial class BannerAlignmentTests : IDisposable
 {
@@ -84,6 +84,7 @@ public sealed partial class BannerAlignmentTests : IDisposable
             .Where(f => !Path.GetRelativePath(cli, f).Replace('\\', '/').Split('/').Any(part => part is "bin" or "obj"));
         List<string> offenders = [];
         List<string> checkedSides = [];
+        List<string> checkedBottoms = [];
         foreach (var file in files)
         {
             string? top = null;
@@ -97,6 +98,15 @@ public sealed partial class BannerAlignmentTests : IDisposable
                     var unprefixed = text.StartsWith(@"\n", StringComparison.Ordinal) ? text[2..] : text;
                     if (unprefixed.StartsWith('╔'))
                         top = unprefixed;
+                    else if (text.StartsWith('╚'))
+                    {
+                        // Review round 1 (M6): the bottom row too, its trailing \n removed.
+                        var bottom = text.EndsWith(@"\n", StringComparison.Ordinal) ? text[..^2] : text;
+                        var where = $"{Path.GetRelativePath(cli, file)}:{lineNumber}";
+                        checkedBottoms.Add(where);
+                        if (top is null || bottom.Length != top.Length)
+                            offenders.Add($"{where} (bottom) is {bottom.Length} characters, its box {top?.Length.ToString() ?? "missing"}");
+                    }
                     else if (text.Length > 1 && text.StartsWith('║') && text.EndsWith('║'))
                     {
                         var where = $"{Path.GetRelativePath(cli, file)}:{lineNumber}";
@@ -110,6 +120,7 @@ public sealed partial class BannerAlignmentTests : IDisposable
         // The scan sees the banners at all: migrate's (no test prints it) among them.
         Assert.Contains(checkedSides, s => s.Replace('\\', '/').StartsWith("Commands/MigrateCommand.cs:", StringComparison.Ordinal));
         Assert.True(checkedSides.Count >= 10, $"only {checkedSides.Count} banner literals found");
+        Assert.True(checkedBottoms.Count >= 10, $"only {checkedBottoms.Count} bottom rows found");
         Assert.Empty(offenders);
     }
 }
