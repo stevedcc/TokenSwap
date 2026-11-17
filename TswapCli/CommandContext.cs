@@ -135,6 +135,12 @@ public sealed record CommandContext(
     /// </summary>
     public Func<RedactingPty.IPtyRunner> PtyRunner { get; init; } = RedactingPty.PtyRunnerFactory.Create;
 
+    /// <summary>
+    /// Brief T35 (#349): tswap's stdout as a Windows console whose mode <c>run</c> can switch (VT processing for the
+    /// child's run); null when stdout is no console or not on Windows. Tests substitute a fake or null.
+    /// </summary>
+    internal Func<IConsoleOutputMode?> StdoutConsoleMode { get; init; } = WindowsVirtualTerminal.ForThisProcess;
+
     /// <summary>Issue #251: the machine seams of <c>run</c>'s <c>{{@file}}</c> copies (null: the real machine).</summary>
     internal FilledFilesEnvironment? FilledFilesEnvironment { get; init; }
 

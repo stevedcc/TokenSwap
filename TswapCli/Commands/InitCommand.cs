@@ -327,7 +327,7 @@ public sealed class InitCommand : ICliCommand
         c.Out.WriteLine("╚════════════════════════════════════════╝\n");
         c.Out.WriteLine("This vault's master key (K_v) is random and wrapped by one YubiKey's slot");
         c.Out.WriteLine("(k = 1) — see docs/multi-machine.md. Add more keys later, each as its own");
-        c.Out.WriteLine($"slot that opens the vault alone: sudo {ctx.Prefix} slot add --yubikey\n");
+        c.Out.WriteLine($"slot that opens the vault alone: {ctx.Prefix} slot add --yubikey (with sudo, or from an elevated prompt on Windows)\n");
 
         // Test mode (TSWAP_TEST_KEY, Debug builds only) asks nothing, as its init always did: there is
         // no key to insert, and a test's stdin may never close.
@@ -380,7 +380,7 @@ public sealed class InitCommand : ICliCommand
             PrintPasswordLine(c, password);
             c.Out.WriteLine($"Entropy mode:    {(rngMode == RngMode.YubiKey ? "YubiKey hardware (two touches per create)" : "System RNG (one touch per create)")}");
             c.Out.WriteLine("\nThis key alone opens the vault. To enrol a spare key as its own slot, plug it in and run:");
-            c.Out.WriteLine($"  sudo {ctx.Prefix} slot add --yubikey");
+            c.Out.WriteLine($"  {ctx.Prefix} slot add --yubikey (with sudo, or from an elevated prompt on Windows)");
             PrintRecoveryKeyBackupWarning(c, ctx.Prefix, recoveryPrivateKey, $"YubiKey {blob.Serial} and every key added later", keyFile);
             PrintVaultFolder(c, fileStore, vaultDir);
             return 0;

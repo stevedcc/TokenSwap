@@ -1,10 +1,12 @@
+using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 using RedactingPty;
 using TswapCore;
 using TswapCore.Fingerprints;
 
 namespace TswapCli.Commands;
 
-public sealed class RunCommand : ICliCommand
+public sealed partial class RunCommand : ICliCommand
 {
     public string Name => "run";
     public string HelpUsage => Usage;
@@ -71,16 +73,19 @@ public sealed class RunCommand : ICliCommand
         var envTokens = envPairs.Select(p => p.Token).Distinct(StringComparer.Ordinal).ToList();
         var allTokens = tokens.Union(envTokens, StringComparer.Ordinal).ToList();
 
+        // Brief T35 (#348.1): arguments PowerShell stripped a pair of braces from (shape only, nothing opened).
+        var braced = BracedTokens(commandArgs);
         if (allTokens.Count == 0 && fileTokens.Count == 0)
-            throw new TswapException("No {{tokens}} or {{@file}} tokens found in command");
+            throw new TswapException(NoTokensText + string.Concat(braced.Select(arg => "\n" + BracesHint(arg))));
 
         // Block obvious attempts to exfiltrate secrets via run: the blocklist, and shells or
         // interpreters given inline code (#105). Pre-substitution check catches them in the template.
-        ThrowIfBlocked(Validation.GetBlockedInvocation(commandArgs));
+        var windows = ctx.Os == OSPlatform.Windows;
+        ThrowIfBlocked(Validation.GetBlockedInvocation(commandArgs), windows);
         // Issue #251: with a {{@file}} token, no word of the command may print, encode or copy files,
         // or be a shell or interpreter, and the file is never the program.
         if (fileTokens.Count > 0)
-            ThrowIfBlocked(Validation.GetFileTokenRefusal(commandArgs));
+            ThrowIfBlocked(Validation.GetFileTokenRefusal(commandArgs), windows);
 
         // Block shell output redirection in the command template (secrets could be written
         // to readable files). Note: this check runs before token substitution. Secret values
@@ -90,7 +95,7 @@ public sealed class RunCommand : ICliCommand
             throw new TswapException(
                 "Pipes and output redirection are not allowed in 'run' commands.\n" +
                 "Secrets could be captured to files or piped to other programs.\n" +
-                "Use 'sudo ... get <name>' to retrieve a secret value.");
+                RetrieveSecretLine(windows));
 
         var filesEnv = fileTokens.Count > 0 ? ctx.FilledFilesEnvironment ?? FilledFilesEnvironment.FromSystem() : null;
         // Root never creates a secret file in a user's folder (Windows: an elevated tswap is allowed;
@@ -98,6 +103,11 @@ public sealed class RunCommand : ICliCommand
         if (filesEnv is not null && !OperatingSystem.IsWindows() && filesEnv.EffectiveUid() == 0)
             throw new TswapException(
                 $"'{ctx.Prefix} run' with a {{{{@file}}}} token doesn't run as root: run it as your own user, without sudo.");
+
+        // Brief T35 (A17): after every refusal made before the vault opens, before any verbose line. Warn, not refuse:
+        // the argument may be meant literally.
+        foreach (var arg in braced)
+            ctx.Console.Error.WriteLine(BracesWarning(arg));
 
         if (ctx.Verbose)
         {
@@ -229,14 +239,15 @@ public sealed class RunCommand : ICliCommand
                 if (Validation.GetBlockedInvocation(argv) is { } blocked)
                 {
                     if (secretValues.Count == 0)
-                        ThrowIfBlocked(blocked);
+                        ThrowIfBlocked(blocked, windows);
                     var named = NameCulprit(commandArgs, secretValues, filePaths,
                         a => Validation.GetBlockedInvocation(a) is not null, "makes", "together make");
                     throw new TswapException(
                         $"After substitution, {named} this a command 'run' refuses, which could expose secret values: " +
                         "a program that prints its arguments or environment, or a shell or interpreter given inline code " +
                         "or code from stdin, which can print them past redaction. The refusal doesn't repeat the word, " +
-                        "which came from a secret's value.\nUse 'sudo ... get <name>' to view a secret.");
+                        "which came from a secret's value.\n" +
+                        ViewSecretLine(windows));
                 }
 
                 // Show the sanitised command
@@ -263,20 +274,26 @@ public sealed class RunCommand : ICliCommand
                 // resolution path; output held back for a possible multi-line secret is released when the
                 // child waits for terminal input.
                 fingerprintKeys = FingerprintKeys.Derive(key);
+                matcher = FingerprintStreamMatcher.For(metadata, fingerprintKeys, shortForms);
+                // Brief T35 (#349): on a Windows console the child's window-title sequences are dropped too.
+                var stdoutMode = ctx.StdoutConsoleMode();
                 var options = new RedactionOptions
                 {
-                    Matchers = [matcher = FingerprintStreamMatcher.For(metadata, fingerprintKeys, shortForms)],
+                    Matchers = stdoutMode is null ? [matcher] : [matcher, new TerminalTitleMatcher()],
                     ReleaseWhenAwaitingInput = true,
                     // Brief T26: set for the child only, never in its argv; tswap's own environment is unchanged.
                     Environment = environment.Count > 0 ? environment : null,
                 };
                 var runner = ctx.PtyRunner();
                 childStarted = true;
-                var exitCode = files is null
-                    ? runner.Run(argv, replacements, options)
-                    : files.RunChild(() => runner.Run(argv, replacements, options));
-
-                return exitCode;
+                // Brief T35 (#349): VT processing on tswap's console stdout while the child runs, so the classic
+                // console interprets the pseudo console's sequences; the old mode is back before the warning below.
+                using (stdoutMode is null ? null : WindowsVirtualTerminal.AroundChild(stdoutMode))
+                {
+                    return files is null
+                        ? runner.Run(argv, replacements, options)
+                        : files.RunChild(() => runner.Run(argv, replacements, options));
+                }
             }
             finally
             {
@@ -438,9 +455,64 @@ public sealed class RunCommand : ICliCommand
             : $"the values of {string.Join(", ", secretValues.Keys.Select(t => $"{{{{{t}}}}}"))} {together}";
     }
 
-    private static void ThrowIfBlocked(Validation.BlockedInvocation? blocked)
+    /// <summary>The refusal of a command with no token at all.</summary>
+    public const string NoTokensText = "No {{tokens}} or {{@file}} tokens found in command";
+
+    // Brief T35 (#348.1): a whole argument that is a token with one pair of braces removed, as PowerShell does to an
+    // unquoted {{name}} (a script block): {name}, {name:previous} or {@path}. Never part of a longer argument.
+    [GeneratedRegex(@"^\{[a-zA-Z0-9_-]{1,64}(?::previous)?\}$")]
+    private static partial Regex BracedNameRegex { get; }
+
+    [GeneratedRegex(@"^\{@[^{}]+\}$")]
+    private static partial Regex BracedFileRegex { get; }
+
+    /// <summary>
+    /// Brief T35: the distinct arguments, in argument order, that look like a token with one pair of braces removed.
+    /// By shape only: no vault is opened to check the name.
+    /// </summary>
+    internal static IReadOnlyList<string> BracedTokens(IReadOnlyList<string> commandArgs) =>
+        commandArgs.Where(arg => BracedNameRegex.IsMatch(arg) || BracedFileRegex.IsMatch(arg))
+            .Distinct(StringComparer.Ordinal).ToList();
+
+    /// <summary>Brief T35: the line added to <see cref="NoTokensText"/> for each braced argument.</summary>
+    internal static string BracesHint(string argument)
+    {
+        // A2: a {@path} can carry control characters; echoed text is printable ASCII only.
+        var shown = Validation.Printable(argument);
+        return $"The argument {shown} looks like the token {{{shown}}} with one pair of braces removed, as PowerShell " +
+               $"does to an unquoted token. Quote it: '{{{shown}}}'.";
+    }
+
+    /// <summary>Brief T35: the stderr warning for a braced argument next to real tokens (run goes on).</summary>
+    internal static string BracesWarning(string argument)
+    {
+        var shown = Validation.Printable(argument);
+        return $"Warning: the argument {shown} looks like the token {{{shown}}} with one pair of braces removed, as " +
+               $"PowerShell does to an unquoted token; it is passed on as it is. Quote it: '{{{shown}}}'.";
+    }
+
+    /// <summary>Brief T35 (#348.3): how to view a secret instead; Windows has no sudo, but an elevated prompt.</summary>
+    internal static string ViewSecretLine(bool windows) => windows
+        ? "Use '... get <name>' from an elevated command prompt to view a secret."
+        : "Use 'sudo ... get <name>' to view a secret.";
+
+    /// <summary>Brief T35: the pipe refusal's line, as <see cref="ViewSecretLine"/>.</summary>
+    internal static string RetrieveSecretLine(bool windows) => windows
+        ? "Use '... get <name>' from an elevated command prompt to retrieve a secret value."
+        : "Use 'sudo ... get <name>' to retrieve a secret value.";
+
+    /// <summary>
+    /// Brief T35: a refusal's reason for this OS. <see cref="Validation.GetBlockedInvocation"/> builds every reason
+    /// with the Unix way out, appended whole (also inside find -exec and wrapper prefixes); on Windows that sentence
+    /// is swapped for the PowerShell one. This relies on the sentence being appended whole, which
+    /// RunWindowsWordingTests.EveryWayOutReason_EndsWithTheWholeSentence pins.
+    /// </summary>
+    internal static string Reason(Validation.BlockedInvocation blocked, bool windows) =>
+        windows ? blocked.Reason.Replace(Validation.WayOutFor(false), Validation.WayOutFor(true), StringComparison.Ordinal) : blocked.Reason;
+
+    private static void ThrowIfBlocked(Validation.BlockedInvocation? blocked, bool windows)
     {
         if (blocked is not null)
-            throw new TswapException($"{blocked.Reason}\nUse 'sudo ... get <name>' to view a secret.");
+            throw new TswapException($"{Reason(blocked, windows)}\n{ViewSecretLine(windows)}");
     }
 }
