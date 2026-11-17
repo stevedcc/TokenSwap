@@ -751,6 +751,57 @@ public class SlotEnrolTests : IDisposable
         Assert.Contains("(Not load-bearing in v0", stdout);
     }
 
+    // ------------------------------------------------------------------ brief T34 task 2: the Enter gate
+
+    private const string EnterPrompt = "Press Enter to accept it here. ";
+
+    [Fact]
+    public void EnterGate_TypedText_IsNeitherShownNorAccepted()
+    {
+        _joiner.Ssh = InteractiveSsh();
+
+        var (exit, stdout, stderr) = _joiner.RunOnEchoingTerminal("\n\n\n" + "PIN-MARKER-4711\n" + "\n", ["slot", "enrol", "--via", Via]);
+
+        Assert.True(exit == 0, stderr + stdout);
+        AssertEnrolled(stdout, $"YubiKey {SerialB}");
+        Assert.Equal(1, CountOf(stdout, TswapCli.Commands.SlotCommand.EnterGateRetryText));
+        Assert.Equal(2, CountOf(stdout, EnterPrompt));
+        Assert.DoesNotContain("PIN-MARKER-4711", stdout);
+        Assert.DoesNotContain("PIN-MARKER-4711", stderr);
+    }
+
+    [Fact]
+    public void EnterGate_ASpace_IsNotAnEnter()
+    {
+        _joiner.Ssh = InteractiveSsh();
+
+        var (exit, stdout, stderr) = EnrolOnTerminal("\n\n\n" + " \n" + "\n");
+
+        Assert.True(exit == 0, stderr + stdout);
+        Assert.Equal(1, CountOf(stdout, TswapCli.Commands.SlotCommand.EnterGateRetryText));
+    }
+
+    [Fact]
+    public void EnterGate_TextThenEof_KeepsTheRequest()
+    {
+        var ssh = InteractiveSsh();
+        _joiner.Ssh = ssh;
+        var hostKeyring = HostKeyringBytes();
+
+        var (exit, stdout, stderr) = EnrolOnTerminal("\n\n\n" + "x\n");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("The approve file's fingerprint wasn't confirmed, so it was not accepted. This machine's pending request is kept; " +
+                        $"nothing was added on {Via}.", stderr);
+        var folder = Assert.Single(EnrolFolders);
+        Assert.True(File.Exists(Path.Combine(folder, "request.json")));
+        Assert.False(File.Exists(Path.Combine(folder, "approve.json")));
+        Assert.NotNull(_joiner.Config.PendingSlotId);
+        Assert.Equal(hostKeyring, HostKeyringBytes());
+        Assert.Equal(1, CountOf(stdout, TswapCli.Commands.SlotCommand.EnterGateRetryText));
+        Assert.DoesNotContain(ssh.Log, l => l.Contains("merge"));
+    }
+
     [Fact]
     public void Interactive_AnApproveFileSwappedOnTheHost_ShowsAnotherFingerprint_AndEofAtTheEnterKeepsTheRequest()
     {

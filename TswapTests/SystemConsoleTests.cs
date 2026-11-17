@@ -66,6 +66,65 @@ public sealed class SystemConsoleTests
         Assert.False(input.TreatControlCAsInput);
     }
 
+    // ---- brief T34 (#337.5): ReadLineWithoutEcho
+
+    [Fact]
+    public void ReadLineWithoutEcho_OnATerminal_DiscardsTypeaheadFirst()
+    {
+        var input = new ScriptedInput(redirected: false, keys: [Digit('1'), Digit('2'), Backspace, Digit('3'), Enter]);
+        var console = new SystemConsole(input);
+
+        Assert.Equal("13", console.ReadLineWithoutEcho());
+        Assert.Equal(["discard", "key", "key", "key", "key", "key"], input.Log);
+        Assert.Equal([true, false], input.ControlCSets);
+    }
+
+    [Fact]
+    public void ReadLineWithoutEcho_CtrlD_OnAnEmptyLine_IsEndOfInput()
+    {
+        var input = new ScriptedInput(redirected: false, keys: [CtrlD]);
+        var console = new SystemConsole(input);
+
+        Assert.Null(console.ReadLineWithoutEcho());
+        Assert.False(input.TreatControlCAsInput);
+    }
+
+    [Fact]
+    public void ReadLineWithoutEcho_CtrlD_MidLine_IsIgnored()
+    {
+        var input = new ScriptedInput(redirected: false, keys: [Digit('1'), CtrlD, Digit('2'), Enter]);
+        var console = new SystemConsole(input);
+
+        Assert.Equal("12", console.ReadLineWithoutEcho());
+    }
+
+    [Fact]
+    public void ReadLineWithoutEcho_CtrlC_Cancels_AndPutsTheSettingBack()
+    {
+        var input = new ScriptedInput(redirected: false, keys: [Digit('1'), CtrlC]);
+        var console = new SystemConsole(input);
+
+        Assert.Throws<OperationCanceledException>(() => console.ReadLineWithoutEcho());
+        Assert.Equal([true, false], input.ControlCSets); // on for the read, then back to what it was (false)
+        Assert.False(input.TreatControlCAsInput);
+    }
+
+    [Fact]
+    public void ReadLineWithoutEcho_Piped_ReadsTheLine()
+    {
+        var input = new ScriptedInput(redirected: true, lines: ["typed", "next"]);
+        var console = new SystemConsole(input);
+
+        Assert.Equal("typed", console.ReadLineWithoutEcho());
+        Assert.Equal(["line"], input.Log);
+    }
+
+    private static ConsoleKeyInfo Digit(char c) => new(c, ConsoleKey.D0 + (c - '0'), shift: false, alt: false, control: false);
+
+    private static readonly ConsoleKeyInfo Backspace = new('\b', ConsoleKey.Backspace, false, false, false);
+
+    private static readonly ConsoleKeyInfo CtrlD = new('\x04', ConsoleKey.D, shift: false, alt: false, control: true);
+
     private static ConsoleKeyInfo Key(char c) => new(c, ConsoleKey.A + (c - 'a'), shift: false, alt: false, control: false);
 
     private static readonly ConsoleKeyInfo Enter = new('\r', ConsoleKey.Enter, false, false, false);

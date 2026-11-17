@@ -297,6 +297,7 @@ public class SlotStdioTests : IDisposable
 
         public string? ReadLine() => _in.ReadLine();
         public string ReadPassword(TextWriter? echo = null) => _in.ReadLine() ?? "";
+        public string? ReadLineWithoutEcho() => _in.ReadLine();
         public void SetForeground(ConsoleColor colour) { }
         public void ResetColor() { }
 

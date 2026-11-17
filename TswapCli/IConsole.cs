@@ -30,6 +30,13 @@ public interface IConsole
     /// </summary>
     string ReadPassword(TextWriter? echo = null);
 
+    /// <summary>
+    /// Brief T34 (#337.5): one line, nothing shown while it is typed; null at the end of input. On a terminal what was
+    /// typed before the read is discarded first (#293), and Ctrl-C throws <see cref="OperationCanceledException"/>; piped
+    /// input is read as it is. The caller writes the newline.
+    /// </summary>
+    string? ReadLineWithoutEcho();
+
     void SetForeground(ConsoleColor colour);
     void ResetColor();
 }

@@ -65,6 +65,9 @@ public sealed partial class SlotCommand
         $" on a line starting [{via}].)",
     ];
 
+    /// <summary>Brief T34 (#337.5, the owner's words): what the Enter gate says to anything but an empty line.</summary>
+    internal const string EnterGateRetryText = "Nothing was typed in, just press Enter (what you typed was not shown or used).";
+
     private static int ExecuteEnrol(CommandContext ctx, string[] args)
     {
         var usage = EnrolUsage(ctx);
@@ -263,14 +266,32 @@ public sealed partial class SlotCommand
         {
             CryptographicOperations.ZeroMemory(got!.Stdout);
         }
-        c.Out.Write("Press Enter to accept it here. ");
-        if (c.ReadLine() is null)
+        // Brief T34 (#337.5): only an empty line is the Enter; what is typed is not shown (a PIN typed one prompt late, say).
+        // Ctrl-C is the end of input here: the approve file goes, and the message says what is left.
+        while (true)
         {
-            File.Delete(approveFile);
-            throw new TswapException(
-                $"The approve file's fingerprint wasn't confirmed, so it was not accepted. This machine's pending request is kept; nothing " +
-                $"was added on {via}. Run the same '{ctx.Prefix} slot enrol' again to have it approved again (it continues from the kept " +
-                $"request); the host's staging folder is left: remove it with '{clean}' there.");
+            c.Out.Write("Press Enter to accept it here. ");
+            string? typed;
+            try
+            {
+                typed = c.ReadLineWithoutEcho();
+            }
+            catch (OperationCanceledException)
+            {
+                typed = null;
+            }
+            if (typed is null)
+            {
+                File.Delete(approveFile);
+                throw new TswapException(
+                    $"The approve file's fingerprint wasn't confirmed, so it was not accepted. This machine's pending request is kept; nothing " +
+                    $"was added on {via}. Run the same '{ctx.Prefix} slot enrol' again to have it approved again (it continues from the kept " +
+                    $"request); the host's staging folder is left: remove it with '{clean}' there.");
+            }
+            c.Out.WriteLine();
+            if (typed.Length == 0)
+                break;
+            c.Out.WriteLine(EnterGateRetryText);
         }
 
         // --- 4. accept, here, from the received bytes ---

@@ -2044,6 +2044,7 @@ public sealed partial class SlotCommand : ICliCommand
         public bool IsOutputRedirected => true;
         public string? ReadLine() => inner.ReadLine();
         public string ReadPassword(TextWriter? echo = null) => inner.ReadPassword(echo ?? inner.Error);
+        public string? ReadLineWithoutEcho() => inner.ReadLineWithoutEcho();
         // No colours: on a terminal they are escape sequences written to stdout.
         public void SetForeground(ConsoleColor colour) { }
         public void ResetColor() { }

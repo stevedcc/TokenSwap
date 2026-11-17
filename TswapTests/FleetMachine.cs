@@ -141,6 +141,13 @@ public sealed class FleetMachine : IDisposable
         Run(new FakeConsole(stdin) { IsInputRedirected = false }, args);
 
     /// <summary>
+    /// Brief T34: as <see cref="RunOnTerminal"/>, with the terminal showing what is typed at a line read
+    /// (<see cref="FakeConsole.EchoesTypedLines"/>), so a test can tell a read that shows nothing.
+    /// </summary>
+    public (int Exit, string Out, string Err) RunOnEchoingTerminal(string stdin, params string[] args) =>
+        Run(new FakeConsole(stdin) { IsInputRedirected = false, EchoesTypedLines = true }, args);
+
+    /// <summary>
     /// Brief T17 task 11: the <c>TSWAP_AGENT_SOCK</c> value this machine's commands see. By default a socket in
     /// this machine's own folder, so a test never meets the user's real agent; null models an unset variable
     /// (sudo drops it), where the path comes from the vault owner's uid.
