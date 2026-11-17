@@ -31,7 +31,25 @@ simulated services, `TSWAP_CONFIG_DIR` and temp folders only. Tests never use th
 report when the brief can't be built as written. Never change an existing test's assertion unless this brief sanctions
 that test by name (the sanctioned ones are listed in each task). British spelling in new text.
 
-**Review history.** None yet.
+**Review history.** Round 1 (MiMo, GLM-5.3): both "no" on test assertions that contradict the brief's own output; both
+judged the design sound and confirmed the `tpm2_create -r` format from tpm2-tools' source. The design is unchanged except
+the classifier's rule order (A4). Folded in as amendments A1-A9 at the end:
+- MiMo I-1 / GLM I-1, I-2, M-3: blanket "no line contains `this machine's`" assertions are contradicted by both notes (old
+  and new): valid, A1 (row-scoped; slot counts stated).
+- MiMo I-2 / GLM I-3: the same-kinds test compares text that includes the own row's touch clause: valid, A2.
+- GLM I-4: `Privileged_Open_...` "no switch for the keyring path" is unsatisfiable (the keyring read itself switches): valid, A3.
+- MiMo M-2: test the Secure Enclave shape before the Linux one (a TPM package can't match it; an opaque Apple blob could in
+  principle match the Linux test): valid, A4.
+- MiMo M-1: `TSTP 0x00`/`0x04` can't be built with `TpmSlotBlob.Wrap`, and the wrapped package was unstated: valid, A5.
+- MiMo M-3: `ownIndex` sentence contradictory: valid, A6.
+- MiMo M-4 / GLM M-1: the input-change sanction misses `File.WriteAllText` and the shared copy helpers: valid, A7.
+- MiMo M-5: a vault folder that is the config folder would put `config.json` in the open-time list: valid, A8.
+- GLM M-2: `Run_NarrowsALoosenedVaultPasswordFile` leaves the password-vault `run` to the implementer: valid, A9 (replaced).
+- MiMo M-6: seeded bytes for the "unrecognised" blobs: valid, A5.
+- GLM M-4: `NewSlotWrite.Save`'s orphan comment not found: rejected, it is `TswapCli/Commands/NewSlotWrite.cs:72` (the
+  reviewer looked in `TswapCore/Vault/`); A6 adds the path.
+- MiMo / GLM M-5 (`tpm2_create -r` is a marshalled `TPM2B_PRIVATE`, `files_save_private` in `tools/tpm2_create.c`):
+  noted; the implementer still records the source.
 
 **Parallel briefs.** T34 owns the enrolment code (`SlotEnrol*.cs`, `SlotStage.cs`, `ProcessSshTransport.cs`, the
 request/accept output in `SlotCommand.cs`) and `docs/multi-machine.md`'s "Enrolling over SSH" section; T35 owns Windows
@@ -498,3 +516,62 @@ Write `t36-report.md` at the worktree's parent folder (`../t36-report.md`). It c
 2. Narrowing at open is skipped under sudo (the next unprivileged command or write does it). Do you want `sudo tswap get`
    and the other sudo reads to narrow too, as the folder's owner?
 3. The rows name the platform (`TPM (Linux, …)`, `TPM (Windows)`). Keep that, or just `TPM`?
+
+
+## Amendments after brief review round 1 (binding; they win over the text above)
+
+**A1. "This machine's" assertions are row-scoped.** Both multi-slot notes contain `this machine's` (the old one: "which one
+is this machine's own"; the new one: `"this machine's TPM"`, `this machine's config.json`). So every assertion of the form
+"no line contains `this machine's` / `this Mac's`" in `SlotsKindLabelTests` means **no table row** contains it: a row is a
+line matching `^[0-9a-f]{8}\s+machine\s` (`VaultPasswordEnrolmentTests.IsMachineRow`'s pattern). Likewise
+`IssuesKeyring_OnLinux_EachSlotByItsOwnKind`'s "exactly one line contains `this machine's TPM,`" is "exactly one row".
+Slot counts: `OwnSlotWhoseDataSaysTheOtherChip_IsNotThisMachines` and `KeyringSlotIdNotBase64_NoOwnRow_NoThrow` use two
+machine slots each (the named one plus one `LinuxPackage()` header-less slot), so they also show the old note; their
+row-scoped assertions are unaffected by it. The new note's condition reads: "an own row exists (TPM or Secure Enclave
+wording)".
+
+**A2. `IssuesKeyring_EveryMachineNamesTheSameKinds` compares the kind only:** for each slot, the row's PROTECTION text up to
+its first `, ` (`TPM (Windows)`, `Secure Enclave`, `TPM (Linux, ECC P-256)` — for this one, up to the first `, ` after the
+closing `)`). Implement it as a small helper `KindOf(row)` in the test file: the text after the KIND column up to the
+first `, ` that is outside parentheses. The touch clause of the Mac's own row comes after that and is not compared.
+
+**A3. `Privileged_Open_ChangesNothing_TheWriteNarrows`:** drop "`fake.Switches` has no entry for the keyring path" (the
+keyring read itself switches to the folder's owner, `ReadAllBytes`/`FileExists` → `AsOwnerOf`). The open half asserts the
+keyring is still `0644` and `w` has no `tightened`; the write half is unchanged.
+
+**A4. Rule order for header-less packages (and inside rule 3 for a `TSTP` package): Windows, then Secure Enclave, then
+Linux.** Rule 5 becomes: `IsWindowsTpmPackage` → `WindowsTpm`; else `IsSecureEnclavePackage` → `SecureEnclave`; else
+`IsLinuxTpmPackage` → `LinuxTpmRsa`; else `NotRecorded`. (Rule 3 still asks only the Windows and Linux tests: a `TSTP`
+package is a TPM's.) Why: no TPM package can pass the Secure Enclave test (a `TPM2B_PRIVATE` of 125 bytes starts with
+`0x00`, and one starting `0x04` is at least 1,026 bytes; a Windows package is caught first), while Apple's opaque
+`dataRepresentation` is the one first part that could, in principle, look like a `TPM2B_PUBLIC`. Put this argument in the
+code comment. Break-it-once (d) is unchanged.
+
+**A5. Test blobs.** `TSTP` flags `0x00` and `0x04` are hand-built (`[.. "TSTP"u8, 1, flags, .. Unrecognised()]`, as
+`SlotsRsaPrimaryNoteTests.OwnSlotCorruptOrFromANewerTswap_NoNote` does): `TpmSlotBlob.Wrap` throws for them. In
+`HardwareSlotKindTests` and `SlotsKindLabelTests`, every random byte comes from one `new Random(<fixed seed>)` per test
+class (`NextBytes`), and `Unrecognised()` is `[40, 0, 0, 0]` followed by 60 bytes whose first two are `0xFF 0xFF` (so its
+40-byte first part can't pass the Linux size check and its 20-byte rest can't pass the Secure Enclave one), the rest
+seeded.
+
+**A6. The `Vault` helper in `SlotsKindLabelTests`:** `Vault(HardwareBackend? backend, int? ownIndex, bool requiresTouch,
+params byte[][] blobs)`: `ownIndex: null` → `KeyringSlotId` unset; `ownIndex: n` → `KeyringSlotId` = slot n.
+`KeyringSlotIdNotBase64_NoOwnRow_NoThrow` sets the config's `KeyringSlotId` to `"not base64!"` after building. (The orphan
+slot comment cited in "Why" is `TswapCli/Commands/NewSlotWrite.cs:72`.)
+
+**A7. The sanctioned input change** covers vault-folder files planted with `File.WriteAllBytes`, `File.WriteAllText` or
+`File.Copy`, and also the shared helpers in `TswapTests/RecordVaultTestSupport.cs`: `WriteMarker` (:77-78), `CopyVault`
+/`CopyFolder` (:102-115) and the records copy at :144 may set `0600` on each file they write (and `0700` on a folder they
+create), on Unix only (`if (!OperatingSystem.IsWindows())`). That is an input change; no assertion changes. The report
+lists every test and helper changed this way.
+
+**A8. The open-time list never includes the config pair.** `VaultFolderPaths()` excludes `ConfigFile` and `ConfigDir`
+(compared as full paths), so a vault folder that is the config folder (`init --folder` at the config folder) still leaves
+`config.json` and that folder to the first write. Test: `VaultFolderIsTheConfigFolder_OpenLeavesConfigJson` (a vault made
+with `init --yubikey --folder <_m.Dir>`, if `init` accepts that; if it refuses, say so in the report and drop the test):
+loosen `config.json` and the keyring, `names`: the keyring is `0600`, `config.json` still `0644`.
+
+**A9. `Run_NarrowsALoosenedVaultPasswordFile` is replaced by `Slots_NarrowsALoosenedVaultPasswordFile`:** a vault made as
+`VaultPasswordEnrolmentTests` makes one (`m.Run(Twice(Password), "init", "--tpm", "--password", "--no-recovery")` on a
+simulated-TPM `FleetMachine`), `vault-password` loosened to `0644`, then `slots` (no unlock, no password asked): exit 0,
+`vault-password` is `0600`, and the notice names it.
