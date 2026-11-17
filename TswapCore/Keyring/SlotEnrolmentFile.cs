@@ -125,7 +125,7 @@ public sealed record SlotApproveFile(
 }
 
 /// <summary>
-/// Serializes/deserialises <see cref="SlotRequestFile"/>/<see cref="SlotApproveFile"/> to/from
+/// Serialises/deserialises <see cref="SlotRequestFile"/>/<see cref="SlotApproveFile"/> to/from
 /// JSON, with explicit version checks on both this small format's own version and (for the
 /// approve file) the embedded <see cref="KeyringFormat.KeyringFormatVersion"/> — see
 /// <see cref="SlotRequestFile"/>'s doc comment for why JSON was chosen over fixed-binary here, and

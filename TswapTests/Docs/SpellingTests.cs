@@ -101,22 +101,29 @@ public partial class SpellingTests
     }
 
     /// <summary>
-    /// Brief T33 task 2: the other US forms, as lowercase whole words (case-sensitive, a word boundary each side),
-    /// built from stems and suffixes so that no US word appears whole in this file. PascalCase names (a framework's
-    /// or tswap's own) never match, nor does a capitalised word starting a sentence.
+    /// Brief T33 task 2 and T40: the US forms tswap has used or is likely to use, not every US spelling; the list is
+    /// deliberate and grows when a review finds a new one. The words are lowercase whole words (case-sensitive, a
+    /// word boundary each side), built from stems and suffixes so that no US word appears whole in this file.
+    /// PascalCase names (a framework's or tswap's own) never match, nor does a capitalised word starting a sentence
+    /// (<see cref="CasedUsForm"/> guards those).
     /// <para>The <c>-ize</c> endings are a valid British (Oxford) spelling too; the owner chose <c>-ise</c> for tswap.</para>
     /// </summary>
     private static readonly (string Stem, string[] Suffixes)[] OtherUsWords =
     [
         ("behavi", ["or", "ors", "oral", "orally"]),
-        ("col", ["or", "ors", "ored"]),
-        ("hon", ["or"]),
-        ("fav", ["or", "orite"]),
-        ("cent", ["er", "ered"]),
+        ("col", ["or", "ors", "ored", "oring"]),
+        ("hon", ["or", "ors", "ored", "oring"]),
+        ("fav", ["or", "ors", "ored", "oring", "orite", "orites"]),
+        ("neighb", ["or", "ors", "oring", "orhood", "orhoods"]),
+        ("rum", ["or", "ors", "ored"]),
+        ("endeav", ["or", "ors", "ored", "oring"]),
+        ("cent", ["er", "ers", "ered", "ering"]),
+        ("lit", ["er", "ers"]),
         ("gr", ["ay"]),
         ("cancel", ["ed", "ing"]),
-        ("defen", ["se"]),
-        ("offen", ["se"]),
+        ("defen", ["se", "ses"]),
+        ("offen", ["se", "ses"]),
+        ("judg", ["ment", "ments"]),
         ("acknowledg", ["ment", "ments"]),
         ("fulfil", ["l", "ls", "lment"]),
         ("travel", ["ed", "ing"]),
@@ -137,14 +144,57 @@ public partial class SpellingTests
         @"\b(?:" + string.Join('|', OtherUsWords.Select(w => w.Stem + "(?:" + string.Join('|', w.Suffixes) + ")")) + @")\b",
         RegexOptions.CultureInvariant);
 
+    /// <summary>
+    /// Capitalised and ALL-CAPS forms (#352): a sentence start, a heading, a banner. Code is left alone: a word after
+    /// a <c>.</c> or before <c>(</c> or <c>&lt;</c>. The <c>Authoriz…</c> forms are not matched at all: <c>Authorization</c>
+    /// is the HTTP header name (RFC 9110), which other software owns; the lowercase forms stay guarded.
+    /// Built from <see cref="OtherUsWords"/>, so a family added there is guarded in every case at once.
+    /// </summary>
+    internal static readonly Regex CasedUsForm = new(
+        @"(?<!\.)\b(?:" + string.Join('|', OtherUsWords.Where(w => w.Stem != "author").SelectMany(w => w.Suffixes.Select(
+            suffix => Capitalised(w.Stem + suffix) + "|" + (w.Stem + suffix).ToUpperInvariant()))) + @")\b(?![(<])",
+        RegexOptions.CultureInvariant);
+
+    private static string Capitalised(string word) => char.ToUpperInvariant(word[0]) + word[1..];
+
     [Fact]
     public void NoOtherUsSpellings_InProse()
     {
         var offenders = Offenders(OtherUsForm.IsMatch);
         Assert.True(offenders.Count == 0,
             $"{offenders.Count} lines with a US spelling (British: -our, centre, grey, cancelled, -ise, analyse, defence, " +
-            $"acknowledgement, fulfil, travelled, labelled, modelled; or add the line to {AllowlistPath} with a reason):\n" +
+            $"acknowledgement, fulfil, travelled, labelled, modelled, neighbour, rumour, endeavour, litre, judgement; or add the line to {AllowlistPath} with a reason):\n" +
             string.Join('\n', offenders));
+    }
+
+    [Fact]
+    public void NoUsSpellings_CapitalisedOrAllCaps()
+    {
+        var offenders = Offenders(CasedUsForm.IsMatch);
+        Assert.True(offenders.Count == 0,
+            $"{offenders.Count} lines with a capitalised or ALL-CAPS US spelling (British: -our, centre, grey, cancelled, " +
+            $"-ise, analyse, defence, acknowledgement, fulfil, travelled, labelled, modelled, neighbour, rumour, endeavour, " +
+            $"litre, judgement; or add the line to {AllowlistPath} with a reason):\n" + string.Join('\n', offenders));
+    }
+
+    [Fact]
+    public void CasedUsForm_MatchesProseNotCode()
+    {
+        // (Built from parts, so this file holds no US word itself.)
+        Assert.Matches(CasedUsForm, "Serial" + "izes the config");
+        Assert.Matches(CasedUsForm, "✓ INITIAL" + "IZATION COMPLETE");
+        Assert.Matches(CasedUsForm, "### Code Organ" + "ization");
+        Assert.Matches(CasedUsForm, "Hon" + "ored here");
+        Assert.Matches(CasedUsForm, "NEIGHB" + "OR");
+        Assert.DoesNotMatch(CasedUsForm, "JsonSerializer." + "Serial" + "ize(x)");
+        Assert.DoesNotMatch(CasedUsForm, "System.Text.Json." + "Serial" + "ization;");
+        Assert.DoesNotMatch(CasedUsForm, "Normal" + "ize(record)");
+        Assert.DoesNotMatch(CasedUsForm, "Deserial" + "ize<T>");
+        Assert.DoesNotMatch(CasedUsForm, "Author" + "ization: Bearer x");
+        Assert.DoesNotMatch(CasedUsForm, "Proxy-Author" + "ization");
+        Assert.DoesNotMatch(CasedUsForm, "AUTHORIZ" + "ATION");
+        Assert.DoesNotMatch(CasedUsForm, "Serialises, Initialisation, INITIALISATION, Honoured");
+        Assert.DoesNotMatch(CasedUsForm, "serial" + "izes");
     }
 
     [Fact]
@@ -154,6 +204,15 @@ public partial class SpellingTests
         Assert.Matches(OtherUsForm, "a " + "behavi" + "or change");
         Assert.Matches(OtherUsForm, "it was " + "normal" + "ized");
         Assert.Matches(OtherUsForm, "the " + "gr" + "ay key");
+        Assert.Matches(OtherUsForm, "hon" + "ored");
+        Assert.Matches(OtherUsForm, "neighb" + "or");
+        Assert.Matches(OtherUsForm, "rum" + "or");
+        Assert.Matches(OtherUsForm, "endeav" + "or");
+        Assert.Matches(OtherUsForm, "lit" + "ers");
+        Assert.Matches(OtherUsForm, "defen" + "ses");
+        Assert.Matches(OtherUsForm, "judg" + "ment");
+        Assert.Matches(OtherUsForm, "col" + "oring");
+        Assert.Matches(OtherUsForm, "cent" + "ering");
         Assert.DoesNotMatch(OtherUsForm, "Json" + "Serial" + "izer");
         Assert.DoesNotMatch(OtherUsForm, "Operation" + "Cancel" + "edException");
         Assert.DoesNotMatch(OtherUsForm, "Console" + "Col" + "or");

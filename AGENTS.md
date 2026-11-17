@@ -269,7 +269,8 @@ conflicted copies only plaintext can merge, like a format 2 record, is decrypted
 read every value; new code never calls `LoadSecrets` or `SaveSecrets` to read or write anything
 else.
 
-### Code Organization (TswapCli)
+<a id="code-organization-tswapcli"></a>
+### Code Organisation (TswapCli)
 
 The `TswapCli/` project is the executable (assembly name `tswap`):
 1. **`Program.cs`** / **`CliHost`** — `Program.cs` hands the real console and process environment to `CliHost.Run`, the composition root: resolves the environment, wires real or test services, dispatches, and maps exceptions to exit codes (tests call `CliHost.Run` with a scripted environment)

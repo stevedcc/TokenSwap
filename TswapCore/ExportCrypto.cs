@@ -89,7 +89,7 @@ public static class ExportCrypto
     /// <see cref="ExportFile.Version"/>: <see cref="ExportFile.V1"/> uses the original hardcoded
     /// PBKDF2 path unchanged (bit-for-bit as always — see <see cref="Crypto.DeriveKeyFromPassphrase"/>),
     /// <see cref="ExportFile.V2"/> and <see cref="ExportFile.V3"/> use Argon2id with the parameters stored
-    /// in the file itself. Unrecognized versions throw a clear <see cref="TswapException"/> rather than guessing.
+    /// in the file itself. Unrecognised versions throw a clear <see cref="TswapException"/> rather than guessing.
     /// </summary>
     public static byte[] DeriveKey(string passphrase, byte[] salt, ExportFile exportFile) => exportFile.Version switch
     {

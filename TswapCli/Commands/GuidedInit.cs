@@ -96,7 +96,7 @@ internal static class GuidedInit
         string? keyFile)
     {
         var c = ctx.Console;
-        // The config this run may replace: as it is now (after any "Reinitialize?" backup). Anything
+        // The config this run may replace: as it is now (after any "Reinitialise?" backup). Anything
         // written meanwhile (a 'slot request', a sync tool) is refused at the write, never overwritten.
         var configAtStart = ReadConfig(fileStore);
 

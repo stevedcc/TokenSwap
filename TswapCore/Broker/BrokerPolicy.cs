@@ -117,7 +117,7 @@ public sealed class BrokerPolicy
         }
     }
 
-    /// <summary>Serializes the raw config (indented).</summary>
+    /// <summary>Serialises the raw config (indented).</summary>
     public static string Serialize(BrokerConfig config) =>
         JsonSerializer.Serialize(config, BrokerJsonContext.Default.BrokerConfig);
 

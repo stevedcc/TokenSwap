@@ -76,7 +76,7 @@ These commands expose or modify secret values. Only human operators should use t
 | `add <name>` | Store a user-provided value | Operator types the secret — agent should never know it |
 | `get <name>` | Display plaintext value | Directly exposes secret to the terminal |
 | `list` | List secrets with metadata | Reveals creation/modification timestamps |
-| `delete <name>` | Remove a secret | Irreversible — requires operator judgment |
+| `delete <name>` | Remove a secret | Irreversible — requires operator judgement |
 | `rotate <name>` of a secret that isn't burned, `restore <name>`, `import <file>` | Replace a value that is still good | Services using the old value stop working |
 | `apply <file>` | Print a file with the values filled in | The output holds every value; agents use `run … {{@file}}` |
 | `export <file>` | Encrypted backup | The backup holds every value |
