@@ -540,6 +540,23 @@ your sync client's settings. Google Drive is the worst of the major sync tools f
 Dropbox, Syncthing and Nextcloud either don't stream on demand by default or make the setting easy
 to find.
 
+**A Windows machine in a Syncthing folder.** Windows has no Unix permissions, so Syncthing on Windows reports every file
+it sends as `0644`, and Syncthing on Linux and macOS applies that mode: a keyring or record written on the Windows
+machine arrives readable by every user of the other machines
+([#347](https://github.com/stevedcc/TokenSwap/issues/347)). On every Linux or macOS copy of the folder, set both:
+1. **Syncthing's umask to `0077`**, so the files it writes are owner-only:
+   - a systemd user service: a drop-in `~/.config/systemd/user/syncthing.service.d/50-umask.conf` containing
+     `[Service]` and `UMask=0077`, then `systemctl --user daemon-reload` and `systemctl --user restart syncthing`;
+   - a Podman Quadlet: `PodmanArgs=--umask=0077`.
+2. **The folder's Ignore Permissions** (Edit, Advanced; `ignorePerms: true` in the config), so Syncthing stops
+   applying the mode the Windows machine reports.
+
+Either one alone is not enough: with only the umask, a record still arrived `0644`; with both, it arrived `0600`
+(tested 2026-11-16 on two Linux machines). tswap also narrows loose files itself: when a command opens a record vault,
+any vault-folder file or folder of yours that others can read is set back to `0600` (`0700` for a folder), with one
+notice ([Files](commands.md#files)). That repairs it at your next command; until then the file stays readable, so set
+both options too.
+
 ## Record format 3 and `vault reindex`
 
 Since 0.2 a record has an encrypted **metadata section** (the name, burns, the version list and

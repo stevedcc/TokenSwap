@@ -689,11 +689,14 @@ by v0.3.0 or later unlocks two to four times faster (2.4× on the Intel PTT, 4×
 below), and re-enrolling a slot in place isn't supported yet
 ([#264](https://github.com/stevedcc/TokenSwap/issues/264)). There is no note for an ECC slot, for
 another machine's slot, for a YubiKey or Secure Enclave blob, or when `slots` runs on Windows or
-macOS (a Windows TPM slot has no primary to choose). `tswap slots` shows `TPM (ECC P-256), sealed to this machine's TPM, …` for a
-slot whose header has bit 1, and today's `TPM, sealed to this machine's TPM, …` for every other TPM
-row (a header-less package can't be told apart from a Windows one, so no row claims RSA-2048; for
-the same reason the note would also fire for a Windows-made own slot, which needs a TPM vault's
-config copied from Windows to Linux, where that slot can't unlock anyway: an accepted ambiguity).
+macOS (a Windows TPM slot has no primary to choose). `tswap slots` names each slot's kind from its blob:
+`TPM (Linux, ECC P-256)` for a `TSTP` header with bit 1, `TPM (Windows)` or `TPM (Linux, RSA-2048)` from the
+package's shape (a Windows package starts with its CNG key name, a Linux one with a marshalled `TPM2B_PUBLIC`),
+`Secure Enclave` from a `TSSE` header or its package's 125-byte wrapped key, and `hardware-sealed (kind not
+recorded)` otherwise; only the slot this machine's `config.json` names says `this machine's` (brief T36,
+[#350](https://github.com/stevedcc/TokenSwap/issues/350)). The note's own rule is unchanged: it fires for any own
+non-ECC TPM slot, so also for a Windows-made own slot, which needs a TPM vault's config copied from Windows to
+Linux, where that slot can't unlock anyway.
 
 **On real hardware (2026-11-07, #261).** tswap built from this branch and the released v0.2.0
 binary, each machine with a throwaway vault (`--no-password --no-recovery`):

@@ -56,6 +56,17 @@ public class SecureEnclaveHardwareServiceTests
     }
 
     [Fact]
+    public void Enrol_NoPresence_Blob_ClassifiesAsSecureEnclave()
+    {
+        // Brief T36 (#350): a password-free Secure Enclave slot has no header; the classifier reads its package's
+        // 125-byte wrapped key (ephemeral public key, nonce, ciphertext of KEK_slot, tag). No presence: no prompt.
+        IHardwareEnrolmentService enrolment = new SecureEnclaveHardwareService(requirePresence: false);
+        var (_, hwBlob) = enrolment.Enrol(password: null);
+
+        Assert.Equal(TswapCore.Keyring.HardwareSlotKind.SecureEnclave, TswapCore.Keyring.HardwareSlotKinds.Classify(hwBlob));
+    }
+
+    [Fact]
     public void KeyringVault_HwBlobInTheMachineSlot_UnlocksToTheVaultKey()
     {
         // Issue #154: what 'tswap init' writes now. The blob is the machine slot's hwBlob in a

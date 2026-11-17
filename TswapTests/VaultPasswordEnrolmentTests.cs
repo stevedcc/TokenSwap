@@ -415,7 +415,7 @@ public class VaultPasswordEnrolmentTests : IDisposable
         var stdout = m.Ok("", "slots");
 
         var lines = stdout.ReplaceLineEndings("\n").Split('\n');
-        Assert.Contains(lines, l => l.StartsWith(tpmId) && l.EndsWith("TPM (ECC P-256), sealed to this machine's TPM, vault password"));
+        Assert.Contains(lines, l => l.StartsWith(tpmId) && l.EndsWith("TPM (Linux, ECC P-256), sealed to this machine's TPM, vault password"));
         Assert.Contains(lines, l => l.Contains($"YubiKey {SerialA}, ") && l.EndsWith(", no password"));
         Assert.Contains("1 slot(s) open without the password: keep them away from shared machines.", lines);
     }
@@ -428,7 +428,7 @@ public class VaultPasswordEnrolmentTests : IDisposable
 
         var stdout = m.Ok("", "slots");
 
-        Assert.Contains("TPM (ECC P-256), sealed to this machine's TPM, no password", stdout);
+        Assert.Contains("TPM (Linux, ECC P-256), sealed to this machine's TPM, no password", stdout);
         Assert.DoesNotContain("open without the password", stdout);
     }
 
@@ -477,8 +477,8 @@ public class VaultPasswordEnrolmentTests : IDisposable
         var rows = text.ReplaceLineEndings("\n").Split('\n').Where(IsMachineRow).ToList();
         Assert.Equal(3, rows.Count);
         Assert.EndsWith("corrupt (restore config.json from backup)", rows[0]);
-        Assert.EndsWith("TPM, sealed to this machine's TPM, no password", rows[1]);
-        Assert.EndsWith("TPM, sealed to this machine's TPM, vault password", rows[2]);
+        Assert.EndsWith("hardware-sealed (kind not recorded), no password", rows[1]);
+        Assert.EndsWith("TPM (platform not recorded), sealed to the TPM of the machine it was made on, vault password", rows[2]);
         Assert.Contains("1 slot(s) open without the password: keep them away from shared machines.", text);
     }
 
@@ -495,10 +495,10 @@ public class VaultPasswordEnrolmentTests : IDisposable
 
         var rows = text.ReplaceLineEndings("\n").Split('\n').Where(IsMachineRow).ToList();
         Assert.Equal(4, rows.Count);
-        Assert.EndsWith("TPM (ECC P-256), sealed to this machine's TPM, no password", rows[0]);
-        Assert.EndsWith("TPM (ECC P-256), sealed to this machine's TPM, vault password", rows[1]);
-        Assert.EndsWith("TPM, sealed to this machine's TPM, no password", rows[2]);
-        Assert.EndsWith("TPM, sealed to this machine's TPM, vault password", rows[3]);
+        Assert.EndsWith("TPM (Linux, ECC P-256), sealed to this machine's TPM, no password", rows[0]);
+        Assert.EndsWith("TPM (Linux, ECC P-256), sealed to the TPM of the machine it was made on, vault password", rows[1]);
+        Assert.EndsWith("hardware-sealed (kind not recorded), no password", rows[2]);
+        Assert.EndsWith("TPM (platform not recorded), sealed to the TPM of the machine it was made on, vault password", rows[3]);
     }
 
     // ------------------------------------------------------------------ classic vaults, Windows

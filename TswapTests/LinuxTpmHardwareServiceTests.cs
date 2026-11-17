@@ -61,6 +61,19 @@ public class LinuxTpmHardwareServiceTests
     }
 
     [Fact]
+    public void Enrol_Blob_ClassifiesAsLinuxTpm()
+    {
+        // Brief T36 (#350): `tswap slots` reads a slot's kind from its blob. A real enrolment carries the ECC bit, and
+        // its package has the Linux layout the classifier reads for a pre-0.3.0 slot: tpm2_create's -u file (a
+        // TPM2B_PUBLIC of a keyed-hash object), then its -r file (a marshalled TPM2B_PRIVATE).
+        IHardwareEnrolmentService enrolment = new LinuxTpmHardwareService();
+        var (_, hwBlob) = enrolment.Enrol(password: null);
+
+        Assert.Equal(TswapCore.Keyring.HardwareSlotKind.LinuxTpmEcc, TswapCore.Keyring.HardwareSlotKinds.Classify(hwBlob));
+        Assert.True(TswapCore.Keyring.HardwareSlotKinds.IsLinuxTpmPackage(TswapCore.Keyring.TpmSlotBlob.Split(hwBlob).Package));
+    }
+
+    [Fact]
     public void KeyringVault_HwBlobInTheMachineSlot_UnlocksToTheVaultKey()
     {
         // Issue #154: what 'tswap init' writes now. The blob is the machine slot's hwBlob in a

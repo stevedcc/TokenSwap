@@ -612,7 +612,9 @@ it to `config.json.bak-<UTC timestamp>` beside it (for example `config.json.bak-
 with `-1`, `-2` added when two fall in one millisecond), never overwriting an earlier backup. Under
 sudo the backup is written as the folder's owner, mode 0600.
 
-On Linux and macOS the folders are created 0700 and the files 0600; an existing vault with wider
-permissions is narrowed on the next write, with a notice (reads change nothing). Windows: the
-profile folder's permissions apply.
+On Linux and macOS the folders are created 0700 and the files 0600; when a command opens a record
+vault, vault-folder files and folders that others can read (a sync tool may loosen them) are
+narrowed, with a notice, and the config folder and `config.json` before the first write; only files
+you own are changed, and under sudo only a write narrows them, as the folder's owner. A classic
+vault is narrowed only before a write. Windows: the profile folder's permissions apply.
 
