@@ -17,7 +17,8 @@ first, then:
   `FingerprintStreamMatcher.For`; T39 does not change this file);
 - RedactingPty 1.2.0's `StreamRedactor.ProcessWithMatchers` (`git show v1.2.0:RedactingPty/StreamRedactor.Matchers.cs`
   in `~/RiderProjects/redactingpty-wt/main`, :85-121): the hold is the minimum of the plaintext pending point and
-  every matcher's `PendingFrom`, then pulled back over straddling occurrences; nothing else holds;
+  every matcher's `PendingFrom`, then pulled back over straddling occurrences and split surrogate pairs; nothing else
+  holds (A6);
 - tests: `TswapTests/ShortValueStreamTests.cs` (all of it), `TswapTests/RunShortValueTests.cs`,
   `TswapTests/RecordingPty.cs`, `TswapTests/RunRedactionThroughputTests.cs` (`Matcher`, `Throughput_BeforeAndAfter`);
 - `docs/security-model.md:347-367`: the "Held output at a prompt" and "The hold-back is observable" bullets.
@@ -28,11 +29,19 @@ as `flock ~/.cache/tswap-suite.lock ./runtests.sh` (another implementer may run 
 suites, `ykman`, `sudo`, real YubiKeys or `~/.config/tswap`: simulated services, `TSWAP_CONFIG_DIR` and temp folders
 only. Tests never use the real clock or sleeps. Commits end with
 `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`, explicit-path commits, no push, merge or rebase; stop and
-report when the brief can't be built as written. Never change an existing test's assertion; the only sanctioned
-change to existing tests is Task 1's (how the matcher reaches `StreamRedactor`; no assertion expression changes). If
+report when the brief can't be built as written. Never change an existing test's assertion; the sanctioned
+changes to existing tests are Task 1's (how the matcher reaches `StreamRedactor`) and Task 2's additions to existing test
+files (`RecordingPty.Pieces`, `RunRedactionThroughputTests.Matcher`'s optional parameter and its new last `cases` entry,
+the new tests in `RunShortValueTests` and `ShortValueStreamTests`); no assertion expression changes anywhere (A2). If
 an existing test not named here fails after Task 2, stop and report it with its name. British spelling in new text.
 
-**Review history.** None yet.
+**Review history.** Round 1: GLM "yes", MiMo "no", folded A1-A6. MiMo I-1, `Run_ShortTokenWithWhitespace_Masked`
+cannot fail (the vault record `a b` puts its own plain form in the free class, whose hold shadows the matcher's) and
+`Matcher_PendingFrom_NeverSplitsAWordItCanHold` had no break: the first is marked a run-level outcome pin, the second
+gets a break-it (A1). MiMo M-2 / GLM M1, the sanction sentence vs Task 2's additions to existing test files (A2). MiMo
+M-1, the security property overstated a prompt release: "complete occurrence", the documented Limit kept (A3). MiMo M-3
+/ GLM M2, the class-and-bucket test's vault and "middle" of a 1-character value (A4). GLM M3, the perf run's command
+(A5). MiMo M-4 / GLM M3, line references re-anchored and the surrogate-pair half of the pull-back named (A6).
 
 **Parallel briefs.** T35 (PR #356, Windows output) changes `TswapCli/Commands/RunCommand.cs` around the matcher list
 (it builds `matcher = FingerprintStreamMatcher.For(...)` on its own line and adds a `TerminalTitleMatcher` on Windows
@@ -57,9 +66,9 @@ line waits until more output, a prompt release or exit. The scanner's vault valu
 holds per character class, `max(trailing run of the class, n − (cap − 1))`, so a window ending in a line break holds
 nothing for whitespace-free values. `docs/security-model.md:349-351` documents the batching as a known cost.
 
-**#343.** `ShortValueStreamTests.Redacted` (:36-43) runs a `StreamRedactor` over a matcher the caller built once, and
+**#343.** `ShortValueStreamTests.Redacted` (:36-44) runs a `StreamRedactor` over a matcher the caller built once, and
 `AssertEveryCut` (:52-57), `Matcher_LongJsonLine_EveryChunkSize_Unchanged` (:117-121) and
-`Matcher_RandomText_ChunkedEqualsWhole` (:217-226) call it many times with the same matcher. The matcher's
+`Matcher_RandomText_ChunkedEqualsWhole` (its `Redacted` calls, :243-249) call it many times with the same matcher. The matcher's
 `ThreadLocal<ScanState>` survives between runs (only `Dispose` clears it) and the scanner's carry check compares text
 only (`FingerprintScanner.cs:233-238`), so a run whose first window starts with the previous run's held tail reuses
 that run's state. That can only make a test fail spuriously (the one-chunk `whole` is computed the same way), never
@@ -67,8 +76,10 @@ pass falsely, but it makes the property test fragile to new seeds and generators
 
 ## The design (decided; rulings marked)
 
-**The security property that must not weaken:** no real secret value, or a whole-word short form, is ever released
-unmasked across a chunk boundary, a word hold, a window edge or a prompt release; the hold depends only on the text and
+**The security property that must not weaken:** no complete occurrence of a real secret value, or of a whole-word
+short form, is ever released unmasked across a chunk boundary, a word hold, a window edge or a prompt release (a
+partial occurrence released at a prompt and completed later is released as it is: the documented Limit in
+`docs/security-model.md`, unchanged by this brief) (A3); the hold depends only on the text and
 on quantised aggregates (the leak profile "The hold-back is observable" admits).
 
 **The short forms' hold, by class.** Each short form (a key of the matcher's `shortForms`) falls in one of two classes:
@@ -182,7 +193,8 @@ values are combined):
   `HoldOutsideWord` cannot rescue a cut inside it: only step 2's bound keeps it whole.)
 - `Matcher_ShortFormsHold_DependsOnClassAndBucketOnly` (fixed seed, `new Random(39_341)`): 200 pairs; each side gets
   1 to 3 random short values (1 to 7 characters of `ShortAlphabet`), and for half the pairs **both** sides also get one
-  value with a space in the middle (neither side otherwise); each side's forms are the merged `Forms` of its values.
+  2-to-7-character value with a space inserted at a random position inside it (neither side otherwise); each side's
+  matcher is `FingerprintStreamMatcher.For(Vault(), keys, …)` (an empty vault) over the merged `Forms` of its values (A4).
   For 50 random texts per pair (`RandomString(rng, rng.Next(0, 700), Filler + Word)`), both matchers' `PendingFrom`
   are equal. (A2's property generalised: the hold says nothing about the values beyond their classes' 256-buckets.)
 - `Matcher_PendingFrom_NeverSplitsAWordItCanHold`: `PendingFrom_WholeToken_NeverSplitsAWordItCanHold`'s loop and
@@ -198,7 +210,11 @@ Tests, `TswapTests/RunShortValueTests.cs`, with a new `RecordingPty.Pieces` (`pu
   prints `user=web\nstill running`; `Run("curl", "{{user}}")`: exit 0, `_pty.Pieces[0]` == `"user=[REDACTED: user]\n"`
   (the first line is shown when it is read, before the rest), and `Output` == `"user=[REDACTED: user]\nstill running"`.
 - `Run_ShortTokenWithWhitespace_Masked` (theory over `ChunkSize` 1 and 4096): `_m.Ok("a b", "ingest", "s")`; the child
-  prints `v=a b\nza bz\n`; `Run("curl", "{{s}}")`: `Output` == `"v=[REDACTED: s]\nza bz\n"`.
+  prints `v=a b\nza bz\n`; `Run("curl", "{{s}}")`: `Output` == `"v=[REDACTED: s]\nza bz\n"`. This is a run-level
+  **outcome pin**, not a pin of the class split: every value `run` substitutes is a vault record, and the record's own
+  free-class hold covers the same text, so no change to Task 2's classification can make it fail. The class split is
+  pinned at the matcher level (`Matcher_ShortFormWithWhitespace_EveryCut`, `..._KeepsTheFlatHold`). It has no
+  break-it-once; say so in the commit message (A1).
 
 Break-it-once:
 - Replace step 2's term with today's flat `Math.Max(0, n − _shortHoldWhitespaceFree)`:
@@ -209,6 +225,7 @@ Break-it-once:
   `Matcher_ShortForms_WholeTokenOnly` (existing; `q=a"b` cut after `a"`) fails.
 - Use `n − 1` as step 2's bound instead of `n − _shortHoldWhitespaceFree`:
   `Matcher_ShortForm_LongNonWhitespaceRun_EveryChunkSize` fails.
+- Delete step 4's `HoldOutsideWord` call: `Matcher_PendingFrom_NeverSplitsAWordItCanHold` fails (A1).
 - Use each class's exact longest length instead of the 256-rounded hold: `Matcher_ShortFormsHold_DependsOnClassAndBucketOnly`
   and `Matcher_ShortFormsHold_DependsOnTextOnly` fail.
 
@@ -216,8 +233,9 @@ Break-it-once:
 shortForms = null` passed to `FingerprintStreamMatcher.For`, and `Throughput_BeforeAndAfter`'s `cases` gets a **last**
 entry (last, so the earlier cases draw the same random numbers): `("after D (A + a 5-character token's forms)",
 Matcher(Values(rng, 200, 16, 64, 10), keys, <every Redaction.Variants of RandomString(rng, 5, Word)> → "[REDACTED:
-short]"))`. Not asserted (the test only prints). Run it once with `TSWAP_PERF=1 TSWAP_PERF_MB=4` under the suite lock
-to show it runs, and quote its lines in the report without judging the numbers (this machine is not the owner's).
+short]"))`. Not asserted (the test only prints). Run it once to show it runs:
+`TSWAP_PERF=1 TSWAP_PERF_MB=4 flock ~/.cache/tswap-suite.lock dotnet test TswapTests --filter
+FullyQualifiedName~RunRedactionThroughputTests` (a Debug build, so the numbers are indicative only) (A5), and quote its lines in the report without judging the numbers (this machine is not the owner's).
 
 **Docs, `docs/security-model.md`** (nothing else in the file):
 - "Held output at a prompt": replace the sentence beginning "When `run` substitutes a value under 8 characters" (it
