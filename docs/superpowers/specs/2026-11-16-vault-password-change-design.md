@@ -1,9 +1,10 @@
 # Design: change the vault password in place
 
 Issue: https://github.com/stevedcc/TokenSwap/issues/313 (with #351, closed as its duplicate). Date: 2026-11-16.
-Status: **design review rounds 1 and 2 folded in (2026-11-17)**; for the owner. Round 1: MiMo ("ready for the
+Status: **design review rounds 1, 2 and 3 folded in (2026-11-17)**; for the owner. Round 1: MiMo ("ready for the
 owner: no", I1–I3, M1–M11) and GLM ("yes", no Critical, I-1–I-3, M-1–M-9). Round 2: MiMo ("no", C1, I1–I3, M1–M6)
-and GLM ("yes", no Critical, I-1–I-2, M-1–M-6). The reports are kept with the brief records outside the repo; every
+and GLM ("yes", no Critical, I-1–I-2, M-1–M-6). Round 3: MiMo ("no", I1–I4, M1–M3, on the round-2 amendments only).
+The reports are kept with the brief records outside the repo; every
 finding is quoted and settled under "Review history". Nothing is implemented. Decisions are numbered D1…D25 so
 reviewers can refer to them; each gives its reason. D11 and D16 were removed in round 1 (the simplification below)
 and their numbers are not reused; round 2 removed the high-water mark from D6. Points the owner must still
@@ -174,12 +175,14 @@ in the keyring (`PendingSlotHwBlob`, `Models.cs:130`).
 ### On disk: the `vault-password` file, version 2
 
 **D1. A version 2 file with a list of password entries** (current first, then up to 3 previous ones). Fixed here:
-the fields, their order and exactly what each MAC and the AEAD bind; left to the builder: integer widths beyond those
-shown and the codec's code. Fixed binary as today:
+the fields, their order, every width, and so byte for byte what each MAC and the AEAD bind; left to the builder: the
+codec's code (round 3, MiMo M3: the parameter widths are inside `key`, so they can't be the builder's choice; they
+are version 1's, `VaultPasswordFile.cs:9-10`). Fixed binary as today:
 
 ```
 magic "TSVP" | version 2 | vaultId 16 | generation uint32 LE | entryCount 1 (1..4)
-entry  = kdf 1 | memoryKiB | timeCost | parallelism | salt 32 | flags 1 | retiredAt int64 (unix ms, 0 for current)
+entry  = kdf 1 | memoryKiB uint32 LE | timeCost uint32 LE | parallelism uint32 LE | salt 32 | flags 1
+         | retiredAt int64 LE (unix ms, 0 for current)
          | verifier 32 | [escrow, iff flags bit 1: nonce 12 | ciphertext 32 | tag 16]
 keyCheck 32 = HMAC-SHA256(HKDF(K_v, "tswap-vault-key-check-v2"), every byte before it)
 key         = vaultId ‖ kdf ‖ memoryKiB ‖ timeCost ‖ parallelism ‖ salt      (an entry's immutable part)
@@ -249,18 +252,29 @@ gives an offline oracle to whoever knows the other password, at one Argon2id per
 "someone who has the old password" threat (both reviewers agree); an unauthenticated XOR avoids the oracle against a
 folder-only attacker but not against the old-password holder.
 
-**D6. `generation`.** It goes up by one at every replacing write of the file (change, finish, keep); a writer stamps
-the largest generation of the files it read, + 1 (round 2, GLM M-1b). With the password ids it gives a "descends
+**D6. `generation`.** `change`, `finish` and `keep` stamp the largest generation of the files they read, + 1
+(round 2, GLM M-1b). `vault merge` adopting a descendant (D18) is the one replacing write that doesn't: it takes the
+descendant's bytes unchanged, generation and key check included (round 3, MiMo I2), because the two folders must then
+hold byte-identical files, which `vault merge` itself and `slot accept` compare (`VaultCommand.cs:79-91`,
+`SlotCommand.cs:976-983`). With the password ids it gives a "descends
 from" relation: file A descends from file B when A's generation is higher and A lists B's current entry by password
 id (for a version 1 B, the id of its one salt, which is A's legacy entry). Used by D17 and D18.
 
 **No high-water mark** (removed in round 2). Round 1 added a machine-local record of the highest generation seen, to
 refuse a replayed old file (MiMo r1 I1). Round 2 showed it is the wrong tool (MiMo r2 I2): a folder writer simply
-replays the old entries under a higher generation, so it stops only accidents, and accidents are already safe. A
-file rolled back by a sync tool or a restore names fewer or older entries; a slot tagged with an id the file doesn't
-list is set aside with no hardware attempt (D4, D12), a slot whose entry it does list opens as before, and a union
-under that file can only prefer a blob that still opens with a password the file lists (it never writes one that
-doesn't, D10 step 3); when the newer file comes back the slots move again. It also made `keep` over a rolled-back
+replays the old entries under a higher generation, so it stops only accidents, and accidents are already safe in
+the sense goal 7 needs. A file rolled back by a sync tool or a restore names fewer or older entries. With one copy of
+the keyring, a slot tagged with an id the file doesn't list is set aside with no hardware attempt (D4, D12), a slot
+whose entry it does list opens as before, and when the newer file comes back the slots move again. With **conflict
+copies of the keyring** holding both blobs of a re-wrapped slot (the pair D14 ranks), a rolled-back file can leave the
+pair unranked: a version 1 file, to which D14 doesn't apply, or a version 2 file that lists neither blob's entry,
+which ranks both stranded. Then today's refusal stands: the keyring union refuses, and every command that reads the
+vault stops on the machines that see that file, with no hardware attempt and nothing written, until the newer file
+comes back (round 3, MiMo I4). That is a double fault (a keyring conflict and a rollback of the other file at once)
+and the one exception this design leaves to the anti-goal "a sync conflict that stops every machine"; it fails loud
+and safe, as today's refusal does, and it is not ranked away on purpose: a pair the file doesn't rank has no authority to pick
+a winner, a write would persist the pick, and the blob it dropped may be the only one that still opens (the old
+Windows PCP key is deleted after a re-wrap, D10 step 5). It also made `keep` over a rolled-back
 file strand slots without the `finish` listing (MiMo r2 I1). Against a folder writer only #128 helps (S8).
 
 ### On disk: slot blobs carry the password id
@@ -425,10 +439,18 @@ different bytes (round 1, GLM I-2):
   encoding, so every machine converges.
 
 Before an unlock the ranking comes from the file as read, unverified: it only decides which slot is tried, which a
-folder writer can steer anyway (S8). **Every keyring write that persists a supersede resolution** (D9's re-wraps,
-`slot accept`, `slot merge`, `vault merge`; each holds `K_v`) first verifies the file's key check, and refuses the
-write if it fails (round 2, MiMo I2). With no file, or a version 1 file, the rule doesn't apply and today's refusal
-stands. Reason: the store's own write is a union (`RecordVaultStore.cs:292-300`), so
+folder writer can steer anyway (S8). **Writes persist a supersede resolution only from a verified file**, and the
+rule lives in one place, the store's keyring write (`WriteKeyring`, `RecordVaultStore.cs:292-306`), which every
+keyring write goes through (`SaveConfig` calls it whenever the config carries a keyring, which `LoadConfig` always
+fills) and which unions against the keyring on disk and its conflict copies (`ReadKeyringWithCopies`, `:252-283`)
+before it removes the copies it folded (round 2, MiMo I2). A caller that holds `K_v`
+hands it to that write; the write verifies the file's key check with it, and only then applies the supersede rule to
+the caller's keyring, the disk and the copies. A write without a verified file (a caller holding no
+`K_v`, such as `slots --ack` or `migrate`'s acknowledgements today, or a key check that fails) persists no supersede
+resolution: for a slot whose blobs differ only by a supersede, it writes what the canonical keyring file holds for it
+(nothing, if it holds none), and leaves in place the conflict copies holding the others, for the next verified write;
+nothing is refused for it. Any future writer gets the same rule without being listed (round 3, MiMo I3). With no file, or a version 1 file, the rule doesn't apply
+and today's refusal stands. Reason: the store's own write is a union (`RecordVaultStore.cs:292-300`), so
 without this no re-wrap can ever be written, and a Syncthing conflict between two machines re-wrapping at the same
 moment would otherwise stop every unlock on the fleet. The cost (stated in S6): a folder writer can forge a
 current-tagged blob for a slot on a previous entry and so displace it, without the alarm a mismatch raises today;
@@ -467,7 +489,7 @@ goes with it.
 
 **D18. `vault merge` and `slot accept` accept a descendant file.** `vault merge` takes the other copy's
 `vault-password` byte for byte when it descends from this folder's (after the unlock, checked with `K_v`, through the
-guarded write with its backup, D21; round 2, MiMo I3, GLM I-1), keeps this folder's
+guarded write with its backup, D21; round 2, MiMo I3, GLM I-1; its generation and key check unchanged, D6), keeps this folder's
 when it is the descendant, refuses siblings with D16's text, and folds the other copy's re-wrapped slots in through
 D14 (today it only adds new slots, `VaultCommand.cs:71`). A **version 1 ancestor and a version 2 descendant** form a
 chain through the legacy entry's salt (D6; round 1, MiMo M3): that is the Mac's case, whose folder still has the
@@ -538,18 +560,23 @@ password file; AI agents never run them (they go on the prompt's "must NEVER use
 | Writer | Kind |
 |---|---|
 | `vault password change`, `finish`, `keep` | replace, guarded |
-| `vault merge` adopting a descendant (D18) | replace, guarded |
-| the first password slot (`init`, `slot add`, `recover`), `vault merge` copying into a folder without one, `slot accept` filling a folder without one | fill only, as today: refuses when a file exists (`RecordVaultStore.cs:427-434`) |
+| `vault merge` adopting a descendant (D18) | replace, guarded (bytes, generation and key check unchanged, D6) |
+| the first password slot (`init`, `slot add`, `recover`), `vault merge` copying into a folder without one, `slot accept` filling a folder without one | fill only, as today: refuses when a different file exists (`RecordVaultStore.cs:427-434`) |
 
 No unlock, agent, broker or re-wrap writes it. **The guarded write** (round 1, GLM I-1) replaces the file only if the
 file and its conflict copies on disk are still exactly what the command read when it decided; otherwise it writes
 nothing and refuses (`The vault-password file changed while this command ran. Nothing was written; run it again.`).
-It recomputes the key check (the writer holds `K_v`) and carries verifiers and escrows byte for byte (D1). This is a
-new store method; today's `WriteVaultPassword` refuses every replacement (`RecordVaultStore.cs:431-434`). Before
-replacing, it copies the old file into this machine's config folder with `FileBackup.Copy`
-(`vault-password.bak-<yyyyMMddTHHmmssfffZ>`, colon-free, `-1`, `-2` on a clash; `TswapCore/FileOwnership.cs:514-518`,
-`:545`), not into the synced vault folder (round 1, MiMo M5; round 2, MiMo M2 corrected the name). Backups
-accumulate, as `config.json`'s do; S4 says they keep their escrow.
+For `change`, `finish` and `keep` it recomputes the key check (the writer holds `K_v`) and carries verifiers and
+escrows byte for byte (D1); for `vault merge` it writes the descendant's bytes as they are, after checking their key
+check (D6). This is a new store method; today's `WriteVaultPassword` refuses every replacement by a different file
+(`RecordVaultStore.cs:431-434`). Before replacing, it copies the old file into this machine's config folder, not into
+the synced vault folder (round 1, MiMo M5), under `FileBackup`'s naming (`vault-password.bak-<yyyyMMddTHHmmssfffZ>`,
+colon-free, `-1`, `-2` on a clash; `TswapCore/FileOwnership.cs:514-518`, `:545`; round 2, MiMo M2 corrected the
+name). `FileBackup.Copy` can't do that as it is: it names the backup after its source path and writes it beside it,
+so given the vault folder's file it would write into the vault folder. It gains a destination folder (an overload
+that reads the source and writes `<folder>/<source file name>.bak-…` through the same `Next`); the matcher's
+per-path owner switch (`AsOwnerOf`) already reads as the vault folder's owner and writes as the config folder's
+(round 3, MiMo I1). Backups accumulate, as `config.json`'s do; S4 says they keep their escrow.
 
 `change`, in order:
 
@@ -657,9 +684,10 @@ S6 (a).
 genuine old `vault-password` (its MACs are under the unchanged `K_v`, so it verifies) together with an old slot as a
 conflict copy makes the union prefer the old blob, so the old password opens a keyring that looks current. Nothing in
 this design stops that: a generation counter can be bumped, and the key check only proves the file belongs to this
-vault. What the design does guarantee is narrower: no keyring write persists a supersede resolution from a file that
-fails its key check (D14), and an accidental rollback never leads to a hardware attempt with a password the slot
-wasn't sealed with (D6). Only #128 closes the replay.
+vault. What the design does guarantee is narrower: no keyring write persists a supersede resolution from a file whose
+key check that write hasn't verified with `K_v` (D14, enforced in the store's one keyring write), and an accidental
+rollback never leads to a hardware attempt with a password the slot wasn't sealed with (D6; with keyring conflict
+copies it can stop the vault until the newer file returns, D6). Only #128 closes the replay.
 
 ## Docs
 
@@ -715,12 +743,19 @@ TPM's dictionary-attack counter would.
    machine converges on the re-wrapped one, whichever copy is canonical. Two re-wraps of one YubiKey slot converge;
    an equal-rank TPM pair refuses loudly; a forged current-tagged blob displacing a YubiKey slot (the S6 cost, pinned).
    `change` racing `finish` and a second `change` in one folder: the guarded write lets exactly one through and the
-   other writes nothing. Sibling files: the refusal text, then `keep`, then the other side's slots move at their next
+   other writes nothing. A keyring write without a verified file (`slots --ack`, which holds no `K_v`, and a write by
+   a `K_v` holder over a `vault-password` whose key check fails) beside a superseded pair in conflict copies: the
+   canonical keyring keeps its blob, the copy stays, nothing is refused; the next verified write resolves it (D14).
+   `vault merge` adopting a descendant leaves both folders' `vault-password` files byte-identical, generation included,
+   and a second merge in either direction finds nothing to do (D6). Sibling files: the refusal text, then `keep`, then the other side's slots move at their next
    unlock; `keep` over a finished sibling asks for the kept password and refuses without a terminal; `keep` beyond the
    cap refuses.
 10. **Rollback.** A folder rolled back to an older version 2 file, and one rolled back to the version 1 file, with
-    tagged slots: every slot whose id the file doesn't list is set aside with zero hardware attempts, the others open,
-    and restoring the newer file brings everything back (a likely Syncthing-versioning accident). `keep` with no
+    tagged slots and a single keyring: every slot whose id the file doesn't list is set aside with zero hardware
+    attempts, the others open, and restoring the newer file brings everything back (a likely Syncthing-versioning
+    accident). The same two rollbacks with keyring conflict copies holding the old and the re-wrapped blob of one slot
+    (D6's pair case): today's union refusal, zero hardware attempts, no file changed (keyring, copies and
+    `vault-password` byte-identical afterwards), and restoring the newer file brings everything back. `keep` with no
     conflict copy prints "Nothing to keep." and writes nothing.
 11. **Finish.** `finish` strands the pending slots; a stranded slot is never tried (counter), `slots` says stranded,
     the machine gets in with the recovery key; `finish` twice prints "Nothing to finish."; a request made against a
@@ -783,8 +818,8 @@ instead of a hand-over (old 6, D13), a confirmation instead of a version marker 
    what makes the re-wrap automatic on the agent's and the password-free-slot unlocks (otherwise oort, with its
    no-touch YubiKey, never moves). The only simpler design is approach 5, both passwords typed at each re-wrap,
    which breaks the binding decision. **Recommendation: accept** (both reviewers).
-2. **No automatic finish (round 1 simplification):** the transition ends when you run `finish`; `slots` and the last
-   re-wrap tell you when it is due, and with nothing left to move it asks nothing. The cost is that the escrow stays
+2. **No automatic finish (round 1 simplification):** the transition ends when you run `finish`; `slots` tells you when it is due
+   (round 3, MiMo M1), and with nothing left to move it asks nothing. The cost is that the escrow stays
    in the folder until then. The alternative, an automatic finish through the guarded write, can still meet a second
    person's change in Syncthing and stop password use until `keep`. **Recommendation: manual `finish`.**
 3. **Windows (D10 step 5):** delete the old PCP key after the re-wrap, the one backend where the old password then
@@ -802,7 +837,8 @@ instead of a hand-over (old 6, D13), a confirmation instead of a version marker 
 
 ## Left to the builder
 
-- The exact byte layouts (D1, D7), the new `TSYK` version numbers, and the message wording beyond what is quoted.
+- The version 2 file's codec (its layout is fixed in D1), the exact tagged blob layouts (D7), the new `TSYK` version
+  numbers, and the message wording beyond what is quoted.
 - How the unlocker reports which slot opened and hands the payload to the re-wrap (today `Unlock` returns `K_v`
   only), and where the supersede ranking enters `KeyringUnion`.
 - The `config.json` fields for the intent record and the refused note (D9), and the agent protocol status (D13).
@@ -872,3 +908,23 @@ Round 2 (2026-11-17), scoped on 3fa494a..0f80554. MiMo: "ready for the owner: no
 | GLM nit: D20 unknown line misses a missing file; post-re-wrap print over-specified | Fixed: both (D20). |
 | GLM nit: reviewer paths in Status | Fixed with MiMo M6. |
 | Complexity (coordinator's question) | Two of the round-2 findings came from round-1 machinery (the high-water mark, `keep` as "accept this file"); the mark is removed, and a leaner shape that also drops `keep` and a second change during a transition is offered to the owner (question 7). |
+
+Round 3 (2026-11-17), scoped on 0f80554..a6fe9dd, the round-2 amendments only. MiMo: "ready for the owner: no" (four
+Important, three Minor, all in the amended text; every round-2 resolution confirmed or narrowed to these). Its
+findings 1–7 are labelled I1–I4 and M1–M3 here and in the text. Each claim was checked against the code at the
+design's base (4904dbb9) before folding.
+
+| Finding | Outcome |
+|---|---|
+| MiMo I1 (its 1): `FileBackup.Copy` names and writes the backup beside its source, so it can't put it in the config folder | Confirmed (`FileOwnership.cs:525-530`, `:545`: no destination parameter). Fixed: D21 keeps `FileBackup`'s naming and says `FileBackup` gains a destination-folder overload through the same `Next`; the per-path owner switch already handles reading from one folder and writing to the other. |
+| MiMo I2 (its 2): "every replacing write stamps largest + 1" contradicts `vault merge` adopting bytes unchanged | Confirmed: `vault merge` and `slot accept` compare the files byte for byte (`VaultCommand.cs:79-91`, `SlotCommand.cs:976-983`). Fixed by carving `vault merge` out: D6 (it adopts the descendant's bytes, generation and key check included), D18, the D21 table row and the guarded-write paragraph (only `change`, `finish`, `keep` recompute); test 9 pins byte identity after a merge. |
+| MiMo I3 (its 3): D14 lists four keyring writers, the code has more | Confirmed and wider than reported: every keyring write is `SaveConfig` → `WriteKeyring` (`RecordVaultStore.cs:187-203`, `:292-306`), and `LoadConfig` always fills the keyring, so `slots --ack` and `migrate`'s acknowledgement and RNG writes also rewrite it, folding copies. The suggested "each caller holds `K_v`" doesn't hold for those two. Fixed without a list: D14 states the rule once, in `WriteKeyring`; a caller with `K_v` hands it over and the write verifies the key check before applying the supersede rule; a write without a verified file persists no supersede resolution (it keeps the canonical keyring's blob and leaves the copy for the next verified write) and refuses nothing. S8 follows; test 9 covers `slots --ack` and a failing key check. |
+| MiMo I4 (its 4): D6's rollback paragraph and test 10 over-claim with keyring conflict copies | Confirmed: with a version 1 file D14 doesn't apply, and a version 2 file listing neither blob's entry ranks both stranded, so the union refuses. Chose to scope the claim, not to rank unranked pairs: a pair the file doesn't rank has no authority to pick a winner, a write would persist the pick, and the dropped blob may be the only one that opens (the old Windows PCP key is gone after a re-wrap, D10 step 5); the refusal writes nothing, makes no hardware attempt and clears when the newer file returns. D6 now scopes the single-copy claim, states the pair case and names it as the one exception to the anti-goal on sync conflicts; the misplaced D10 citation is gone; S8 and test 10 (the pair fixture) follow. |
+| MiMo M1 (its 5): owner question 2 credits the dropped post-re-wrap print | Fixed: "`slots` tells you when it is due". |
+| MiMo M2 (its 6): the D21 fill row says "refuses when a file exists" | Confirmed (`RecordVaultStore.cs:431-434` refuses a different file only). Fixed: "when a different file exists"; the guarded-write paragraph says the same. |
+| MiMo M3 (its 7): D1's MAC inputs depend on widths left to the builder | Fixed by showing the widths: the three parameters are `uint32 LE` as in version 1 (`VaultPasswordFile.cs:9-10`), `retiredAt` is `int64 LE`; only the codec's code is left (D1, "Left to the builder"). |
+
+Noticed while folding, not changed (for the next review): a rolled-back version 2 file that lists the old blob's entry
+but not the re-wrapped one does rank the pair, the old blob first, and a verified write then persists that; on
+Windows the old blob's PCP key was deleted at the re-wrap (D10 step 5), so that slot can't open until it is
+re-enrolled. The window is a rollback plus a keyring conflict plus a verified write before the newer file returns.
