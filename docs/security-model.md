@@ -831,6 +831,7 @@ How to share one, and the merge rules: [multi-machine.md](multi-machine.md#shari
     against the stored values ([fields](#fields-plain-visible-data)), and no cap applies to them: an
     export of a secret a merge left over 64 fields or 64 KiB imports with every field, as the merge kept them.
 - **Permissions:** the vault folder, `records/` and the config folder are created 0700 and their
-  files 0600; an existing vault with wider permissions is narrowed on the next write, with a notice.
-  Under sudo, tswap does its file work as the folder's owner. (Windows: no change; files inherit
+  files 0600; an existing vault with wider permissions is narrowed when a command opens it (the vault
+  folder; the config folder before the first write), with a notice; only files you own. Under sudo,
+  tswap does its file work as the folder's owner. (Windows: no change; files inherit
   the profile folder's permissions.)

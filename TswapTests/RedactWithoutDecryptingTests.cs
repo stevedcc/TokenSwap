@@ -58,6 +58,8 @@ public sealed class RedactWithoutDecryptingTests : IDisposable
     private void Plant(string name, string value, Func<SecretRecord, SecretRecord> change)
     {
         Directory.CreateDirectory(_m.RecordsDir);
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(_m.RecordsDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         var id = FilenameHasher.ComputeRecordId(RecordKeyDerivation.DeriveNamesKey(_key), name);
         var version = new Stamp(new Hlc(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), 0), Origin);
         var record = new SecretRecord(id, version, RecordType.Value, version, name, 1, Encoding.UTF8.GetBytes(value), [])
@@ -65,6 +67,9 @@ public sealed class RedactWithoutDecryptingTests : IDisposable
             Fingerprints = Fingerprints(_key, Encoding.UTF8.GetBytes(value)),
         };
         File.WriteAllBytes(RecordFile(_m, _key, name), SecretRecordCodec.Encode(change(record), _key, KeyringFormat.RecordFormatVersion));
+        // Brief T36 (#347): planted 0600 as tswap writes it, so opening the vault has nothing to narrow (input only).
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(RecordFile(_m, _key, name), UnixFileMode.UserRead | UnixFileMode.UserWrite);
     }
 
     /// <summary>The refusal as the CLI prints it (every TswapException is "❌ Error: …" on stderr).</summary>
