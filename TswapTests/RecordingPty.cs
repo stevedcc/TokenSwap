@@ -21,6 +21,8 @@ internal sealed class RecordingPty : IPtyRunner
     public string[]? Argv { get; private set; }
     public RedactionOptions? Options { get; private set; }
     public StringBuilder Output { get; } = new();
+    /// <summary>Each <c>ProcessChunk</c> result in order, then the <c>Flush</c> result (brief T39).</summary>
+    public List<string> Pieces { get; } = [];
 
     public int Run(string[] argv, IReadOnlyList<StreamReplacement> replacements) =>
         Run(argv, replacements, new RedactionOptions());
@@ -36,8 +38,14 @@ internal sealed class RecordingPty : IPtyRunner
             raw = raw.Replace("\n", "\r\n");
         var redactor = new StreamRedactor(replacements, options.Matchers);
         for (var i = 0; i < raw.Length; i += ChunkSize)
-            Output.Append(redactor.ProcessChunk(raw.Substring(i, Math.Min(ChunkSize, raw.Length - i))));
-        Output.Append(redactor.Flush());
+        {
+            var piece = redactor.ProcessChunk(raw.Substring(i, Math.Min(ChunkSize, raw.Length - i)));
+            Pieces.Add(piece);
+            Output.Append(piece);
+        }
+        var flushed = redactor.Flush();
+        Pieces.Add(flushed);
+        Output.Append(flushed);
         return ExitCode;
     }
 }

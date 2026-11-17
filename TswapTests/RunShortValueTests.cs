@@ -81,6 +81,42 @@ public sealed class RunShortValueTests : IDisposable
         Assert.Equal("web-ngx /home/webster user=[REDACTED: user] b64=[REDACTED: user]\n", Output);
     }
 
+    /// <summary>
+    /// Brief T39 (#341): a substituted short value no longer holds the last 255 characters on every pause;
+    /// the first line is shown when it is read, before the rest of the output.
+    /// </summary>
+    [Fact]
+    public void Run_ShortToken_LineShownBeforeMoreOutput()
+    {
+        _m.Ok("web", "ingest", "user");
+        _pty.ChunkSize = 9;
+        _pty.Child = _ => "user=web\nstill running";
+
+        var (exit, text) = Run("curl", "{{user}}");
+
+        Assert.True(exit == 0, text);
+        Assert.Equal("user=[REDACTED: user]\n", _pty.Pieces[0]);
+        Assert.Equal("user=[REDACTED: user]\nstill running", Output);
+    }
+
+    /// <summary>
+    /// Brief T39: a run-level outcome pin, not a pin of the class split (the vault record's own free-class
+    /// hold covers the same text); the split is pinned in <see cref="ShortValueStreamTests"/>.
+    /// </summary>
+    [Theory]
+    [InlineData(1)]
+    [InlineData(4096)]
+    public void Run_ShortTokenWithWhitespace_Masked(int chunkSize)
+    {
+        _m.Ok("a b", "ingest", "s");
+        _pty.ChunkSize = chunkSize;
+        _pty.Child = _ => "v=a b\nza bz\n";
+
+        Run("curl", "{{s}}");
+
+        Assert.Equal("v=[REDACTED: s]\nza bz\n", Output);
+    }
+
     [Fact]
     public void Run_LongToken_InsideWord_StillMasked()
     {

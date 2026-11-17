@@ -347,8 +347,11 @@ Limits:
 - **Held output at a prompt.** To catch a value split across reads, the redactor holds back the end
   of the output: for single-line secrets only the trailing word, but a multi-line secret (a PEM key)
   could start anywhere, so up to its length is held on every pause. When `run` substitutes a value
-  under 8 characters (in an argument, `--env` or a `{{@file}}`), at least the last 255 characters are
-  held on every pause, whatever they are, so streamed output (`logs -f`) then arrives in batches. A pending point inside a word is
+  under 8 characters (in an argument, `--env` or a `{{@file}}`), the trailing run of characters other
+  than whitespace is held as for a vault value (up to 255 characters), so a line that ends in a line
+  break still shows at once; only when such a value contains a space, tab or line break are at least
+  the last 255 characters held on every pause, whatever they are, so streamed output (`logs -f`) then
+  arrives in batches. A pending point inside a word is
   moved back to the word's start, so the trailing word may be held up to 256 characters further back
   (brief T30). `run` releases held output
   (masking complete occurrences first) when the child waits for terminal input. **Linux:** when no
@@ -361,10 +364,11 @@ Limits:
   appears, so how much is held. What is held depends on the text, on the constant 256-character word
   hold, and on figures each rounded up to a multiple of 256 characters: two vault-wide ones (the
   longest value per character class, and the largest whitespace count of a multi-line value) and, when
-  `run` substitutes a value under 8 characters, one bucket that says only that such a value was
-  substituted. So it reveals a 256-character bucket of those, whether the vault holds a secret with
-  whitespace and whether this run substituted a short value, nothing finer than the vault folder's
-  256-byte record buckets already show, and nothing about a guess's prefix.
+  `run` substitutes values under 8 characters, one bucket for their forms without whitespace and one
+  for their forms with it, each saying only that such a form exists. So it reveals a 256-character
+  bucket of those, whether the vault holds a secret with whitespace and whether this run substituted a
+  short value, and one with whitespace, nothing finer than the vault folder's 256-byte record buckets
+  already show, and nothing about a guess's prefix.
 - **A guessing oracle, as `redact` already is:** a child can test a guess against every vault value
   by printing it and watching for a label; the labels show secret names, which `names` lists anyway.
 - **A redaction failure fails closed:** the held text and the rest of the output (of that stream, when
