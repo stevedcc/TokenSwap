@@ -1,11 +1,12 @@
 # Design: change the vault password in place
 
 Issue: https://github.com/stevedcc/TokenSwap/issues/313 (with #351, closed as its duplicate). Date: 2026-11-16.
-Status: **design review round 1 folded in (2026-11-17)**; for the owner. Round 1: MiMo
-(`~/RiderProjects/tswap-wt/tools/t38-design-r1-mimo.md`, "ready for the owner: no", I1–I3, M1–M11) and GLM
-(`t38-design-r1-glm.md`, "yes", no Critical, I-1–I-3, M-1–M-9); each finding is settled under "Review history".
-Nothing is implemented. Decisions are numbered D1…D25 so reviewers can refer to them; each gives its reason. D11 and
-D16 were removed in round 1 (the simplification below) and their numbers are not reused. Points the owner must still
+Status: **design review rounds 1 and 2 folded in (2026-11-17)**; for the owner. Round 1: MiMo ("ready for the
+owner: no", I1–I3, M1–M11) and GLM ("yes", no Critical, I-1–I-3, M-1–M-9). Round 2: MiMo ("no", C1, I1–I3, M1–M6)
+and GLM ("yes", no Critical, I-1–I-2, M-1–M-6). The reports are kept with the brief records outside the repo; every
+finding is quoted and settled under "Review history". Nothing is implemented. Decisions are numbered D1…D25 so
+reviewers can refer to them; each gives its reason. D11 and D16 were removed in round 1 (the simplification below)
+and their numbers are not reused; round 2 removed the high-water mark from D6. Points the owner must still
 choose are collected under "Open questions for the owner" and marked **(owner)** where they come up.
 
 **Owner decision (2026-11-16), binding:** after a change, the other machines' password slots keep opening with the
@@ -15,9 +16,10 @@ choose are collected under "Open questions for the owner" and marked **(owner)**
 **Round 1 simplification.** The first draft also ended the transition automatically (old D11) and resolved conflict
 copies of `vault-password` that descend from one another at read time (old D16). Neither is in the owner decision,
 and together they were the only way tswap could write the file without a person asking (GLM I-1: an unguarded
-automatic write can revert a change and strand slots). Now **tswap never writes `vault-password` on its own**: only
-`change`, `finish` and `keep`, run by a person, write it, each through a guarded write (D21). The re-wraps (which
-write the keyring, not the file) stay automatic, as the owner decided. The cost is that the escrow (D5) lives until
+automatic write can revert a change and strand slots). Now **no unlock ever writes `vault-password`**: it is
+replaced only by commands a person runs (`change`, `finish`, `keep`, and `vault merge` adopting a newer file), each
+through the guarded write, and filled in only where the folder has none, as today (D21 lists every writer). The
+re-wraps (which write the keyring, not the file) stay automatic, as the owner decided. The cost is that the escrow (D5) lives until
 someone runs `finish`; tswap says when that is due (D20). **(owner, question 2)**
 
 ## Intent and why
@@ -78,7 +80,7 @@ The setup this must serve (owner, 2026-11-16):
   merges produce it**. (Against someone who can write the folder and replays old files, only #128 helps: S2, S8.
   Round 1, MiMo I1: the first draft claimed this without the qualifier.)
 - A sync conflict that stops every machine of the fleet from unlocking.
-- tswap writing `vault-password` without a person asking (round 1 simplification).
+- An unlock writing `vault-password` (round 1 simplification).
 
 ## How it works today (the facts this design rests on)
 
@@ -147,7 +149,9 @@ machine's password slots and the verifier (`VaultUnlocker.cs:668`, `AgentCommand
 
 **Joining** copies the file into the pending config (`PendingVaultPassword`, `TswapCore/Models.cs:172-176`) and
 `slot accept` refuses unless the request's, the approve file's and the folder's copies are byte-identical
-(`TswapCli/Commands/SlotCommand.cs:961-985`). A pending request's own hardware blob lives in the pending config, not
+(`TswapCli/Commands/SlotCommand.cs:961-985`); a folder without the file gets the approve file's copy
+(`WriteMissingVaultPassword`, `SlotCommand.cs:988`), as `vault merge` copies one into a folder that has none
+(`VaultCommand.cs:155`). A pending request's own hardware blob lives in the pending config, not
 in the keyring (`PendingSlotHwBlob`, `Models.cs:130`).
 
 ## Approaches considered
@@ -169,18 +173,29 @@ in the keyring (`PendingSlotHwBlob`, `Models.cs:130`).
 
 ### On disk: the `vault-password` file, version 2
 
-**D1. A version 2 file with a list of password entries** (current first, then up to 3 previous ones). Layout (exact
-encoding left to the builder, fixed binary as today):
+**D1. A version 2 file with a list of password entries** (current first, then up to 3 previous ones). Fixed here:
+the fields, their order and exactly what each MAC and the AEAD bind; left to the builder: integer widths beyond those
+shown and the codec's code. Fixed binary as today:
 
 ```
 magic "TSVP" | version 2 | vaultId 16 | generation uint32 LE | entryCount 1 (1..4)
 entry  = kdf 1 | memoryKiB | timeCost | parallelism | salt 32 | flags 1 | retiredAt int64 (unix ms, 0 for current)
          | verifier 32 | [escrow, iff flags bit 1: nonce 12 | ciphertext 32 | tag 16]
 keyCheck 32 = HMAC-SHA256(HKDF(K_v, "tswap-vault-key-check-v2"), every byte before it)
-verifier    = HMAC-SHA256(HKDF(K_v, "tswap-vault-password-verifier-v2"), vaultId ‖ entry header ‖ stretched)
+key         = vaultId ‖ kdf ‖ memoryKiB ‖ timeCost ‖ parallelism ‖ salt      (an entry's immutable part)
+verifier    = HMAC-SHA256(HKDF(K_v, "tswap-vault-password-verifier-v2"), key ‖ stretched)
+escrow      = AES-256-GCM(HKDF(K_v, "tswap-vault-password-escrow-v1"), nonce, stretched, AAD = key)
 password id = first 8 bytes of SHA-256("tswap-vault-password-id-v1" ‖ vaultId ‖ salt)   (not stored; computed)
 flags: bit 0 legacy (D4), bit 1 escrow present (D5); other bits refused
 ```
+
+**The verifier and the escrow bind only the entry's immutable part** (round 2, MiMo C1 and GLM I-2). Everything
+that a later write changes (flags, `retiredAt`, the entry's position, `generation`, the entry count) is bound only by
+the whole-file key check, which every writer recomputes because every writer holds `K_v` (D21). So a verifier is
+computed once, when its entry is created, and an escrow is created once and carried byte for byte by every later
+write (`finish` drops it): nothing needs a stretched password that the writer may not have. A tampered flag or
+`retiredAt` is caught by the key check after the unlock; before it, it can only steer which entry tswap asks for
+(S6).
 
 Reason: the old salt must stay readable (a slot sealed with the old stretched password can only be opened with
 `Argon2id(old password, old salt)`), and both passwords must stay checkable. A list instead of a single "previous"
@@ -190,7 +205,7 @@ previous entry. Four entries cap what a planted file can make tswap do, and a ty
 entry, **no two entries with the same password id** (round 1, GLM M-4: a duplicate makes "the entry a blob names"
 ambiguous), retiredAt 0 exactly for the current entry. At the first change the copied version 1 entry's verifier is
 **recomputed** under the version 2 formula (the change holds `K_v` and the verified current stretched password; round
-1, MiMo M2), so every check is "its entry's verifier".
+1, MiMo M2); from then on no verifier is ever recomputed (round 2, C1).
 
 **D2. Not a `vault-password.previous` file** (the issue's first idea). Reason: two files can be synced, lost or
 conflicted independently, so a machine could see the new file without the previous one; and 0.3.0 would ignore a
@@ -210,7 +225,8 @@ its one password, and a tagged blob is stranded (set aside, never tried); a vers
 every untagged password blob stranded.
 
 **D5. The escrow: while previous entries exist, the entries carry their stretched password encrypted under `K_v`**
-(AES-256-GCM, key `HKDF(K_v, "tswap-vault-password-escrow-v1")`, AAD = file header ‖ password id; random nonce). The
+(D1's formula: AAD = the entry's immutable part, so an escrow can't be moved to another entry and survives every
+later write unchanged; random nonce). The
 **current** entry always has one while previous entries exist (every writer guarantees it, D17, D21); a previous
 entry may lack it (round 1, MiMo I2: `keep` over a sibling without escrow), and then its slots move only when that
 password is typed (D8) or through `update` (D21). `finish` removes all escrow. Reason: the owner decision wants the
@@ -233,16 +249,19 @@ gives an offline oracle to whoever knows the other password, at one Argon2id per
 "someone who has the old password" threat (both reviewers agree); an unauthenticated XOR avoids the oracle against a
 folder-only attacker but not against the old-password holder.
 
-**D6. `generation` and a machine-local high-water mark.** `generation` goes up by one at every write of the file
-(change, keep, finish). With the password ids it gives a "descends from" relation: file A descends from file B when
-A's generation is higher and A lists B's current entry by password id (for a version 1 B, the id of its one salt,
-which is A's legacy entry). Used by D17 and D18. Each machine records in its `config.json` the highest generation
-whose key check it has verified with `K_v`; a file with a lower generation is refused before any hardware call:
-`The vault folder's vault-password file (generation 3) is older than one this machine has used (generation 5): a sync
-tool or a restore brought back an old copy. Restore the newer file, or accept this one with 'sudo tswap vault password
-keep vault-password'.` Reason: round 1, MiMo I1: a replayed genuine old file still passes every check (its MACs are
-under the unchanged `K_v`), and its entry order would rank an old blob above a re-wrapped one (D14). A machine that
-has never seen the file trusts the first one (as today); S8 says what this leaves.
+**D6. `generation`.** It goes up by one at every replacing write of the file (change, finish, keep); a writer stamps
+the largest generation of the files it read, + 1 (round 2, GLM M-1b). With the password ids it gives a "descends
+from" relation: file A descends from file B when A's generation is higher and A lists B's current entry by password
+id (for a version 1 B, the id of its one salt, which is A's legacy entry). Used by D17 and D18.
+
+**No high-water mark** (removed in round 2). Round 1 added a machine-local record of the highest generation seen, to
+refuse a replayed old file (MiMo r1 I1). Round 2 showed it is the wrong tool (MiMo r2 I2): a folder writer simply
+replays the old entries under a higher generation, so it stops only accidents, and accidents are already safe. A
+file rolled back by a sync tool or a restore names fewer or older entries; a slot tagged with an id the file doesn't
+list is set aside with no hardware attempt (D4, D12), a slot whose entry it does list opens as before, and a union
+under that file can only prefer a blob that still opens with a password the file lists (it never writes one that
+doesn't, D10 step 3); when the newer file comes back the slots move again. It also made `keep` over a rolled-back
+file strand slots without the `finish` listing (MiMo r2 I1). Against a folder writer only #128 helps (S8).
 
 ### On disk: slot blobs carry the password id
 
@@ -261,8 +280,9 @@ A slot with no id belongs to the legacy entry (D4). New password enrolments (`in
   simpler (both reviewers checked the parser order).
 
 The id is not in the AAD (the hwBlob never is). A forged id can only make tswap pick the wrong password for one
-attempt; see Security S6. Binding the id into `Wrapped`'s AAD (MiMo M6's option) would not help: with a forged id
-the hardware refuses before any AEAD runs.
+attempt; see Security S6. Binding the id into `Wrapped`'s AAD (MiMo M6's option) would not help: with a forged id a
+TPM or Secure Enclave refuses before any AEAD runs (and counts it), and a YubiKey or FIDO2 slot gets the wrong KEK, so
+its AEAD fails either way.
 
 ### Unlocking during a transition
 
@@ -289,14 +309,16 @@ Previous vault password:
 ```
 
 A candidate is never tried with another entry's stretched password. Reason: goal 7; one Argon2id per prompt as
-today. The agent's and broker's held password is labelled with its entry the same way (D13).
+today. The same order picks the entry wherever a person types the password outside an unlock's passes (round 2, GLM
+M-5): `agent start` and `broker unlock` stretch under the entry D8 chooses from this machine's password slots and
+label the held password with it (D13); `keep` and `update` follow their own rules (D17, D21).
 
 **D9. After any successful unlock, tswap re-wraps every password slot reachable here that is on a previous entry
 with escrow and needs no presence**: this machine's TPM slot, a `--no-touch` Secure Enclave slot, a plugged-in
 no-touch YubiKey OTP password slot. Whatever opened the vault (pass 1, the agent, the prompt):
 
 1. it verifies the file's key check with `K_v` first, and does nothing more if it fails (round 1, MiMo I1c: no
-   keyring write is ever derived from an unverified file); it then raises the high-water mark (D6);
+   keyring write is ever derived from an unverified file);
 2. it decrypts the stretched passwords it needs from the escrow and checks each against its entry's verifier
    **before** any hardware call;
 3. it writes an **intent record** for the slot into this machine's `config.json` (slot id, entry id, time in UTC with
@@ -304,6 +326,10 @@ no-touch YubiKey OTP password slot. Whatever opened the vault (pass 1, the agent
    thing between a slot that keeps refusing and a Windows lockout, so no record, no attempt);
 4. it re-wraps (D10); on success it clears the record, on a hardware refusal it turns the record into a
    "refused" note and never tries that slot automatically again.
+
+A record left by a crash between steps 3 and 4 counts as refused (never retried automatically; `update` asks, as for
+a refused note), and any record or note whose slot is already on the current entry in the keyring is deleted on sight
+(round 2, MiMo M3, GLM M-4).
 
 A touch YubiKey, a FIDO2 slot or a `--with-touch` Secure Enclave slot is re-wrapped only when it is the slot that
 just opened the vault (the touch or PIN was given anyway; the FIDO2 output and the OTP response are reused, so no
@@ -344,8 +370,10 @@ holds and adds no way into the vault; the keyring write already happens without 
 Crash before 4: the keyring still has the old slot, which still opens with the previous password; the next unlock
 starts again (on Windows a new orphaned PCP key is left, as a failed enrolment leaves one today). Crash in 4: atomic
 rename, old or new. Crash after 4 before 5 on Windows: an orphan key that only opens a slot that no longer exists in
-the current keyring. Two processes on one machine re-wrapping at once: the second writer re-reads, sees the slot
-already on the current entry on disk and drops its own (deleting its own new PCP key on Windows): first re-wrap wins.
+the current keyring. Two processes on one machine re-wrapping at once: the second writer's keyring write finds the
+slot already on the current entry on disk and drops its own slot instead of meeting D14's equal-rank refusal (that
+refusal is for two copies, not for a writer against the disk), deleting its own new PCP key on Windows, silently:
+first re-wrap wins (round 2, GLM M-3).
 
 Why a fresh `KEK_slot` instead of re-sealing the same one: with the same KEK, an old hwBlob (from any old copy of the
 keyring) plus the old password would open the **current** `Wrapped`; and a later `K_v` rotation (#128) that
@@ -354,8 +382,10 @@ hand), and YubiKey/FIDO2 `Wrapped` changes anyway. Both reviewers confirmed this
 
 *(D11, automatic finish: removed in round 1, see "Round 1 simplification".)*
 
-**D12. `sudo tswap vault password finish` ends the transition.** It drops every previous entry and all escrow
-(generation + 1, through the guarded write of D21; the finished file has no nonce, so it is deterministic). With no
+**D12. `sudo tswap vault password finish` ends the transition.** It unlocks the vault (any slot), verifies the
+file's key check, and drops every previous entry and all escrow, recomputing the key check (generation + 1, through
+the guarded write of D21; the finished file has no nonce, so it is deterministic). It needs no password typed: the
+current entry's verifier is unchanged (D1; round 2, MiMo C1, GLM M-1c). With no
 slot left on a previous entry it needs no confirmation. Otherwise it lists every such slot, says each will then be
 **stranded** (it can't open the vault any more, and tswap never tries it), and asks for `yes` (or `--yes` without a
 terminal). It also says it can't see other machines' pending `slot request --password` (round 1, MiMo M10): such a
@@ -394,9 +424,11 @@ different bytes (round 1, GLM I-2):
 - **YubiKey and FIDO2 slots** (portable, so two machines can re-wrap one legitimately): the ordinally smallest
   encoding, so every machine converges.
 
-The store gives the union the ranking only from a file that passes D6's high-water check, and a keyring write from
-D9 happens only after D9 step 1 verified that file with `K_v`. With no file, or a version 1 file, the rule doesn't
-apply and today's refusal stands. Reason: the store's own write is a union (`RecordVaultStore.cs:292-300`), so
+Before an unlock the ranking comes from the file as read, unverified: it only decides which slot is tried, which a
+folder writer can steer anyway (S8). **Every keyring write that persists a supersede resolution** (D9's re-wraps,
+`slot accept`, `slot merge`, `vault merge`; each holds `K_v`) first verifies the file's key check, and refuses the
+write if it fails (round 2, MiMo I2). With no file, or a version 1 file, the rule doesn't apply and today's refusal
+stands. Reason: the store's own write is a union (`RecordVaultStore.cs:292-300`), so
 without this no re-wrap can ever be written, and a Syncthing conflict between two machines re-wrapping at the same
 moment would otherwise stop every unlock on the fleet. The cost (stated in S6): a folder writer can forge a
 current-tagged blob for a slot on a previous entry and so displace it, without the alarm a mismatch raises today;
@@ -417,10 +449,14 @@ the same time. Run 'sudo tswap vault password keep <file>' to keep one and let t
 descends from the other it names the newer one: `<name> is the newer file (it lists the other's password as
 previous): keep it with 'sudo tswap vault password keep <name>'.`
 
-**D17. `sudo tswap vault password keep <file>`** resolves a conflict, and also accepts a file D6 refused as older. It
-unlocks the vault, checks every file involved with `K_v`, keeps the named file's current entry as current, and adds
-the other file's current entry (and any previous entries not already listed) as previous entries, carrying their
-escrow where they have it, generation = the largest seen + 1, through the guarded write (D21). The kept current entry
+**D17. `sudo tswap vault password keep <file>`** resolves a conflict between `vault-password` and its conflict
+copies (the named file is one of them). It unlocks the vault with the **named** file as the password file (D8's
+prompt, if one is needed, offers the named file's entries; round 2, GLM M-5a), checks every file involved with `K_v`,
+keeps the named file's current entry as current, and adds the other files' current entries (and any previous entries
+not already listed) as previous entries, carrying their escrow byte for byte where they have it (D1), generation =
+the largest of the files + 1, through the guarded write (D21), which also removes the conflict copies. With no
+conflict copy it prints `Nothing to keep.` and exits 0 (round 2, GLM M-6, MiMo I1: it never accepts a lone file, so
+it can't strand slots behind `finish`'s back). The kept current entry
 must have escrow (D5): when the named file has none (it is a finished file), `keep` takes the stretched password from
 the unlock if it typed that entry's password, and otherwise asks `Vault password (the one in <file>): ` once and checks
 it against that entry's verifier; without a terminal it refuses (round 1, MiMo I2). It refuses beyond 3 previous
@@ -430,7 +466,8 @@ Reason: today's "keep one, delete the other" would strand every slot re-wrapped 
 goes with it.
 
 **D18. `vault merge` and `slot accept` accept a descendant file.** `vault merge` takes the other copy's
-`vault-password` when it descends from this folder's (after the unlock, checked with `K_v`), keeps this folder's
+`vault-password` byte for byte when it descends from this folder's (after the unlock, checked with `K_v`, through the
+guarded write with its backup, D21; round 2, MiMo I3, GLM I-1), keeps this folder's
 when it is the descendant, refuses siblings with D16's text, and folds the other copy's re-wrapped slots in through
 D14 (today it only adds new slots, `VaultCommand.cs:71`). A **version 1 ancestor and a version 2 descendant** form a
 chain through the legacy entry's salt (D6; round 1, MiMo M3): that is the Mac's case, whose folder still has the
@@ -471,7 +508,7 @@ question 7).
 - `…, previous vault password; moving it here failed at 2026-11-16T10:02:11Z: <reason>. Run 'sudo tswap vault password update'.`
   (only on the machine that recorded it, D9),
 - `…, stranded: its vault password was dropped; it can't open the vault (re-enrol it)`,
-- `…, vault password (which one is unknown: <the conflict or high-water refusal>)` when the file can't be used; `slots`
+- `…, vault password (which one is unknown: <why: a conflict, a missing or unusable file>)` when the file can't be used; `slots`
   never refuses because of the file (round 1, GLM M-3: the one command that shows the transition must not go down
   with it).
 
@@ -479,9 +516,10 @@ And one summary line while previous entries exist, either
 `<n> slot(s) still open with a previous vault password; each moves to the new one at its next unlock.
 'sudo tswap vault password finish' drops the previous password for the slots that won't come back.`
 or, when none is left,
-`Every slot is on the new vault password. Run 'sudo tswap vault password finish' to drop the previous one.`
-The second line is also printed once after a re-wrap (D9) that moved the last slot this machine's keyring knows
-about. Password-free and recovery slots print exactly as today.
+`Every slot in this vault's keyring is on the new vault password. A 'slot request --password' still pending on
+another machine is not in it. Run 'sudo tswap vault password finish' to drop the previous one.`
+(round 2, MiMo M4; the extra print after a re-wrap was dropped as over-specified, GLM nit). Password-free and
+recovery slots print exactly as today.
 
 ## Command surface
 
@@ -491,22 +529,32 @@ password file; AI agents never run them (they go on the prompt's "must NEVER use
 | Command | What it does |
 |---|---|
 | `sudo tswap vault password change` | The change (below). |
-| `sudo tswap vault password update` | Moves every slot reachable here now, including touch YubiKeys, FIDO2 keys (PIN and touch each, one prompt per key), a `--with-touch` Secure Enclave, and slots on a previous entry without escrow (it asks for that password). It retries a slot with a refused note only after a yes/no naming the lockout risk (round 1, MiMo M6). With nothing to move: `Nothing to move on this machine.`, exit 0. |
+| `sudo tswap vault password update` | Moves every slot reachable here now, including touch YubiKeys, FIDO2 keys (PIN and touch each, one prompt per key), a `--with-touch` Secure Enclave, and slots on a previous entry without escrow (it asks once per such entry, naming its change time). It retries a slot with a refused note only after a yes/no naming the lockout risk (round 1, MiMo M6). With nothing to move: `Nothing to move on this machine.`, exit 0. |
 | `sudo tswap vault password finish [--yes]` | D12. |
 | `sudo tswap vault password keep <file>` | D17. |
 
-**The guarded write** (round 1, GLM I-1): every write of `vault-password` (`change`, `finish`, `keep`) replaces the
-file only if the file and its conflict copies on disk are still exactly what the command read when it decided;
-otherwise it writes nothing and refuses (`The vault-password file changed while this command ran. Nothing was written;
-run it again.`). This is a new store method; today's `WriteVaultPassword` refuses every replacement
-(`RecordVaultStore.cs:431-434`). Before replacing, the command copies the old file into this machine's config folder
-(`vault-password.<UTC timestamp>.bak`, as `BackupConfig` does for `config.json`, `RecordVaultStore.cs:174`), not into
-the synced vault folder (round 1, MiMo M5).
+**Every writer of `vault-password`** (round 2, MiMo I3, GLM I-1):
+
+| Writer | Kind |
+|---|---|
+| `vault password change`, `finish`, `keep` | replace, guarded |
+| `vault merge` adopting a descendant (D18) | replace, guarded |
+| the first password slot (`init`, `slot add`, `recover`), `vault merge` copying into a folder without one, `slot accept` filling a folder without one | fill only, as today: refuses when a file exists (`RecordVaultStore.cs:427-434`) |
+
+No unlock, agent, broker or re-wrap writes it. **The guarded write** (round 1, GLM I-1) replaces the file only if the
+file and its conflict copies on disk are still exactly what the command read when it decided; otherwise it writes
+nothing and refuses (`The vault-password file changed while this command ran. Nothing was written; run it again.`).
+It recomputes the key check (the writer holds `K_v`) and carries verifiers and escrows byte for byte (D1). This is a
+new store method; today's `WriteVaultPassword` refuses every replacement (`RecordVaultStore.cs:431-434`). Before
+replacing, it copies the old file into this machine's config folder with `FileBackup.Copy`
+(`vault-password.bak-<yyyyMMddTHHmmssfffZ>`, colon-free, `-1`, `-2` on a clash; `TswapCore/FileOwnership.cs:514-518`,
+`:545`), not into the synced vault folder (round 1, MiMo M5; round 2, MiMo M2 corrected the name). Backups
+accumulate, as `config.json`'s do; S4 says they keep their escrow.
 
 `change`, in order:
 
 1. Refuse unless the vault has a password (`No vault password to change: no slot needs one. Add one with 'sudo
-   tswap slot add --password'.`), the file reads cleanly (D6 included), and there are fewer than 3 previous entries.
+   tswap slot add --password'.`), the file reads cleanly, and there are fewer than 3 previous entries.
 2. Unlock the vault (any slot, the usual passes), and verify the file's key check.
 3. The current password: reused when this command's own unlock was through a password slot on the current entry
    with a typed password; otherwise `Current vault password: ` once, checked against the current entry's verifier.
@@ -537,7 +585,7 @@ confirmation. The cheap half is here: `change` backs up the file it replaces (D2
 **D24. Files and ownership** (round 1, MiMo M5, GLM M-6). Every new write goes through the store's existing file
 layer (`DirectoryOwnerMatcher`, `TightenModes`, atomic durable writes as the folder's owner, 0600): the version 2
 file, the backup, the keyring re-writes from `run`, the agent and the broker as well as from sudo commands, the
-`config.json` intent record and high-water mark (through the store's config write, as the folder's owner under
+`config.json` intent record (through the store's config write, as the folder's owner under
 sudo), and removed conflict copies. The brief names each one, the tests check owner and mode for the sudo paths (this
 project has had a root-owned `config.json` after a sudo write), and the owner's hardware checks include one.
 
@@ -566,7 +614,7 @@ vault folder and puts old files back (S8). The docs must say: "Changing the pass
 learns the old password later and has only the current vault folder. Against someone who kept an old copy of the
 folder, or can write it, rotate the vault key (#128)." The fresh `KEK_slot` (D10) at least means an old blob never
 opens the current keyring's slot. #128 gets a comment recording that its rotation must change the password together
-with `K_v` (GLM, on question 8).
+with `K_v` (GLM, round 1; owner question 6).
 
 **S3. Not affected.** Password-free slots and the recovery slot: no byte changes (tests assert byte equality of
 those slots across a whole transition). Someone without `K_v` and without the hardware: the version 2 file adds no
@@ -579,8 +627,10 @@ current and previous passwords directly instead of having to guess them through 
 already read every secret; the stretched bytes don't reveal the password itself. The one new reach: after a later
 `K_v` rotation (#128) meant to shut that person out, the stretched password they took would still match the
 password slots if the password was not changed at the same time. And a copy of the file taken during a transition
-keeps its escrow for good, like S2's old keyring copies (round 1, MiMo). Since the escrow now lasts until `finish`
-(round 1 simplification), `slots` and the last re-wrap say when `finish` is due (D20).
+keeps its escrow for good, like S2's old keyring copies (round 1, MiMo), and so do the `vault-password.bak-*`
+backups in each machine's config folder, which `finish` doesn't touch (round 2, MiMo M1). Since the escrow now lasts
+until `finish`
+(round 1 simplification), `slots` says when `finish` is due (D20).
 
 **S5. What a sync provider sees.** The file growing and shrinking (entry count), the generation, the `retiredAt`
 times, and which slots' bytes change when: so it learns that the password changed and when each machine unlocked
@@ -603,11 +653,13 @@ its intent record on disk (D9). The only failed hardware attempts left are those
 password at a prompt, which is today's behaviour, and the prompt names which of the two passwords it wants, plus
 S6 (a).
 
-**S8. Replayed old files** (round 1, MiMo I1). A folder writer who puts back a genuine old `vault-password` (and an
-old slot as a conflict copy) could make the union prefer the old blob, so the old password opens a keyring that
-looks current. D6's high-water mark refuses such a file on every machine that has seen a newer one, and D9/D14 never
-write from an unverified file; what is left is a machine that has never seen the newer file (it trusts the first it
-sees, as today) and S2's limit. Only #128 closes it.
+**S8. Replayed old files** (round 1, MiMo I1; reworded in round 2, MiMo I2). A folder writer who puts back a
+genuine old `vault-password` (its MACs are under the unchanged `K_v`, so it verifies) together with an old slot as a
+conflict copy makes the union prefer the old blob, so the old password opens a keyring that looks current. Nothing in
+this design stops that: a generation counter can be bumped, and the key check only proves the file belongs to this
+vault. What the design does guarantee is narrower: no keyring write persists a supersede resolution from a file that
+fails its key check (D14), and an accidental rollback never leads to a hardware attempt with a password the slot
+wasn't sealed with (D6). Only #128 closes the replay.
 
 ## Docs
 
@@ -653,19 +705,23 @@ TPM's dictionary-attack counter would.
    names it.
 7. **The backstop (D9).** A slot whose hardware refuses: one counted failure, the refused note, no further attempt
    over ten unlocks; `update` asks, then retries once. With `config.json` made unwritable: zero hardware attempts and
-   the warning line.
+   the warning line. A crash between the intent record and the attempt: no automatic attempt afterwards; a record next
+   to a slot already moved disappears at the next unlock.
 8. **Crash points.** Fail the process after the file write, after the new seal, and in the keyring write: after each,
    every slot opens with the password `slots` says it is on, and the next unlock finishes the move.
-9. **Conflicts and guards.** Keyring conflict copies with a slot old in one and re-wrapped in the other: every
+9. **Conflicts and guards.** (Also: `vault merge` adopting a descendant races a `change` in the same folder; a
+   `keep` and a second `change` leave every carried escrow decrypting and every verifier checking; `finish` succeeds
+   after an unlock through a password-free slot, with no password typed.) Keyring conflict copies with a slot old in one and re-wrapped in the other: every
    machine converges on the re-wrapped one, whichever copy is canonical. Two re-wraps of one YubiKey slot converge;
    an equal-rank TPM pair refuses loudly; a forged current-tagged blob displacing a YubiKey slot (the S6 cost, pinned).
    `change` racing `finish` and a second `change` in one folder: the guarded write lets exactly one through and the
    other writes nothing. Sibling files: the refusal text, then `keep`, then the other side's slots move at their next
    unlock; `keep` over a finished sibling asks for the kept password and refuses without a terminal; `keep` beyond the
    cap refuses.
-10. **Replay and rollback.** A machine that has seen generation 5 refuses a generation 3 file before any hardware
-    call; `keep` accepts it explicitly. A folder rolled back to the version 1 file with tagged slots: every tagged
-    password slot is set aside with zero hardware attempts (a likely Syncthing-versioning accident).
+10. **Rollback.** A folder rolled back to an older version 2 file, and one rolled back to the version 1 file, with
+    tagged slots: every slot whose id the file doesn't list is set aside with zero hardware attempts, the others open,
+    and restoring the newer file brings everything back (a likely Syncthing-versioning accident). `keep` with no
+    conflict copy prints "Nothing to keep." and writes nothing.
 11. **Finish.** `finish` strands the pending slots; a stranded slot is never tried (counter), `slots` says stranded,
     the machine gets in with the recovery key; `finish` twice prints "Nothing to finish."; a request made against a
     dropped entry is refused at `slot accept` with the D12 text.
@@ -700,6 +756,23 @@ TPM's dictionary-attack counter would.
 - Owner and mode of `vault-password`, the backup and `config.json` after a `sudo tswap vault password change` (D24).
 - Timing: the first unlock after a change on each machine (one extra seal and verify).
 
+## A leaner shape (owner choice)
+
+Two rounds of review have mostly found edges in the machinery for **rare** cases: two changes meeting in Syncthing
+(`keep`, D17), a second change before the first has finished (D15), and up to 3 previous entries. The owner can cut
+them without touching the binding decision:
+
+- **One transition at a time:** `change` refuses while a previous entry exists (`Run 'sudo tswap vault password
+  finish' first.`), so the file holds at most two entries.
+- **No `keep`:** two different `vault-password` files refuse as today and the person deletes one. Slots already
+  re-wrapped to the deleted password are then set aside with no hardware attempt (their id names no entry) and are
+  stranded: their machines get in another way and re-enrol.
+
+What it saves: D15, D17, the entry list beyond two, `keep`'s escrow and cap rules and its tests. What it costs: a
+leaked new password waits for `finish` (which strands slots still on the first password) before it can change again,
+and the rare two-changes-at-once case costs a re-enrolment instead of a command. **My recommendation: take the leaner
+shape** (owner question 7); the generation counter stays, since `vault merge` (the Mac) needs "descends from".
+
 ## Open questions for the owner
 
 Settled by round 1 and removed: version 2 forever (old question 3: the alternative is broken, D3), the agent restart
@@ -724,14 +797,15 @@ instead of a hand-over (old 6, D13), a confirmation instead of a version marker 
    the file it replaces.
 6. **Old copies (S2, S8):** document that only #128 revokes against old copies or a folder writer, and record on #128
    that its rotation must change the password together with `K_v`. **Recommendation: yes** (both reviewers).
+7. **The leaner shape** (above): one transition at a time and no `keep`. **Recommendation: yes**; rare cases cost a
+   `finish` first or a re-enrolment, and the design loses its least-used machinery.
 
 ## Left to the builder
 
 - The exact byte layouts (D1, D7), the new `TSYK` version numbers, and the message wording beyond what is quoted.
 - How the unlocker reports which slot opened and hands the payload to the re-wrap (today `Unlock` returns `K_v`
   only), and where the supersede ranking enters `KeyringUnion`.
-- The `config.json` fields for the intent record, the refused note and the high-water mark (D6, D9), and the agent
-  protocol status (D13).
+- The `config.json` fields for the intent record and the refused note (D9), and the agent protocol status (D13).
 
 ## Review history
 
@@ -740,7 +814,7 @@ One line per finding; "fixed" means the design changed as said.
 
 | Finding | Outcome |
 |---|---|
-| MiMo I1: anti-goal fails against a folder writer; ranking from an unauthenticated, replayable file | Fixed: anti-goal re-scoped, D6 high-water mark, D9 step 1 and D14 write only from a verified file, S8. |
+| MiMo I1: anti-goal fails against a folder writer; ranking from an unauthenticated, replayable file | Fixed: anti-goal re-scoped, D6 high-water mark (removed in round 2), D9 step 1 and D14 write only from a verified file, S8. |
 | MiMo I2: `keep` can't always escrow (finished sibling, password not in hand) | Fixed: escrow optional per entry (D1 flag, D5), current entry always escrowed, `keep` asks or refuses without a terminal (D17). |
 | MiMo I3: D8 ignores pass 4 and candidates on several entries | Fixed: D8 rewritten for all passes, one prompt, a fixed entry order, skipped-candidate lines. |
 | MiMo M1: classification with a version 1 file; `init`'s version | Fixed: D4, D3. |
@@ -767,3 +841,34 @@ One line per finding; "fixed" means the design changed as said.
 | GLM M-7: zeroing | Fixed: D25. |
 | GLM M-8: tests for the race, rollback to v1, equal-rank displacement | Fixed: tests 9 and 10. |
 | GLM M-9: "back to version 1" is broken, not just a second rule | Fixed: D3; question settled. |
+
+Round 2 (2026-11-17), scoped on 3fa494a..0f80554. MiMo: "ready for the owner: no" (C1, I1–I3, M1–M6). GLM: "yes"
+(no Critical, I-1, I-2, M-1–M-6, nits). Both confirmed every round-1 resolution except where listed below.
+
+| Finding | Outcome |
+|---|---|
+| MiMo C1: the verifier binds a header that `finish`, `keep` and a second `change` mutate | Fixed by simplifying the crypto: verifier and escrow bind only the entry's immutable part, the whole-file key check binds the rest and every writer recomputes it (D1); no writer ever needs a stretched password it lacks (D12). |
+| MiMo I1: `keep` over a rolled-back lone file strands slots without `finish`'s listing | Fixed: the high-water mark that offered this is removed (D6), and `keep` needs a conflict copy, else "Nothing to keep." (D17). |
+| MiMo I2: S8 and D14 over-claim; a writer bumps the generation | Fixed: the high-water mark is removed as the wrong tool (D6); S8 reworded to what is guaranteed; every keyring write that persists a supersede verifies the key check first (D14). |
+| MiMo I3: `vault merge` and the existing fill-in paths write the file the simplification says nobody writes | Fixed: D21 lists every writer, replace (guarded) or fill-only; the simplification now says "no unlock writes it". |
+| MiMo M1: escrow AAD undefined; backups keep escrow | Fixed: AAD = the entry's immutable part, escrows carried byte for byte (D1, D5); S4 names the backups. |
+| MiMo M2: backup name inverts `FileBackup`'s and has colons | Fixed: `vault-password.bak-<yyyyMMddTHHmmssfffZ>` through `FileBackup.Copy` (D21). |
+| MiMo M3: stale intent record after a crash | Fixed: counts as refused; deleted when the slot already moved (D9); test 7. |
+| MiMo M4: "every slot" claims knowledge of pending requests | Fixed: D20 says "in this vault's keyring" and names pending requests. |
+| MiMo M5: stale question number in S2 | Fixed. |
+| MiMo M6: reviewer report paths unfollowable from the repo | Partly: the home-directory paths are gone and every finding is quoted here; the reports themselves stay with the brief records (this round's brief was to commit only the design). |
+| MiMo over-specification: "encoding left to the builder" above fixed formulas | Fixed: D1 says what is fixed (fields, order, MAC and AEAD inputs) and what is left. |
+| GLM I-1: `vault merge` is a write path the simplification denies | Fixed with MiMo I3 (D18, D21). |
+| GLM I-2: carried escrows must be re-encrypted under the new AAD | Fixed differently: the AAD no longer contains anything a write changes, so escrows are carried byte for byte (D1, D5); test 9. |
+| GLM M-1: when the mark rises; "largest seen"; `finish` needs `K_v` | (a) moot, mark removed; (b) the largest of the files read, + 1 (D6); (c) `finish` unlocks (D12). |
+| GLM M-2: scope of the D6 refusal; version 1 files vs the mark | Moot: the mark and its refusal are removed; conflicts keep refusing password use only, as today. |
+| GLM M-3: two local re-wraps meet D14's equal-rank refusal | Fixed: a writer against the disk drops its own slot silently; the refusal is for copies (D10). |
+| GLM M-4: stale intent record | Fixed with MiMo M3. |
+| GLM M-5: which entry a typed password belongs to outside the passes | Fixed: D8's order for `agent start` and `broker unlock`; `keep` prompts with the named file (D17); `update` asks once per escrow-less entry (D21). |
+| GLM M-6: `keep` with nothing to resolve | Fixed: "Nothing to keep.", exit 0 (D17). |
+| GLM nit: backup name | Fixed with MiMo M2. |
+| GLM nit: forged id and YubiKey/FIDO2 | Fixed: D7 states both cases. |
+| GLM nit: the "never converge" reason for rejecting canonical preference is overstated | Accepted: it converges only after another conflict round, and it would let a sync tool's naming decide the winner; the round-1 row stays as the record, this row corrects it. |
+| GLM nit: D20 unknown line misses a missing file; post-re-wrap print over-specified | Fixed: both (D20). |
+| GLM nit: reviewer paths in Status | Fixed with MiMo M6. |
+| Complexity (coordinator's question) | Two of the round-2 findings came from round-1 machinery (the high-water mark, `keep` as "accept this file"); the mark is removed, and a leaner shape that also drops `keep` and a second change during a transition is offered to the owner (question 7). |
