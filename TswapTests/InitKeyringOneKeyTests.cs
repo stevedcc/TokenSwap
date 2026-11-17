@@ -45,6 +45,20 @@ public class InitKeyringOneKeyTests : IDisposable
 
     private byte[] Unlock() => new VaultUnlocker(_keys).Unlock(LoadConfig(), s => s[0]);
 
+    // Brief T35 (#294 leftover): the header and closing line name sudo or an elevated prompt, as init --fido2 does.
+    [Fact]
+    public void InitYubiKey_HeaderAndClosingLine_SaySudoOrAnElevatedPrompt()
+    {
+        _keys.PluggedIn = [SerialA];
+
+        var (exit, stdout, stderr) = Run("", "init", "--yubikey");
+
+        Assert.True(exit == 0, stderr);
+        Assert.Contains("slot that opens the vault alone: tswap slot add --yubikey (with sudo, or from an elevated prompt on Windows)", stdout);
+        Assert.Contains("  tswap slot add --yubikey (with sudo, or from an elevated prompt on Windows)", stdout);
+        Assert.DoesNotContain("alone: sudo tswap", stdout);
+    }
+
     [Fact]
     public void OneKeyPluggedIn_OneYubiKeySlotPlusRecovery_NoPairFieldsInConfig()
     {

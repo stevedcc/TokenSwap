@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using RedactingPty;
 using TswapCore;
@@ -79,11 +80,12 @@ public sealed partial class RunCommand : ICliCommand
 
         // Block obvious attempts to exfiltrate secrets via run: the blocklist, and shells or
         // interpreters given inline code (#105). Pre-substitution check catches them in the template.
-        ThrowIfBlocked(Validation.GetBlockedInvocation(commandArgs));
+        var windows = ctx.Os == OSPlatform.Windows;
+        ThrowIfBlocked(Validation.GetBlockedInvocation(commandArgs), windows);
         // Issue #251: with a {{@file}} token, no word of the command may print, encode or copy files,
         // or be a shell or interpreter, and the file is never the program.
         if (fileTokens.Count > 0)
-            ThrowIfBlocked(Validation.GetFileTokenRefusal(commandArgs));
+            ThrowIfBlocked(Validation.GetFileTokenRefusal(commandArgs), windows);
 
         // Block shell output redirection in the command template (secrets could be written
         // to readable files). Note: this check runs before token substitution. Secret values
@@ -93,7 +95,7 @@ public sealed partial class RunCommand : ICliCommand
             throw new TswapException(
                 "Pipes and output redirection are not allowed in 'run' commands.\n" +
                 "Secrets could be captured to files or piped to other programs.\n" +
-                "Use 'sudo ... get <name>' to retrieve a secret value.");
+                RetrieveSecretLine(windows));
 
         var filesEnv = fileTokens.Count > 0 ? ctx.FilledFilesEnvironment ?? FilledFilesEnvironment.FromSystem() : null;
         // Root never creates a secret file in a user's folder (Windows: an elevated tswap is allowed;
@@ -237,14 +239,15 @@ public sealed partial class RunCommand : ICliCommand
                 if (Validation.GetBlockedInvocation(argv) is { } blocked)
                 {
                     if (secretValues.Count == 0)
-                        ThrowIfBlocked(blocked);
+                        ThrowIfBlocked(blocked, windows);
                     var named = NameCulprit(commandArgs, secretValues, filePaths,
                         a => Validation.GetBlockedInvocation(a) is not null, "makes", "together make");
                     throw new TswapException(
                         $"After substitution, {named} this a command 'run' refuses, which could expose secret values: " +
                         "a program that prints its arguments or environment, or a shell or interpreter given inline code " +
                         "or code from stdin, which can print them past redaction. The refusal doesn't repeat the word, " +
-                        "which came from a secret's value.\nUse 'sudo ... get <name>' to view a secret.");
+                        "which came from a secret's value.\n" +
+                        ViewSecretLine(windows));
                 }
 
                 // Show the sanitised command
@@ -482,9 +485,28 @@ public sealed partial class RunCommand : ICliCommand
                $"PowerShell does to an unquoted token; it is passed on as it is. Quote it: '{{{shown}}}'.";
     }
 
-    private static void ThrowIfBlocked(Validation.BlockedInvocation? blocked)
+    /// <summary>Brief T35 (#348.3): how to view a secret instead; Windows has no sudo, but an elevated prompt.</summary>
+    internal static string ViewSecretLine(bool windows) => windows
+        ? "Use '... get <name>' from an elevated command prompt to view a secret."
+        : "Use 'sudo ... get <name>' to view a secret.";
+
+    /// <summary>Brief T35: the pipe refusal's line, as <see cref="ViewSecretLine"/>.</summary>
+    internal static string RetrieveSecretLine(bool windows) => windows
+        ? "Use '... get <name>' from an elevated command prompt to retrieve a secret value."
+        : "Use 'sudo ... get <name>' to retrieve a secret value.";
+
+    /// <summary>
+    /// Brief T35: a refusal's reason for this OS. <see cref="Validation.GetBlockedInvocation"/> builds every reason
+    /// with the Unix way out, appended whole (also inside find -exec and wrapper prefixes); on Windows that sentence
+    /// is swapped for the PowerShell one. This relies on the sentence being appended whole, which
+    /// RunWindowsWordingTests.EveryWayOutReason_EndsWithTheWholeSentence pins.
+    /// </summary>
+    internal static string Reason(Validation.BlockedInvocation blocked, bool windows) =>
+        windows ? blocked.Reason.Replace(Validation.WayOutFor(false), Validation.WayOutFor(true), StringComparison.Ordinal) : blocked.Reason;
+
+    private static void ThrowIfBlocked(Validation.BlockedInvocation? blocked, bool windows)
     {
         if (blocked is not null)
-            throw new TswapException($"{blocked.Reason}\nUse 'sudo ... get <name>' to view a secret.");
+            throw new TswapException($"{Reason(blocked, windows)}\n{ViewSecretLine(windows)}");
     }
 }
