@@ -920,20 +920,44 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
             Directory.CreateDirectory(HostDir);
             Directory.CreateDirectory(JoinerDir);
             Directory.CreateDirectory(BinDir);
-            var init = Start(HostDir, binaryPath, ["init", "--tpm", "--no-password", "--no-recovery"]);
-            init.StandardInput.Close();
-            var initOut = init.StandardOutput.ReadToEnd() + init.StandardError.ReadToEnd();
-            init.WaitForExit();
-            Assert.True(init.ExitCode == 0, "host init failed: " + initOut);
+            using (var init = Start(HostDir, binaryPath, ["init", "--tpm", "--no-password", "--no-recovery"]))
+            {
+                init.StandardInput.Close();
+                // Review round 3 (3): both pipes read at once (neither can fill and block init), and a bounded wait.
+                var stdout = init.StandardOutput.ReadToEndAsync();
+                var stderr = init.StandardError.ReadToEndAsync();
+                if (!init.WaitForExit(TimeSpan.FromSeconds(30)))
+                {
+                    init.Kill(entireProcessTree: true);
+                    init.WaitForExit(TimeSpan.FromSeconds(10));
+                    Assert.Fail("the host's init didn't finish within 30 s");
+                }
+                init.WaitForExit(); // the exit is known; this only lets the two reads finish
+                Assert.True(Task.WaitAll([stdout, stderr], TimeSpan.FromSeconds(10)), "the host's init output wasn't read to its end");
+                Assert.Equal(0, init.ExitCode);
+            }
 
-            // ssh [-T|-t] [-o ...]... -- <destination> <remote command>; '-O exit -- <destination>' ends a shared session.
+            // ProcessSshTransport's two shapes (BuildArgv, EndSession): 'ssh -T|-t [-o ControlMaster=auto -o ControlPath=<p>
+            // -o ControlPersist=60] -- <destination> <remote command as one word>', and 'ssh -o ControlPath=<p> -O exit --
+            // <destination>', which ends a shared session. Review round 3 (4): anything else fails loudly (exit 97), and the
+            // command is passed on whole ("$*", so no word after the first is dropped should it ever come split).
             var ssh = Path.Combine(BinDir, "ssh");
             File.WriteAllText(ssh,
                 "#!/bin/sh\n" +
-                "while [ $# -gt 0 ]; do\n  if [ \"$1\" = \"--\" ]; then shift; break; fi\n  shift\ndone\n" +
-                "shift\n" +
-                "[ $# -eq 0 ] && exit 0\n" +
-                "exec sh -c \"$1\"\n");
+                "argv=\"$*\"\n" +
+                "found=0\nend=0\n" +
+                "while [ $# -gt 0 ]; do\n" +
+                "  a=\"$1\"; shift\n" +
+                "  if [ \"$a\" = \"--\" ]; then found=1; break; fi\n" +
+                "  if [ \"$a\" = \"-O\" ] && [ \"${1:-}\" = \"exit\" ]; then end=1; fi\n" +
+                "done\n" +
+                "if [ $found -eq 0 ] || [ $# -lt 1 ]; then echo \"fake ssh: unexpected argv: $argv\" >&2; exit 97; fi\n" +
+                "shift\n" + // the destination
+                "if [ $# -eq 0 ]; then\n" +
+                "  if [ $end -eq 1 ]; then exit 0; fi\n" +
+                "  echo \"fake ssh: unexpected argv: $argv\" >&2; exit 97\n" +
+                "fi\n" +
+                "exec sh -c \"$*\"\n");
             File.WriteAllText(HostWrapper,
                 $"#!/bin/sh\nTSWAP_CONFIG_DIR='{HostDir}' exec '{binaryPath}' \"$@\"\n");
             if (OperatingSystem.IsWindows())
@@ -995,21 +1019,33 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
                 psi.ArgumentList.Add("bash");
             psi.ArgumentList.Add(script);
             Environment(psi.Environment, JoinerDir);
+            Process? process = null;
             try
             {
-                using var process = Process.Start(psi)!;
+                process = Process.Start(psi)!;
                 var driver = new PtyDriver(masterFd, slaveFd, process);
                 drive(driver);
                 var killed = !driver.WaitForExit(TimeSpan.FromSeconds(60));
                 if (killed)
                 {
                     process.Kill(entireProcessTree: true);
-                    process.WaitForExit();
+                    Assert.True(process.WaitForExit(TimeSpan.FromSeconds(10)), "tswap's process tree didn't end after the kill");
                 }
                 return (process.ExitCode, driver.Output, killed);
             }
             finally
             {
+                // Review round 3 (2): on every path, a failed assertion in drive included, the tree is killed and reaped
+                // before the terminal's fds close, so no tswap, bash or setsid outlives the test.
+                if (process is not null)
+                {
+                    if (!process.HasExited)
+                    {
+                        process.Kill(entireProcessTree: true);
+                        process.WaitForExit(TimeSpan.FromSeconds(10));
+                    }
+                    process.Dispose();
+                }
                 if (masterFd != -1) PtyClose(masterFd);
                 if (slaveFd != -1) PtyClose(slaveFd); // held as the anchor against an early EOF (#234)
             }
@@ -1022,10 +1058,11 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     /// </summary>
     private sealed class PtyDriver(int masterFd, int slaveFd, Process process)
     {
-        private readonly StringBuilder _output = new();
+        private readonly MemoryStream _output = new();
         private readonly byte[] _buf = new byte[4096];
 
-        public string Output => _output.ToString();
+        /// <summary>Everything read so far, decoded at once (review round 3 (6): a UTF-8 sequence split across reads stays whole).</summary>
+        public string Output => Encoding.UTF8.GetString(_output.GetBuffer(), 0, (int)_output.Length);
 
         /// <summary>Reads what is ready within <paramref name="waitMs"/>; true when something was read.</summary>
         private bool Pump(int waitMs)
@@ -1037,7 +1074,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
             int n = (int)PtyRead(masterFd, _buf, (nint)_buf.Length);
             if (n <= 0)
                 return false;
-            _output.Append(Encoding.UTF8.GetString(_buf, 0, n));
+            _output.Write(_buf, 0, n);
             return true;
         }
 
@@ -1106,6 +1143,16 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     [DllImport("libc", EntryPoint = "tcgetattr", SetLastError = true)]
     private static extern int PtyGetAttr(int fd, [Out] byte[] termios);
 
+    /// <summary>
+    /// Review round 3 (1): these tests run on Linux and macOS only ([UnixFact]), where openpty must exist; its absence
+    /// (neither libc nor libutil exports it, <see cref="OpenPty"/>'s sentinel) is a failure, never a silent pass.
+    /// </summary>
+    private static Exception OpenPtyUnavailable()
+    {
+        Assert.Fail("openpty is not available here (neither libc nor libutil exports it), on a platform this test covers");
+        return new UnreachableException();
+    }
+
     private const string EnterGatePrompt = "Press Enter to accept it here. ";
     private const string NotConfirmed = "The approve file's fingerprint wasn't confirmed, so it was not accepted. This machine's pending request is kept;";
 
@@ -1113,8 +1160,8 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     private static void AssertTheRequestIsKept(EnrolOnPty enrol, byte[] hostKeyring, int exitCode, string output, bool killed)
     {
         Assert.False(killed, "tswap didn't exit by itself; the terminal showed:\n" + output);
-        Assert.True(exitCode == 1, $"exit {exitCode} (130 or a signal: not the gate's own refusal); the terminal showed:\n{output}");
         Assert.Contains(NotConfirmed, output.ReplaceLineEndings(" ").Replace("  ", " "));
+        Assert.Equal(1, exitCode); // not 130 or a signal: the gate's own refusal
         var folder = Assert.Single(Directory.GetDirectories(Path.Combine(enrol.JoinerDir, "enrol")));
         Assert.True(File.Exists(Path.Combine(folder, "request.json")));
         Assert.False(File.Exists(Path.Combine(folder, "approve.json")), "approve.json was left behind");
@@ -1137,7 +1184,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
                 pty.Type("\x03");
                 pty.WaitFor("wasn't confirmed");
             }) is not var (exitCode, output, killed))
-            return; // openpty not available on this platform
+            throw OpenPtyUnavailable();
 
         AssertTheRequestIsKept(enrol, hostKeyring, exitCode, output, killed);
     }
@@ -1156,7 +1203,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
                 pty.Type("\x04");
                 pty.WaitFor("wasn't confirmed");
             }) is not var (exitCode, output, killed))
-            return; // openpty not available on this platform
+            throw OpenPtyUnavailable();
 
         AssertTheRequestIsKept(enrol, hostKeyring, exitCode, output, killed);
     }
@@ -1183,7 +1230,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
                 pty.Type("\x03");
                 pty.WaitFor("wasn't confirmed");
             }) is not var (exitCode, output, killed))
-            return; // openpty not available on this platform
+            throw OpenPtyUnavailable();
 
         Assert.Contains("(what you typed was not shown or used).", afterGate);
         Assert.DoesNotContain("zq7x", output);
