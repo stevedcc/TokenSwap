@@ -39,6 +39,52 @@ public sealed class SystemConsole : IConsole
     public void SetForeground(ConsoleColor colour) => Console.ForegroundColor = colour;
     public void ResetColor() => Console.ResetColor();
 
+    /// <summary>
+    /// Brief T34 (#337.5): one line that shows nothing. Piped: the line as it is. On a terminal: what was typed before is
+    /// discarded (#293), then keys are read without echo (as <see cref="ReadPassword"/>, but writing nothing at all):
+    /// Enter returns the text, Ctrl-C throws <see cref="OperationCanceledException"/>, Ctrl-D on an empty line is the
+    /// end of input (null) and is ignored mid-line, Backspace removes the last character, other control keys are ignored.
+    /// </summary>
+    public string? ReadLineWithoutEcho()
+    {
+        if (_input.IsInputRedirected)
+            return _input.ReadLine();
+
+        _input.DiscardTypeahead();
+        var prevTreatCtrlC = _input.TreatControlCAsInput;
+        _input.TreatControlCAsInput = true;
+        try
+        {
+            var line = new StringBuilder();
+            while (true)
+            {
+                var key = _input.ReadKey();
+                if (key.Key == ConsoleKey.Enter)
+                    return line.ToString();
+                var control = key.Modifiers.HasFlag(ConsoleModifiers.Control);
+                if (key.Key == ConsoleKey.C && control)
+                    throw new OperationCanceledException();
+                if (key.Key == ConsoleKey.D && control)
+                {
+                    if (line.Length == 0)
+                        return null;
+                    continue;
+                }
+                if (key.Key == ConsoleKey.Backspace)
+                {
+                    if (line.Length > 0)
+                        line.Remove(line.Length - 1, 1);
+                }
+                else if (!char.IsControl(key.KeyChar))
+                    line.Append(key.KeyChar);
+            }
+        }
+        finally
+        {
+            _input.TreatControlCAsInput = prevTreatCtrlC;
+        }
+    }
+
     public string ReadPassword(TextWriter? echo = null)
     {
         echo ??= Console.Out;

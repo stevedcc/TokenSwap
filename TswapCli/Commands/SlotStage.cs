@@ -82,6 +82,11 @@ public sealed partial class SlotCommand
                 if (!ctx.Console.IsInputRedirected)
                     throw new TswapException(
                         $"slot stage: put reads the {fileWhat} from stdin, and stdin is a terminal here. Pipe the file in.");
+                // Brief T34 ruling: no byte-stream seam. put and get go through the console's text encoding, which is safe
+                // because every file an enrolment carries is tswap's own JSON (System.Text.Json's default encoder escapes
+                // every non-ASCII character), so pure ASCII that no code page changes; anything else fails safe as a hash
+                // mismatch (ReadStaged) or a parse failure. The cost: a raw non-ASCII byte through a non-UTF-8 Windows
+                // console would be refused, not carried. Pinned by SlotStageTests.EnrolmentFiles_AreAscii_SoNoConsoleEncodingChangesThem.
                 var text = ReadBoundedStdin(ctx, "slot stage", fileWhat);
                 CreatePrivateFolder(Path.GetDirectoryName(folder)!, folder);
                 // Verbatim (A1): the bytes the joining machine sent and hashed, no newline, BOM or line-ending change.
@@ -96,6 +101,7 @@ public sealed partial class SlotCommand
                 var bytes = File.ReadAllBytes(path);
                 try
                 {
+                    // Through the console's text encoding: safe for tswap's own ASCII JSON (the ruling at put above).
                     ctx.Console.Out.Write(Encoding.UTF8.GetString(bytes));
                     ctx.Console.Out.Flush();
                 }
@@ -143,6 +149,10 @@ public sealed partial class SlotCommand
             throw new TswapException(
                 $"No staged {what} for {id} in {folder}. If the SSH user sets TSWAP_CONFIG_DIR or XDG_CONFIG_HOME, sudo doesn't " +
                 $"see it: see docs/multi-machine.md#enrolling-over-ssh. Nothing was {verb}.");
+        // Brief T34 (#331): refused by its length before it is read (a huge file isn't read into memory); the check after
+        // the read stays, since the file can grow in between.
+        if (owner.AsOwner(path, () => new FileInfo(path).Length) > MaxStdinFileSize)
+            throw new TswapException($"The staged {what} is larger than 1 MiB, so it is not a {what}. Nothing was {verb}.");
         var bytes = owner.ReadAllBytes(path);
         if (bytes.Length > MaxStdinFileSize)
             throw new TswapException($"The staged {what} is larger than 1 MiB, so it is not a {what}. Nothing was {verb}.");

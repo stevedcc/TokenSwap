@@ -49,6 +49,9 @@ public sealed class FleetMachine : IDisposable
     /// <summary>Brief T28: the seams of the staged approve and merge (null: none).</summary>
     public TswapCli.Commands.StagedFileSeams? StagedSeams { get; set; }
 
+    /// <summary>Brief T34: the seam of <c>slot enrol</c>'s local file access (null: none).</summary>
+    public TswapCli.Commands.EnrolFileSeams? EnrolSeams { get; set; }
+
     /// <summary>
     /// Guided init: the chip this machine's <c>init</c> sees, instead of the one <see cref="SecureEnclave"/> /
     /// <see cref="Tpm"/> give (null: those), e.g. a chip that is present but unusable.
@@ -141,6 +144,13 @@ public sealed class FleetMachine : IDisposable
         Run(new FakeConsole(stdin) { IsInputRedirected = false }, args);
 
     /// <summary>
+    /// Brief T34: as <see cref="RunOnTerminal"/>, with the terminal showing what is typed at a line read
+    /// (<see cref="FakeConsole.EchoesTypedLines"/>), so a test can tell a read that shows nothing.
+    /// </summary>
+    public (int Exit, string Out, string Err) RunOnEchoingTerminal(string stdin, params string[] args) =>
+        Run(new FakeConsole(stdin) { IsInputRedirected = false, EchoesTypedLines = true }, args);
+
+    /// <summary>
     /// Brief T17 task 11: the <c>TSWAP_AGENT_SOCK</c> value this machine's commands see. By default a socket in
     /// this machine's own folder, so a test never meets the user's real agent; null models an unset variable
     /// (sudo drops it), where the path comes from the vault owner's uid.
@@ -188,6 +198,7 @@ public sealed class FleetMachine : IDisposable
         {
             MigrationSeams = MigrationSeams,
             StagedSeams = StagedSeams,
+            EnrolSeams = EnrolSeams,
             Time = Time ?? TimeProvider.System,
             ChipProbe = ChipOverride ?? (() => new MachineChip(SecureEnclave is not null ? HardwareBackend.SecureEnclave : Tpm is not null ? HardwareBackend.Tpm : null, null)),
             Fido2 = fido2,

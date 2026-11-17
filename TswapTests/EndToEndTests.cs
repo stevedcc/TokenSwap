@@ -897,6 +897,346 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         }
     }
 
+    // --- brief T34 review round 1: the Enter gate of 'slot enrol' on a real terminal ---
+
+    /// <summary>
+    /// The joining machine's view of an interactive <c>slot enrol --via</c> on a real pseudo-terminal: a fake <c>ssh</c>
+    /// first on PATH (it drops ssh's options and the destination and runs the remote command), and a host whose
+    /// <c>--remote-tswap</c> wrapper runs this binary with the host's own config folder. Both sides use the simulated TPM
+    /// of test mode, so nothing asks a question before the Enter gate. Where <c>setsid</c> exists (Linux), the terminal
+    /// is tswap's controlling terminal, so a Ctrl-C the line discipline doesn't pass through is a real SIGINT.
+    /// </summary>
+    private sealed class EnrolOnPty(string tempDir, string binaryPath, string testKeyHex)
+    {
+        public string HostDir { get; } = Path.Combine(tempDir, "host");
+        public string JoinerDir { get; } = Path.Combine(tempDir, "joiner");
+        private string BinDir => Path.Combine(tempDir, "bin");
+        private string HostWrapper => Path.Combine(BinDir, "host-tswap");
+        public string HostKeyringPath => Path.Combine(HostDir, "vault", "keyring");
+
+        /// <summary>The host's TPM vault, the fake ssh and the host wrapper.</summary>
+        public void SetUp()
+        {
+            Directory.CreateDirectory(HostDir);
+            Directory.CreateDirectory(JoinerDir);
+            Directory.CreateDirectory(BinDir);
+            using (var init = Start(HostDir, binaryPath, ["init", "--tpm", "--no-password", "--no-recovery"]))
+            {
+                init.StandardInput.Close();
+                // Review round 3 (3): both pipes read at once (neither can fill and block init), and a bounded wait.
+                var stdout = init.StandardOutput.ReadToEndAsync();
+                var stderr = init.StandardError.ReadToEndAsync();
+                if (!init.WaitForExit(TimeSpan.FromSeconds(30)))
+                {
+                    init.Kill(entireProcessTree: true);
+                    init.WaitForExit(TimeSpan.FromSeconds(10));
+                    Assert.Fail("the host's init didn't finish within 30 s");
+                }
+                init.WaitForExit(); // the exit is known; this only lets the two reads finish
+                Assert.True(Task.WaitAll([stdout, stderr], TimeSpan.FromSeconds(10)), "the host's init output wasn't read to its end");
+                Assert.Equal(0, init.ExitCode);
+            }
+
+            // ProcessSshTransport's two shapes (BuildArgv, EndSession): 'ssh -T|-t [-o ControlMaster=auto -o ControlPath=<p>
+            // -o ControlPersist=60] -- <destination> <remote command as one word>', and 'ssh -o ControlPath=<p> -O exit --
+            // <destination>', which ends a shared session. Review round 3 (4): anything else fails loudly (exit 97), and the
+            // command is passed on whole ("$*", so no word after the first is dropped should it ever come split).
+            var ssh = Path.Combine(BinDir, "ssh");
+            File.WriteAllText(ssh,
+                "#!/bin/sh\n" +
+                "argv=\"$*\"\n" +
+                "found=0\nend=0\n" +
+                "while [ $# -gt 0 ]; do\n" +
+                "  a=\"$1\"; shift\n" +
+                "  if [ \"$a\" = \"--\" ]; then found=1; break; fi\n" +
+                "  if [ \"$a\" = \"-O\" ] && [ \"${1:-}\" = \"exit\" ]; then end=1; fi\n" +
+                "done\n" +
+                "if [ $found -eq 0 ] || [ $# -lt 1 ]; then echo \"fake ssh: unexpected argv: $argv\" >&2; exit 97; fi\n" +
+                "shift\n" + // the destination
+                "if [ $# -eq 0 ]; then\n" +
+                "  if [ $end -eq 1 ]; then exit 0; fi\n" +
+                "  echo \"fake ssh: unexpected argv: $argv\" >&2; exit 97\n" +
+                "fi\n" +
+                "exec sh -c \"$*\"\n");
+            File.WriteAllText(HostWrapper,
+                $"#!/bin/sh\nTSWAP_CONFIG_DIR='{HostDir}' exec '{binaryPath}' \"$@\"\n");
+            if (OperatingSystem.IsWindows())
+                return; // the callers are Unix-only ([UnixFact]); this keeps the analyser satisfied
+            const UnixFileMode Exec = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+            File.SetUnixFileMode(ssh, Exec);
+            File.SetUnixFileMode(HostWrapper, Exec);
+        }
+
+        private Process Start(string configDir, string program, string[] args)
+        {
+            var psi = new ProcessStartInfo(program)
+            {
+                RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
+                UseShellExecute = false, CreateNoWindow = true,
+            };
+            foreach (var a in args)
+                psi.ArgumentList.Add(a);
+            Environment(psi.Environment, configDir);
+            return Process.Start(psi)!;
+        }
+
+        private void Environment(IDictionary<string, string?> env, string configDir)
+        {
+            env["TSWAP_TEST_KEY"] = testKeyHex;
+            env["TSWAP_TEST_SUDO_BYPASS"] = "1";
+            env["TSWAP_CONFIG_DIR"] = configDir;
+            env["PATH"] = BinDir + ":" + System.Environment.GetEnvironmentVariable("PATH");
+            // The shared-connection socket folder: inside the test's folder, never the user's runtime folder.
+            var run = Path.Combine(tempDir, "run");
+            Directory.CreateDirectory(run);
+            env["XDG_RUNTIME_DIR"] = run;
+            env.Remove("SUDO_USER");
+        }
+
+        /// <summary>
+        /// Runs <c>slot enrol</c> on the joining side with its stdin, stdout and stderr on a new pseudo-terminal's slave,
+        /// and hands <paramref name="drive"/> a session on the master. Null where openpty isn't available.
+        /// </summary>
+        public (int ExitCode, string Output, bool Killed)? Run(Action<PtyDriver> drive)
+        {
+            var nameBuf = new byte[256];
+            int masterFd = -1, slaveFd = -1;
+            int ptyRet = OpenPty(ref masterFd, ref slaveFd, nameBuf);
+            if (ptyRet == int.MinValue)
+                return null;
+            if (ptyRet < 0)
+                throw new Exception($"openpty failed (errno {Marshal.GetLastPInvokeError()})");
+            var slavePath = Encoding.ASCII.GetString(nameBuf, 0, Array.IndexOf(nameBuf, (byte)0) is int z and >= 0 ? z : nameBuf.Length);
+            var script = Path.Combine(tempDir, "enrol-on-pty.sh");
+            File.WriteAllText(script,
+                "#!/bin/bash\n" +
+                $"exec <\"{slavePath}\" >\"{slavePath}\" 2>\"{slavePath}\"\n" +
+                $"exec \"{binaryPath}\" slot enrol --via me@host --tpm --no-password --no-remote-sudo --remote-tswap \"{HostWrapper}\"\n");
+            // setsid: a new session, whose leader (bash, then tswap) takes the slave it opens as its controlling terminal.
+            var setsid = File.Exists("/usr/bin/setsid") ? "/usr/bin/setsid" : null;
+            var psi = new ProcessStartInfo(setsid ?? "bash") { UseShellExecute = false, CreateNoWindow = true };
+            if (setsid is not null)
+                psi.ArgumentList.Add("bash");
+            psi.ArgumentList.Add(script);
+            Environment(psi.Environment, JoinerDir);
+            Process? process = null;
+            try
+            {
+                process = Process.Start(psi)!;
+                var driver = new PtyDriver(masterFd, slaveFd, process);
+                drive(driver);
+                var killed = !driver.WaitForExit(TimeSpan.FromSeconds(60));
+                if (killed)
+                {
+                    process.Kill(entireProcessTree: true);
+                    Assert.True(process.WaitForExit(TimeSpan.FromSeconds(10)), "tswap's process tree didn't end after the kill");
+                }
+                return (process.ExitCode, driver.Output, killed);
+            }
+            finally
+            {
+                // Review round 3 (2): on every path, a failed assertion in drive included, the tree is killed and reaped
+                // before the terminal's fds close, so no tswap, bash or setsid outlives the test.
+                if (process is not null)
+                {
+                    if (!process.HasExited)
+                    {
+                        process.Kill(entireProcessTree: true);
+                        process.WaitForExit(TimeSpan.FromSeconds(10));
+                    }
+                    process.Dispose();
+                }
+                if (masterFd != -1) PtyClose(masterFd);
+                if (slaveFd != -1) PtyClose(slaveFd); // held as the anchor against an early EOF (#234)
+            }
+        }
+    }
+
+    /// <summary>
+    /// A pseudo-terminal's master side: what the child wrote so far, and typing into it. Every wait is poll() on the
+    /// master with a deadline, never a sleep.
+    /// </summary>
+    private sealed class PtyDriver(int masterFd, int slaveFd, Process process)
+    {
+        private readonly MemoryStream _output = new();
+        private readonly byte[] _buf = new byte[4096];
+
+        /// <summary>Everything read so far, decoded at once (review round 3 (6): a UTF-8 sequence split across reads stays whole).</summary>
+        public string Output => Encoding.UTF8.GetString(_output.GetBuffer(), 0, (int)_output.Length);
+
+        /// <summary>Reads what is ready within <paramref name="waitMs"/>; true when something was read.</summary>
+        private bool Pump(int waitMs)
+        {
+            var pfd = new TestPollFd { fd = masterFd, events = 1 };
+            int pr = PtyPoll(ref pfd, 1, waitMs);
+            if (pr <= 0)
+                return false;
+            int n = (int)PtyRead(masterFd, _buf, (nint)_buf.Length);
+            if (n <= 0)
+                return false;
+            _output.Write(_buf, 0, n);
+            return true;
+        }
+
+        private static int Count(string text, string part) => text.Split(part).Length - 1;
+
+        /// <summary>Reads until <paramref name="text"/> has appeared <paramref name="times"/> times (or tswap exited, or the deadline).</summary>
+        public void WaitFor(string text, int times = 1, int seconds = 60)
+        {
+            var deadline = DateTime.UtcNow.AddSeconds(seconds);
+            while (Count(Output, text) < times)
+            {
+                if (process.HasExited)
+                {
+                    while (Pump(0)) { }
+                    Assert.True(Count(Output, text) >= times, $"'{text}' (x{times}) never appeared before tswap exited; the terminal showed:\n{Output}");
+                    return;
+                }
+                Assert.True(DateTime.UtcNow < deadline, $"'{text}' (x{times}) never appeared; the terminal showed:\n{Output}");
+                Pump(200);
+            }
+        }
+
+        /// <summary>
+        /// Reads until the terminal is in .NET's key-read mode (ICANON off: tswap is inside <c>Console.ReadKey</c>, after
+        /// its type-ahead discard, #293). Keys typed before that could be discarded, or, before the read has switched ISIG
+        /// off, turned into a SIGINT by the line discipline, as for a person typing Ctrl-C before the prompt's read starts.
+        /// </summary>
+        public void WaitForKeyRead(int seconds = 60)
+        {
+            var deadline = DateTime.UtcNow.AddSeconds(seconds);
+            while (LocalFlags() is var flags && (flags & Icanon) != 0)
+            {
+                Assert.True(!process.HasExited && DateTime.UtcNow < deadline,
+                    $"tswap never entered a key read (c_lflag 0x{flags:x}); the terminal showed:\n{Output}");
+                Pump(50);
+            }
+        }
+
+        private static ulong Icanon => OperatingSystem.IsMacOS() ? 0x100UL : 0x2UL;
+
+        /// <summary>The terminal's c_lflag (Linux: 32 bits at byte 12; macOS: 64 bits at byte 24).</summary>
+        private ulong LocalFlags()
+        {
+            var termios = new byte[256];
+            Assert.Equal(0, PtyGetAttr(slaveFd, termios));
+            return OperatingSystem.IsMacOS() ? BitConverter.ToUInt64(termios, 24) : BitConverter.ToUInt32(termios, 12);
+        }
+
+        public void Type(string keys)
+        {
+            var bytes = Encoding.UTF8.GetBytes(keys);
+            Assert.Equal(bytes.Length, (int)PtyWrite(masterFd, bytes, bytes.Length));
+        }
+
+        /// <summary>Reads until the child has exited (true) or the timeout; then drains the master.</summary>
+        public bool WaitForExit(TimeSpan timeout)
+        {
+            var deadline = DateTime.UtcNow + timeout;
+            while (!process.HasExited && DateTime.UtcNow < deadline)
+                Pump(200);
+            while (Pump(0)) { }
+            return process.HasExited;
+        }
+    }
+
+    [DllImport("libc", EntryPoint = "tcgetattr", SetLastError = true)]
+    private static extern int PtyGetAttr(int fd, [Out] byte[] termios);
+
+    /// <summary>
+    /// Review round 3 (1): these tests run on Linux and macOS only ([UnixFact]), where openpty must exist; its absence
+    /// (neither libc nor libutil exports it, <see cref="OpenPty"/>'s sentinel) is a failure, never a silent pass.
+    /// </summary>
+    private static Exception OpenPtyUnavailable()
+    {
+        Assert.Fail("openpty is not available here (neither libc nor libutil exports it), on a platform this test covers");
+        return new UnreachableException();
+    }
+
+    private const string EnterGatePrompt = "Press Enter to accept it here. ";
+    private const string NotConfirmed = "The approve file's fingerprint wasn't confirmed, so it was not accepted. This machine's pending request is kept;";
+
+    /// <summary>The joining side's state after a gate that didn't accept: the request kept, no approve file, the host unchanged.</summary>
+    private static void AssertTheRequestIsKept(EnrolOnPty enrol, byte[] hostKeyring, int exitCode, string output, bool killed)
+    {
+        Assert.False(killed, "tswap didn't exit by itself; the terminal showed:\n" + output);
+        Assert.Contains(NotConfirmed, output.ReplaceLineEndings(" ").Replace("  ", " "));
+        Assert.Equal(1, exitCode); // not 130 or a signal: the gate's own refusal
+        var folder = Assert.Single(Directory.GetDirectories(Path.Combine(enrol.JoinerDir, "enrol")));
+        Assert.True(File.Exists(Path.Combine(folder, "request.json")));
+        Assert.False(File.Exists(Path.Combine(folder, "approve.json")), "approve.json was left behind");
+        using var config = JsonDocument.Parse(File.ReadAllText(Path.Combine(enrol.JoinerDir, "config.json")));
+        Assert.Equal(JsonValueKind.String, config.RootElement.GetProperty("PendingSlotId").ValueKind);
+        Assert.Equal(hostKeyring, File.ReadAllBytes(enrol.HostKeyringPath));
+    }
+
+    [UnixFact]
+    public void Enrol_CtrlCAtTheEnterGate_OnARealTerminal_KeepsTheRequest()
+    {
+        var enrol = new EnrolOnPty(_tempDir, _binaryPath, _testKeyHex);
+        enrol.SetUp();
+        var hostKeyring = File.ReadAllBytes(enrol.HostKeyringPath);
+
+        if (enrol.Run(pty =>
+            {
+                pty.WaitFor(EnterGatePrompt);
+                pty.WaitForKeyRead();
+                pty.Type("\x03");
+                pty.WaitFor("wasn't confirmed");
+            }) is not var (exitCode, output, killed))
+            throw OpenPtyUnavailable();
+
+        AssertTheRequestIsKept(enrol, hostKeyring, exitCode, output, killed);
+    }
+
+    [UnixFact]
+    public void Enrol_CtrlDOnAnEmptyLineAtTheEnterGate_OnARealTerminal_KeepsTheRequest()
+    {
+        var enrol = new EnrolOnPty(_tempDir, _binaryPath, _testKeyHex);
+        enrol.SetUp();
+        var hostKeyring = File.ReadAllBytes(enrol.HostKeyringPath);
+
+        if (enrol.Run(pty =>
+            {
+                pty.WaitFor(EnterGatePrompt);
+                pty.WaitForKeyRead();
+                pty.Type("\x04");
+                pty.WaitFor("wasn't confirmed");
+            }) is not var (exitCode, output, killed))
+            throw OpenPtyUnavailable();
+
+        AssertTheRequestIsKept(enrol, hostKeyring, exitCode, output, killed);
+    }
+
+    /// <summary>Typed text at the gate is not echoed and is not the Enter: the retry text, then the gate again (ended with Ctrl-C).</summary>
+    [UnixFact]
+    public void Enrol_TypedTextAtTheEnterGate_OnARealTerminal_IsNotShownAndAsksAgain()
+    {
+        var enrol = new EnrolOnPty(_tempDir, _binaryPath, _testKeyHex);
+        enrol.SetUp();
+        var hostKeyring = File.ReadAllBytes(enrol.HostKeyringPath);
+        var afterGate = "";
+
+        if (enrol.Run(pty =>
+            {
+                pty.WaitFor(EnterGatePrompt);
+                var before = pty.Output.Length;
+                pty.WaitForKeyRead();
+                pty.Type("zq7x\r");
+                pty.WaitFor("Nothing was typed in, just press Enter");
+                pty.WaitFor(EnterGatePrompt, times: 2);
+                afterGate = pty.Output[before..];
+                pty.WaitForKeyRead();
+                pty.Type("\x03");
+                pty.WaitFor("wasn't confirmed");
+            }) is not var (exitCode, output, killed))
+            throw OpenPtyUnavailable();
+
+        Assert.Contains("(what you typed was not shown or used).", afterGate);
+        Assert.DoesNotContain("zq7x", output);
+        AssertTheRequestIsKept(enrol, hostKeyring, exitCode, output, killed);
+    }
+
     // --- issue #85: Ctrl+C during ReadPassword restores terminal and prints "Cancelled" ---
     // These tests require a PTY so ReadPassword takes the interactive path.
     // Before the fix, Ctrl+C raised SIGINT and the process died without printing "Cancelled".
