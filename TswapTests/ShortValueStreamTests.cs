@@ -33,8 +33,12 @@ public class ShortValueStreamTests(ITestOutputHelper output)
 
     private static VaultMetadata Vault(params RecordMetadata[] records) => new(records, 0, 0, []);
 
-    private static string Redacted(IStreamMatcher matcher, IEnumerable<string> chunks)
+    /// <summary>
+    /// Issue #343: a fresh matcher per run, so no run reuses the carried scan state another run left behind.
+    /// </summary>
+    private static string Redacted(Func<FingerprintStreamMatcher> newMatcher, IEnumerable<string> chunks)
     {
+        using var matcher = newMatcher();
         var redactor = new StreamRedactor([], [matcher]);
         var sb = new StringBuilder();
         foreach (var chunk in chunks)
@@ -49,11 +53,11 @@ public class ShortValueStreamTests(ITestOutputHelper output)
     }
 
     /// <summary>Two chunks cut at every position, and one character at a time: each joined output is <paramref name="expected"/>.</summary>
-    private static void AssertEveryCut(IStreamMatcher matcher, string text, string expected)
+    private static void AssertEveryCut(Func<FingerprintStreamMatcher> newMatcher, string text, string expected)
     {
         for (var cut = 0; cut <= text.Length; cut++)
-            Assert.True(expected == Redacted(matcher, [text[..cut], text[cut..]]), $"cut at {cut}: {Redacted(matcher, [text[..cut], text[cut..]])}");
-        Assert.Equal(expected, Redacted(matcher, Chunk(text, 1)));
+            Assert.True(expected == Redacted(newMatcher, [text[..cut], text[cut..]]), $"cut at {cut}: {Redacted(newMatcher, [text[..cut], text[cut..]])}");
+        Assert.Equal(expected, Redacted(newMatcher, Chunk(text, 1)));
     }
 
     private static List<FingerprintHit> Scan(FingerprintScanner scanner, string text)
@@ -103,21 +107,23 @@ public class ShortValueStreamTests(ITestOutputHelper output)
     public void Matcher_ShortValue_EveryCut(string input, string expected)
     {
         using var keys = NewKeys();
-        var matcher = FingerprintStreamMatcher.For(Vault(Record("p", Set("465", keys)), Record("long", Set(LongValue, keys))), keys);
+        FingerprintStreamMatcher NewMatcher() =>
+            FingerprintStreamMatcher.For(Vault(Record("p", Set("465", keys)), Record("long", Set(LongValue, keys))), keys);
 
-        AssertEveryCut(matcher, input, expected);
+        AssertEveryCut(NewMatcher, input, expected);
     }
 
     [Fact]
     public void Matcher_LongJsonLine_EveryChunkSize_Unchanged()
     {
         using var keys = NewKeys();
-        var matcher = FingerprintStreamMatcher.For(Vault(Record("p", Set("465", keys)), Record("long", Set(LongValue, keys))), keys);
+        FingerprintStreamMatcher NewMatcher() =>
+            FingerprintStreamMatcher.For(Vault(Record("p", Set("465", keys)), Record("long", Set(LongValue, keys))), keys);
         var line = "{\"n\":[" + string.Join(",", Enumerable.Repeat("65465", 1200)) + "]}";
 
         for (var size = 1; size <= 300; size++)
         {
-            var redacted = Redacted(matcher, Chunk(line, size));
+            var redacted = Redacted(NewMatcher, Chunk(line, size));
             Assert.True(line == redacted, $"chunk size {size}");
         }
         using (JsonDocument.Parse(line)) { }
@@ -134,10 +140,11 @@ public class ShortValueStreamTests(ITestOutputHelper output)
     public void Matcher_ShortForms_WholeTokenOnly()
     {
         using var keys = NewKeys();
-        var matcher = FingerprintStreamMatcher.For(Vault(), keys, WebForms);
+        FingerprintStreamMatcher NewMatcher() => FingerprintStreamMatcher.For(Vault(), keys, WebForms);
+        using var matcher = NewMatcher();
 
         Assert.True(matcher.MaxMatchLength >= 4);
-        AssertEveryCut(matcher,
+        AssertEveryCut(NewMatcher,
             "web-ngx /home/webster user=web b64=d2Vi xd2Vi q=a\"b ok",
             "web-ngx /home/webster user=[REDACTED: user] b64=[REDACTED: user] xd2Vi q=[REDACTED: q] ok");
     }
@@ -214,7 +221,7 @@ public class ShortValueStreamTests(ITestOutputHelper output)
                 foreach (var variant in Redaction.Variants(value))
                     shortForms.TryAdd(variant, $"[REDACTED: f{shortForms.Count}]");
             }
-            var matcher = FingerprintStreamMatcher.For(Vault([.. records]), keys, shortForms);
+            FingerprintStreamMatcher NewMatcher() => FingerprintStreamMatcher.For(Vault([.. records]), keys, shortForms);
 
             List<string> pieces = [.. shortValues.SelectMany(v => SecretVariants.For(v).Select(x => x.Text)), .. longValues];
             var text = new StringBuilder();
@@ -240,15 +247,15 @@ public class ShortValueStreamTests(ITestOutputHelper output)
             }
             var content = text.ToString();
 
-            var whole = Redacted(matcher, [content]);
+            var whole = Redacted(NewMatcher, [content]);
             for (var size = 1; size <= 64; size++)
-                Assert.True(whole == Redacted(matcher, Chunk(content, size)), $"round {round}, size {size}:\n{content}");
+                Assert.True(whole == Redacted(NewMatcher, Chunk(content, size)), $"round {round}, size {size}:\n{content}");
             for (var list = 0; list < 20; list++)
             {
                 var cuts = Enumerable.Range(0, rng.Next(1, 8)).Select(_ => rng.Next(0, content.Length + 1)).Append(0).Append(content.Length)
                     .Distinct().Order().ToList();
                 var chunks = cuts.Zip(cuts.Skip(1), (from, to) => content[from..to]).ToList();
-                Assert.True(whole == Redacted(matcher, chunks), $"round {round}, cuts {string.Join(",", cuts)}:\n{content}");
+                Assert.True(whole == Redacted(NewMatcher, chunks), $"round {round}, cuts {string.Join(",", cuts)}:\n{content}");
             }
 
             if (ShortLabelled(whole, records, shortForms)) labelled++;
