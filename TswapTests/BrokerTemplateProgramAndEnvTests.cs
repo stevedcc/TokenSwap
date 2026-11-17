@@ -158,8 +158,11 @@ public class BrokerTemplateProgramAndEnvTests : IDisposable
     [LinuxFact("templates are Linux only (bwrap)")]
     public void ABindOverUsr_WithTheProgramInIt_AsksForANarrowerFolder()
     {
-        Assert.Equal(InsideBind("/usr/bin/true", "/usr") + "; bind /usr covers system programs; bind a narrower folder",
-            Refused(Config("/usr/bin/true", "/usr")));
+        // A real file under /usr, resolved here (26.04: /usr/bin/true -> gnutrue); a test can't make one there without root.
+        var program = BrokerNative.RealPath("/usr/bin/true")!;
+        Assert.StartsWith("/usr/", program);
+        Assert.Equal(InsideBind(program, "/usr") + "; bind /usr covers system programs; bind a narrower folder",
+            Refused(Config(program, "/usr")));
     }
 
     [LinuxFact("templates are Linux only (bwrap)")]
