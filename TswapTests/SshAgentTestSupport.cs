@@ -91,6 +91,26 @@ public sealed class SshAgentTestClient(Socket socket) : IDisposable
         await SendRawAsync(frame);
     }
 
+    /// <summary>
+    /// Sends as <see cref="SendFrameAsync"/> does and returns true, or returns false when the send fails with EPIPE or
+    /// ECONNRESET (.NET reports EPIPE as <see cref="SocketError.Shutdown"/>): the broker closed the connection before
+    /// the frame was written (#332). Use it only where the broker may refuse the connection at accept, before reading
+    /// anything; everywhere else use <see cref="SendFrameAsync"/>, so an early close fails loudly. Any other exception
+    /// propagates.
+    /// </summary>
+    public async Task<bool> SendFrameUnlessClosedAsync(byte[] body)
+    {
+        try
+        {
+            await SendFrameAsync(body);
+            return true;
+        }
+        catch (SocketException ex) when (ex.SocketErrorCode is SocketError.Shutdown or SocketError.ConnectionReset)
+        {
+            return false;
+        }
+    }
+
     /// <summary>The next reply's body, or null when the agent closed the connection first.</summary>
     public async Task<byte[]?> ReadFrameAsync()
     {

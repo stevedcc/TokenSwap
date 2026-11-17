@@ -164,7 +164,7 @@ public class SshAgentFramingTests(Xunit.Abstractions.ITestOutputHelper output) :
         await StartAsync(_h.Config(lane1Uids: $"\"{otherUid}\""));
         using var client = await _h.ConnectAsync("lane1");
 
-        await client.SendFrameAsync(SshAgentMessages.RequestIdentities);
+        _ = await client.SendFrameUnlessClosedAsync(SshAgentMessages.RequestIdentities);
 
         Assert.True(await client.ClosedWithoutReplyAsync());
         await _h.Broker.WaitForLogAsync("refused-connection socket=lane1.ssh");
@@ -177,7 +177,7 @@ public class SshAgentFramingTests(Xunit.Abstractions.ITestOutputHelper output) :
         await StartAsync(allowOwnUid: false);
         using var client = await _h.ConnectAsync("lane1");
 
-        await client.SendFrameAsync(SshAgentMessages.RequestIdentities);
+        _ = await client.SendFrameUnlessClosedAsync(SshAgentMessages.RequestIdentities);
 
         Assert.True(await client.ClosedWithoutReplyAsync());
         await _h.Broker.WaitForLogAsync("refused-connection socket=lane1.ssh");
