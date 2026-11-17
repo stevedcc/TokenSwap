@@ -1,5 +1,6 @@
 using System.Text;
 using TswapCli;
+using TswapCli.Commands;
 using TswapCore;
 using TswapCore.Keyring;
 using Xunit;
@@ -258,7 +259,9 @@ public sealed class RunEnvTests : IDisposable
             { NoPair, ["--env=", "tool"] },
             { NoPair, ["--env", "-h", "tool"] },
             { NoPair, ["--env"] },
-            { "'env' would expose secret values. The 'run' command is for programs that *use* secrets, not display them.\nUse 'sudo ... get <name>' to view a secret.",
+            // Brief T35 (sanctioned): the trailer follows the OS, identical to the old text on Linux and macOS.
+            { "'env' would expose secret values. The 'run' command is for programs that *use* secrets, not display them." +
+                "\n" + RunCommand.ViewSecretLine(OperatingSystem.IsWindows()),
                 ["--env", "X={{s}}", "--", "env"] },
         };
     }
