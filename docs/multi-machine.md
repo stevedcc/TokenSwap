@@ -125,26 +125,36 @@ What each step does in the interactive mode:
 
 1. **Pre-flight.** It checks the flags (every refusal `slot request` would make) and this machine's
    state, then runs `tswap --version` on the host, without sudo. If that fails, nothing has changed.
-2. **Request, here**, exactly as `tswap slot request` (its questions, touches and fingerprint).
-   `--tpm`, `--secure-enclave --with-touch|--no-touch` and `--password|--no-password` go to this step;
-   `--vault-dir` too, only with `--password`.
+   `--password`'s checks of the vault folder (`--vault-dir`, its keyring and `vault-password` file)
+   come before the pre-flight too; when request asks the password question instead, they come after it.
+2. **Request, here**, exactly as `tswap slot request` (its questions, touches and fingerprint), without
+   its instructions for carrying the files. `--tpm`, `--secure-enclave --with-touch|--no-touch` and
+   `--password|--no-password` go to this step; `--vault-dir` too, only with `--password`.
 3. **Approve, on the host.** `tswap slot stage <id> put request` copies the request into the host's
    staging folder. Then, on the host's terminal, `sudo tswap slot approve --staged <id> --expect <hash>`
    unlocks the vault (sudo and the vault may ask there) and prints its fingerprint of the new slot:
-   compare it with step 2's. Before it, a line here says `On <user@host>: <the command> ...`, and after
+   compare it with step 2's (approve doesn't wait for you; the check that counts is the approve
+   file's fingerprint below). Before it, a line here says `On <user@host>: <the command> ...`, and after
    it `Back on this machine.`, so you can tell whose prompt you are answering. The host's lines in this
    step have no prefix: they are the host's terminal. It ends with `Approve file fingerprint: ...`.
    `tswap slot stage <id> get approve` brings the approve file back, and this machine prints
-   `Approve file received: ...`: the two fingerprints must match. Press Enter to go on, or Ctrl-C if
-   they differ.
-4. **Accept, here**, exactly as `tswap slot accept`, with `--vault-dir <folder>` when given (a
-   password-less shared folder is joined by accept alone). It checks the approve file against this
-   machine's pending request, and asks for the vault password when the slot has one.
+   `Approve file received: ...`: the two fingerprints must match. Press Enter to go on (only Enter:
+   anything typed at that point is not shown, and tswap asks again), or Ctrl-C if they differ (the
+   approve file is then deleted here).
+4. **Accept, here**, exactly as `tswap slot accept`, without its instructions for carrying the files,
+   with `--vault-dir <folder>` when given (a password-less shared folder is joined by accept alone). It
+   checks the approve file against this machine's pending request, and asks for the vault password when
+   the slot has one.
 5. **Merge, on the host.** `slot stage <id> put receipt`, then, on the host's terminal,
    `sudo tswap slot merge --staged <id> --expect <hash>`. It never passes `--yes`: the host adds the
    slot it approved in step 3 without asking, and asks on its terminal about any other. Then
    `slot stage <id> clean` removes the staging folder.
 6. It prints this machine's slot fingerprint again and `✓ Enrolled: ...`.
+
+The calls without a terminal (pre-flight, `slot stage` put, get and clean) show the host's messages,
+and ssh's own on stderr (a host-key notice, `Permission denied`), here prefixed `[<user@host>] `; the
+prefix labels them and is not a security boundary. A line longer than 4096 characters is cut, and a
+call that writes more than 1 MiB of messages is stopped.
 
 ### Prompts to expect
 
@@ -160,7 +170,18 @@ What each step does in the interactive mode:
   on the host's own YubiKey or Secure Enclave if its slot needs one, which someone must do **at the
   host**.
 - **This machine's own prompts:** request's (a touch, the vault password question) and accept's.
-- **The Enter** after you have compared the approve file's fingerprints.
+- **The Enter** after you have compared the approve file's fingerprints: Enter alone. A PIN or a stray
+  key's code typed there is not shown and not used; tswap asks again.
+
+### Terminal output from the host
+
+- **systemd's sudo** (Fedora 44, Fedora CoreOS) writes OSC 3008 sequences
+  (`ESC ] 3008;start=...;comm=sudo;... ESC \`) into the approve and merge steps' terminal. A terminal
+  ignores them; a captured log of the session (`script`, a tmux pipe) shows them as text. Nothing to do.
+- **A Windows host's** OpenSSH Server runs the approve and merge steps in a pseudo console, which sets
+  the window title (OSC 0) to `C:\WINDOWS\system32\conhost.exe`; on some terminals (macOS Terminal)
+  the title stays after the session. Set it back with your terminal's title setting, or
+  `printf '\033]0;\007'`. This is OpenSSH-for-Windows behaviour, not tswap's.
 
 ### The host's staging folder
 
@@ -206,7 +227,8 @@ Windows host.
 administrator logins get an elevated session, so use `--no-remote-sudo` (and `--remote-tswap` with
 the path of `tswap.exe` if it is not on that account's `PATH`). The SSH account must be an
 administrator; if its session turns out not to be elevated, approve refuses with "requires an
-administrator prompt" and the hand-carried flow below remains.
+administrator prompt" and the hand-carried flow below remains (the window title it may leave behind:
+[Terminal output from the host](#terminal-output-from-the-host)).
 
 ### Batch mode for scripts
 
@@ -248,7 +270,9 @@ The files of each step are kept in `<config folder>/enrol/<first 8 hex of the sl
 machine (`request.json`, `approve.json`, `receipt.json`; on Unix the folder is 0700, readable by you
 only, and on Windows it is inside your config folder, with that folder's access rules): next to this
 machine's pending private key, never in the working directory, so the approve file can't land in a
-synced folder by accident. The folder is deleted on success.
+synced folder by accident. The folder is deleted on success. If it can't be (a file in it is open
+elsewhere), the enrolment has still succeeded: tswap says the folder is kept and names it; delete it by
+hand.
 
 On a failure, `slot enrol` stops at the failed step, changes nothing more and says what is left, with
 the kept files' paths (and, in the interactive mode, the host's `slot stage <id> clean`):
@@ -258,6 +282,8 @@ the kept files' paths (and, in the interactive mode, the host's `slot stage <id>
   that names something else than the pending request (another backend, touch or password choice) is
   refused; `--fresh` starts a new enrolment instead (it asks before overwriting the pending config, and
   deletes the other enrolment folders only once the new request is written).
+- **The approve file couldn't be saved here:** the host has approved, but nothing was added there: run
+  the same `tswap slot enrol` again, which has the kept request approved again.
 - **Merge failed:** this machine already has its copy. Finish it with the kept receipt:
   `sudo tswap slot merge receipt.json` on the host (in batch mode the message names
   `sudo tswap slot merge - < receipt.json`). Running `slot enrol` again would start a new enrolment.
