@@ -193,6 +193,8 @@ public sealed class FleetMachine : IDisposable
             Fido2 = fido2,
             Terminal = Terminal is { } terminal ? terminal.Open : null,
             Os = Os ?? YubiKeyAccessTexts.CurrentOs(),
+            // Brief T35 A15: no in-process test reaches a real console's mode, also in a suite run from a Windows console.
+            StdoutConsoleMode = () => null,
         };
         return Ssh is null ? ctx : ctx with { Ssh = Ssh };
     }

@@ -141,7 +141,7 @@ tswap run helm upgrade --install myapp ./chart \
   -f {{@secrets.yaml}}
 ```
 
-This works in bash, cmd and PowerShell. `run` refuses a command containing a printer, encoder,
+This works in bash, cmd and PowerShell (in PowerShell quote the token: `-f '{{@values.yaml}}'`). `run` refuses a command containing a printer, encoder,
 copier, shell or interpreter (`cat`, `cp`, `base64`, `sh`, `python`, … as any word of the command)
 when it has a file token: the file is data for a tool, never a program. `helm install app ./chart
 -f {{@values.yaml}}` is fine, because `install` is refused only as the program itself (also behind a wrapper, or as
