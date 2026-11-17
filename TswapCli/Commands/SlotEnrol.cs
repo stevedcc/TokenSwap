@@ -9,8 +9,8 @@ namespace TswapCli.Commands;
 
 /// <summary>
 /// Brief T34 test seam of <c>slot enrol</c>'s local file access: called with the path just before each local read of
-/// <c>request.json</c> and <c>receipt.json</c>, each write of <c>approve.json</c> and each enrolment-folder delete (the
-/// folder's path), so a test can make that access fail.
+/// <c>request.json</c> and <c>receipt.json</c>, each write of <c>approve.json</c> and its delete at the Enter gate (review
+/// round 1 M5), and each enrolment-folder delete (the folder's path), so a test can make that access fail.
 /// </summary>
 public sealed class EnrolFileSeams
 {
@@ -308,11 +308,13 @@ public sealed partial class SlotCommand
             }
             if (typed is null)
             {
-                File.Delete(approveFile);
+                // Review round 1 (M5): a failed delete still gives this message, which then names the file.
+                var notDeleted = TryDeleteLocal(ctx, approveFile, () => File.Delete(approveFile));
                 throw new TswapException(
                     $"The approve file's fingerprint wasn't confirmed, so it was not accepted. This machine's pending request is kept; nothing " +
                     $"was added on {via}. Run the same '{ctx.Prefix} slot enrol' again to have it approved again (it continues from the kept " +
-                    $"request); the host's staging folder is left: remove it with '{clean}' there.");
+                    $"request); the host's staging folder is left: remove it with '{clean}' there." +
+                    (notDeleted is null ? "" : $" Delete {approveFile} by hand (it couldn't be deleted: {notDeleted})."));
             }
             c.Out.WriteLine();
             if (typed.Length == 0)
@@ -458,7 +460,8 @@ public sealed partial class SlotCommand
             if (ReadConfigFile(fileStore)?.PendingSlotId is not null)
             {
                 // Brief T34: double quotes, which sh, cmd and PowerShell all take (a folder may have spaces).
-                var folderArg = vaultDir is null ? "" : $" --vault-dir \"{Path.GetFullPath(vaultDir)}\"";
+                // Review round 1 (M4): no trailing separator, which would escape the closing quote in sh and cmd.
+                var folderArg = vaultDir is null ? "" : $" --vault-dir \"{Path.TrimEndingDirectorySeparator(Path.GetFullPath(vaultDir))}\"";
                 var merge = interactive
                     ? $"carry the receipt to {via} and run '{hostTswap} slot merge receipt.json' there."
                     : $"'{hostTswap} slot merge - < receipt.json' on {via}.";
@@ -547,12 +550,19 @@ public sealed partial class SlotCommand
     }
 
     /// <summary>Brief T34: deletes an enrolment folder; null when it went, otherwise the one-line reason it didn't.</summary>
-    private static string? TryDeleteEnrolmentFolder(CommandContext ctx, string folder)
+    private static string? TryDeleteEnrolmentFolder(CommandContext ctx, string folder) =>
+        TryDeleteLocal(ctx, folder, () => Directory.Delete(folder, recursive: true));
+
+    /// <summary>
+    /// Brief T34: one local delete (<paramref name="delete"/> of <paramref name="path"/>, after the seam); null when it went,
+    /// otherwise the one-line reason it didn't (only <see cref="IOException"/> and <see cref="UnauthorizedAccessException"/>).
+    /// </summary>
+    private static string? TryDeleteLocal(CommandContext ctx, string path, Action delete)
     {
         try
         {
-            ctx.EnrolSeams?.BeforeLocalAccess?.Invoke(folder);
-            Directory.Delete(folder, recursive: true);
+            ctx.EnrolSeams?.BeforeLocalAccess?.Invoke(path);
+            delete();
             return null;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

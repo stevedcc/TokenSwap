@@ -11,8 +11,8 @@ namespace TswapCli.Ssh;
 /// a new host key at <c>/dev/tty</c> itself, which works with stdin piped. Stdin is written and then closed (approve
 /// and merge read all of it before they write), stdout is read to the end (past <see cref="SshRelay.MaxStdout"/> the
 /// ssh process tree is killed and the call refused), and stderr is relayed line by line as it arrives (brief T34: in
-/// chunks, each line cut at <see cref="SshRelay.MaxStderrLine"/> characters, and past <see cref="SshRelay.MaxStderr"/>
-/// characters in all the process tree is killed and the call refused, as for stdout).
+/// chunks, each line cut at <see cref="SshRelay.MaxStderrLine"/> characters, and past <see cref="SshRelay.MaxStderrBytes"/>
+/// UTF-8 bytes in all the process tree is killed and the call refused, as for stdout).
 /// <para>Brief T28: <see cref="RunInteractive"/> runs <c>ssh -t</c> on the local terminal; with
 /// <paramref name="shareConnection"/> (Linux and macOS clients only) every call passes OpenSSH's connection-sharing
 /// options with one socket per destination (<see cref="SocketDirectory"/>), so one enrolment logs in once, and
@@ -203,18 +203,20 @@ public sealed class ProcessSshTransport(string program = "ssh", bool shareConnec
     /// <see cref="SshRelay.Line"/>, reading in chunks (a chunk boundary is not a line break). A line longer than
     /// <see cref="SshRelay.MaxStderrLine"/> characters is written cut, marked <c> [line cut]</c>, and the rest of it is
     /// dropped up to its <c>\n</c>; a final line without one is written as a line. False, without reading on, once more
-    /// than <see cref="SshRelay.MaxStderr"/> characters were read (every character counts).
+    /// than <see cref="SshRelay.MaxStderrBytes"/> were read, counted in UTF-8 bytes (every character counts; a pair split
+    /// across chunks is counted once, by a stateful encoder).
     /// </summary>
     internal static bool RelayStderr(TextReader reader, string destination, TextWriter stderr)
     {
         var chunk = new char[8192];
         var line = new StringBuilder();
         var cut = false; // the current line was written cut: drop the rest of it
+        var bytes = Encoding.UTF8.GetEncoder();
         long total = 0;
         int read;
         while ((read = reader.Read(chunk, 0, chunk.Length)) > 0)
         {
-            total += read;
+            total += bytes.GetByteCount(chunk, 0, read, flush: false);
             foreach (var ch in chunk.AsSpan(0, read))
             {
                 if (ch == '\n')
@@ -235,7 +237,7 @@ public sealed class ProcessSshTransport(string program = "ssh", bool shareConnec
                     }
                 }
             }
-            if (total > SshRelay.MaxStderr)
+            if (total > SshRelay.MaxStderrBytes)
                 return false;
         }
         if (line.Length > 0)

@@ -802,6 +802,31 @@ public class SlotEnrolTests : IDisposable
         Assert.DoesNotContain(ssh.Log, l => l.Contains("merge"));
     }
 
+    /// <summary>
+    /// Review round 1 (M5): at end of input at the gate, an approve file that can't be deleted (the seam fails its second
+    /// access, the delete; the first is the write) still gives the "wasn't confirmed" message, which names the file.
+    /// </summary>
+    [Fact]
+    public void EnterGate_ApproveFileNotDeletable_StillSaysWhatIsLeft()
+    {
+        var ssh = InteractiveSsh();
+        _joiner.Ssh = ssh;
+        var approveAccesses = 0;
+        LocalAccessFails(path => IsFile(path, "approve.json") && ++approveAccesses == 2);
+
+        var (exit, _, stderr) = EnrolOnTerminal("\n\n\n"); // request's answers; then EOF at the Enter
+
+        Assert.NotEqual(0, exit);
+        var approve = Path.Combine(Assert.Single(EnrolFolders), "approve.json");
+        Assert.Contains("The approve file's fingerprint wasn't confirmed, so it was not accepted. This machine's pending request is kept; " +
+                        $"nothing was added on {Via}.", stderr);
+        Assert.Contains($"Delete {approve} by hand (it couldn't be deleted: locked).", stderr);
+        Assert.Equal(2, approveAccesses);
+        Assert.True(File.Exists(approve));
+        Assert.NotNull(_joiner.Config.PendingSlotId);
+        Assert.DoesNotContain(ssh.Log, l => l.Contains("merge"));
+    }
+
     [Fact]
     public void Interactive_AnApproveFileSwappedOnTheHost_ShowsAnotherFingerprint_AndEofAtTheEnterKeepsTheRequest()
     {
@@ -1245,6 +1270,24 @@ public class SlotEnrolTests : IDisposable
         Assert.Contains($"slot accept {approve} --vault-dir \"{full}\"' here", stderr);
     }
 
+    /// <summary>Review round 1 (M4): a trailing separator is trimmed, so the quoted path doesn't end in <c>\"</c> on Windows.</summary>
+    [Fact]
+    public void AcceptFails_WithVaultDirAndATrailingSeparator_TheHintTrimsIt()
+    {
+        var other = new FleetMachine("enrol-other", SimulatedYubiKeyService.WithKeys(SerialC));
+        _others.Add(other);
+        other.Ok("", "slot", "request", other.PathOf("request.json"));
+        var otherApprove = _host.Ok("", "slot", "approve", other.PathOf("request.json"), "-");
+        _ssh.Override = rest => rest is ["slot", "approve", ..] ? new SshResult(0, Encoding.UTF8.GetBytes(otherApprove)) : null;
+        var full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(_host.VaultDir!));
+
+        var (exit, _, stderr) = Enrol("", "--vault-dir", full + Path.DirectorySeparatorChar);
+
+        Assert.NotEqual(0, exit);
+        var approve = Path.Combine(Assert.Single(EnrolFolders), "approve.json");
+        Assert.Contains($"slot accept {approve} --vault-dir \"{full}\"' here", stderr);
+    }
+
     [Fact]
     public void Interactive_AcceptFails_TheHintNamesTheFileFormOfMerge()
     {
@@ -1419,6 +1462,28 @@ public class SlotEnrolTests : IDisposable
             return; // the stub is a POSIX shell script
         // 32768 lines of 64 characters (63 and the newline): 2 MiB, and then the stub ends by itself.
         var (run, _, dir) = StderrStub($"yes '{new string('x', 63)}' | head -n 32768 >&2\nprintf ok\nexit 0\n");
+        try
+        {
+            var ex = Assert.Throws<SshTransportException>(() => run());
+
+            Assert.Equal("its error output was larger than 1 MiB, so ssh was stopped", ex.Message);
+        }
+        finally
+        {
+            Directory.Delete(dir, true);
+        }
+    }
+
+    /// <summary>
+    /// Review round 1 (M3): the total cap is 1 MiB of UTF-8 bytes, as the message says, not 1 Mi characters. 12000 lines
+    /// of 63 'é' and a newline are 768000 characters but 1524000 bytes.
+    /// </summary>
+    [Fact]
+    public void ProcessSshTransport_RefusesPastOneMiBOfStderr_CountedInBytes()
+    {
+        if (OperatingSystem.IsWindows())
+            return; // the stub is a POSIX shell script
+        var (run, _, dir) = StderrStub($"yes '{new string('é', 63)}' | head -n 12000 >&2\nprintf ok\nexit 0\n");
         try
         {
             var ex = Assert.Throws<SshTransportException>(() => run());
