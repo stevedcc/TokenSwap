@@ -25,8 +25,8 @@ report when the brief can't be built as written. Never change an existing test's
 it by name (it sanctions two in Task 5, and in Task 6 any test asserting the respelt banners, of which there are
 none today). British spelling in new text.
 
-**Review history.** Controller amendment A1 (Task 6 respells the banners). Round 1 (MiMo and GLM, both "no"), all folded
-in place, marked A2-A8: MiMo I1 / GLM I1, `MigrateCommand.cs:24` is 64 in a 66 box, so the scan would fail: Task 6 pads
+**Review history.** Controller amendment C1 (Task 6 respells the banners). Round 1 (MiMo and GLM, both "no"), all folded
+in place (labels A2-A8 here only; round 2 removed them from the body so they don't clash with T28's A-numbers): MiMo I1 / GLM I1, `MigrateCommand.cs:24` is 64 in a 66 box, so the scan would fail: Task 6 pads
 it (A2). MiMo I2 / GLM I4, two more `Initialization` headers (`:326`, `:717`) and a Files line that said three literals:
 Task 6 rewritten to name all six (A2). GLM I2, `AssertEnrolled` asserts the folders are gone: the kept-folder tests
 assert enrolment inline (A3). GLM I3, `RunOnTerminal` must not echo: only the new `RunOnEchoingTerminal` does (A4). MiMo M3
@@ -35,6 +35,12 @@ Task 3 break-its for its other key tests (A7). MiMo M2 / GLM M3, a line split ac
 `SshRelay.Line` (A8). MiMo M1 / GLM M1, sanction count: the preamble says Task 6's (none exist). MiMo M4, #349 named in
 Issues. MiMo M7, `RepoRoot` is private: copy the loop. MiMo M8 (report at `../`): rejected, it is the standing place for
 brief reports here (`../<tag>-report.md`), outside the tree on purpose.
+Round 2 (MiMo "no"; GLM's session failed), folded A9-A13, the body back-patched so each member is declared once: I1, the
+notes' declarations still single strings (`FingerprintNote` declared twice, `const` arrays): all `string[]`, `static
+readonly`, one paragraph (A9). M1, "six literals" in Task 6: eight, and which change length (A10). M2, "contains the
+note" for an array: "every line of" in each test (A11). M3, A-labels clashing with T28's A1 in Task 5: the controller
+amendment is C1, fold labels live only here, Task 5 says "T28's A1" (A12). M4, the `--vault-dir` hint's path unquoted:
+double-quoted (A13).
 
 **Parallel briefs.** T35 (Windows output: console encoding and glyphs, `run`'s ConPTY, `InitCommand`'s `--yubikey`
 header and closing line, `docs/install.md`), T36 (slot-kind labels in `slots`, tightening loose vault files,
@@ -114,14 +120,16 @@ passes no hooks and prints exactly what it prints today):
   `Enrolling this machine's {hardware} for its slot, then generating the slot's`, stay).
 - After `Request file written to: {path}` nothing more: the five hand-carry lines (`Move this file ...` to
   `  {prefix} slot accept <approve-file>`) are not printed.
-- The fingerprint note: `RequestHooks` gets `public string? FingerprintNote { get; init; }`, and both request paths call
+- The fingerprint note: `RequestHooks` gets `public string[]? FingerprintNote { get; init; }`, and both request paths call
   `PrintFingerprint(c, "This machine's slot", slotKeyPair.PublicKey, hooks?.FingerprintNote)`.
 - `PrintFingerprint` gets a fourth parameter, `string[]? note = null`: null prints today's two lines; otherwise the
-  fingerprint line, then each element of `note` on its own line (A6: lines of at most 80 characters, as today's note). Update its doc comment (the note is the caller's; by hand the v0 lines
-  stay true, since there the hand-carried file is the trust boundary). `NewSlotWrite.cs:92` and `SlotCommand.cs:1377`
+  fingerprint line, then each element of `note` on its own line (lines of at most 80 characters, as today's note). Update its doc comment (the note is the caller's; by hand the v0
+  lines stay true, since there the hand-carried file is the trust boundary). `NewSlotWrite.cs:92` and `SlotCommand.cs:1377`
   are unchanged.
-- `RequestStep` gets a `string[] fingerprintNote` parameter, set into the hooks (`FingerprintNote` is a `string[]?`). The two notes, `internal const`/`static`
-  members of `SlotCommand` in `SlotEnrol.cs`:
+- `RequestStep` gets a `string[] fingerprintNote` parameter, set into the hooks. The notes (these two and the staged
+  approve's below) are `internal static readonly string[]` members of `SlotCommand` (the batch one a method returning
+  `string[]`), each element one printed line; a test asserts that output contains every line of a note. The two
+  request notes, in `SlotEnrol.cs`:
   - interactive, `EnrolInteractiveFingerprintNote`, two lines:
     `(The host shows this fingerprint too when it approves. The check that guards` and
     ` the enrolment is the approve file's fingerprint, before you press Enter here.)`
@@ -140,7 +148,7 @@ pins that and must pass unchanged.
 `Compare this against ...` line is not printed. `StagedApproveFingerprintNote`, three lines:
 `(The joining machine shows the same fingerprint. Nothing here waits for you:`,
 ` the check to make is the approve file fingerprint below, which the joining` and ` machine asks you to confirm.)`.
-The notes are `internal static readonly string[]` (the batch one a method). Tests assert each line of a note. Every other form of approve (file, `-`) is unchanged.
+Every other form of approve (file, `-`) is unchanged.
 
 Ruling: **`--batch`'s host output stays as it is** (`slot approve - -` prints the v0 note, the compare line and the
 hand-carry lines on stderr, relayed as `[host]` lines). Why: `slot approve - -` is also a by-hand form
@@ -150,12 +158,12 @@ shows those lines, labelled as the host's.
 
 Tests, in `SlotEnrolTests`:
 - `Interactive_RequestAndAccept_PrintEnrolsOwnSteps_NotTheHandCarriedOnes`: `EnrolOnTerminal(TerminalAnswers)`, exit 0;
-  stdout contains `EnrolInteractiveFingerprintNote`, the two new intro lines (consecutive),
+  stdout contains every line of `EnrolInteractiveFingerprintNote`, the two new intro lines (consecutive),
   and `('slot enrol' has the host merge it next).`; stdout contains none of `Move this file`, `Carry it back`,
   `Not load-bearing`, `slot approve <this-file>`, `slot merge <receipt-file>`.
-- `Interactive_TheHostsApprove_SaysItDoesntWait`: `ssh.InteractiveOutput` contains `StagedApproveFingerprintNote` and not
+- `Interactive_TheHostsApprove_SaysItDoesntWait`: `ssh.InteractiveOutput` contains every line of `StagedApproveFingerprintNote` and not
   `Compare this against`, and not `Not load-bearing`.
-- `Batch_Request_NotesTheHostsLabelledLine`: `Enrol("")`, exit 0; stdout contains `EnrolBatchFingerprintNote(Via)` and
+- `Batch_Request_NotesTheHostsLabelledLine`: `Enrol("")`, exit 0; stdout contains every line of `EnrolBatchFingerprintNote(Via)` and
   none of `Move this file`, `Carry it back`; stderr contains a line starting `[{Via}] Requesting machine's slot
   fingerprint: ` with the same fingerprint as stdout's `This machine's slot fingerprint: ` line.
 - `SlotRequest_ByHand_StillPrintsTheHandCarriedSteps` (in `SlotEnrolTests`, on the joiner, `slot request <file>`): stdout
@@ -173,7 +181,7 @@ Files: `TswapCli/Commands/SlotCommand.cs`, `TswapCli/Commands/SlotEnrol.cs`, `Ts
 - `SystemConsole.ReadLineWithoutEcho`: redirected: `_input.ReadLine()`. Terminal: `_input.DiscardTypeahead()`, then as
   `ReadPassword`'s terminal loop (`TreatControlCAsInput` true and restored in `finally`, `_input.ReadKey()`), except that
   it writes nothing at all: Enter returns the collected text; Ctrl-C throws `OperationCanceledException`; Ctrl-D with
-  nothing collected returns null, and with something collected is ignored (A5); Backspace removes the last collected character; other control characters are ignored.
+  nothing collected returns null, and with something collected is ignored; Backspace removes the last collected character; other control characters are ignored.
   The caller writes the newline.
 - The other implementers: `CliHost.TestTerminalConsole` and `SlotCommand.HumanLinesToStderrConsole` delegate to
   `inner.ReadLineWithoutEcho()`; `SlotStdioTests.ThrowingInConsole` reads through its throwing reader (`_in.ReadLine()`);
@@ -183,7 +191,7 @@ Files: `TswapCli/Commands/SlotCommand.cs`, `TswapCli/Commands/SlotEnrol.cs`, `Ts
   `ReadLine` writes the line it read, then a newline, to `Out` (what a terminal in line mode shows), and `ReadPassword`
   writes one `*` per character before its newline (as `SystemConsole` does). `FleetMachine` gets a new
   `RunOnEchoingTerminal(string stdin, params string[] args)`: what `RunOnTerminal` does, plus `EchoesTypedLines = true`.
-  (A4) `RunOnTerminal` itself is unchanged and never echoes; only the gate tests use the echoing form.
+  `RunOnTerminal` itself is unchanged and never echoes; only the gate tests use the echoing form.
 - **The gate** (`EnrolInteractively`, after `Approve file received: ...`): a loop: `c.Out.Write("Press Enter to accept
   it here. ")`; `var typed = c.ReadLineWithoutEcho()` inside a `try` whose `catch (OperationCanceledException)` sets
   `typed = null`; on null the existing path (delete `approve.json`, throw the existing "wasn't confirmed" text, unchanged);
@@ -251,7 +259,8 @@ IOException or UnauthorizedAccessException)`) and turned into the step's own fai
 - reading `receipt.json` (both modes): the merge failure (`MergeFailed`).
 
 **The hints.** In `AcceptStep` (it gets `bool interactive`; `EnrolInBatch` passes false, `EnrolInteractively` true):
-- the pending-request case's accept command gains ` --vault-dir {Path.GetFullPath(vaultDir)}` when the run had
+- the pending-request case's accept command gains ` --vault-dir "{Path.GetFullPath(vaultDir)}"` (double quotes, which sh, cmd and PowerShell all take, since a
+  folder such as `C:\Users\First Last\...` has spaces) when the run had
   `--vault-dir` (both modes); the merge it names is, in batch, unchanged (`'{hostTswap} slot merge - < receipt.json' on
   {via}.`) and, interactive, `then carry the receipt to {via} and run '{hostTswap} slot merge receipt.json' there.` in
   place of `then '{hostTswap} slot merge - < receipt.json' on {via}.`. So the batch text without `--vault-dir` is exactly
@@ -271,7 +280,7 @@ the pre-flight would reorder request's prompts, which T27 keeps "exactly as `slo
 
 Tests, in `SlotEnrolTests`:
 - `FolderNotDeletable_StillEnrolled_SaysTheFolderIsKept`: `_joiner.EnrolSeams` throws `IOException("locked")` for a path
-  that is a folder under `enrol/`: exit 0, enrolled, asserted inline (A3: the joiner's `PendingSlotId` null, the host's
+  that is a folder under `enrol/`: exit 0, enrolled, asserted inline (the joiner's `PendingSlotId` null, the host's
   keyring has the slot, the `This machine's slot: ` and `✓ Enrolled: ` lines), never through `AssertEnrolled`, which
   asserts the folders are gone and is not edited; stderr contains
   `Note: the enrolment folder is kept: {folder} (locked). Delete it by hand.`, the folder exists.
@@ -286,7 +295,7 @@ Tests, in `SlotEnrolTests`:
 - `RequestNotReadable_Batch_SaysTheApproveIsLeft`: the seam throws for `request.json`: the approve-failure text with
   `(couldn't read ...)`, only `--version` in `CallLines`.
 - `AcceptFails_WithVaultDir_TheHintNamesTheFolder`: as `AcceptFails_OnAnApproveFileForAnotherRequest_...`, with
-  `--vault-dir <the host's shared folder>`: stderr contains `slot accept {approve} --vault-dir {full}' here`.
+  `--vault-dir <the host's shared folder>`: stderr contains `slot accept {approve} --vault-dir "{full}"' here`.
 - `Interactive_AcceptFails_TheHintNamesTheFileFormOfMerge`: an interactive run whose host stages another request's
   approve file (the `StagedSeams.AfterApproveWritten` swap of
   `Interactive_AnApproveFileSwappedOnTheHost_...`), with the Enter given (`TerminalAnswers`), so accept refuses the slot
@@ -300,7 +309,7 @@ Tests, in `SlotEnrolTests`:
   exit non-zero, the text, `CallLines` empty, no `enrol/` folder.
 - Break-it-once: drop the `catch` in `TryDeleteEnrolmentFolder` (the first test fails with exit 1); remove the pre-check
   (the Theory fails: `--version` was called); use `ctx.Prefix` again in the `vault merge` hint (the remote-program test
-  fails). (A7) Drop the wrap around the interactive approve write (`ApproveFileNotSaved_Interactive_...` fails: the
+  fails). Drop the wrap around the interactive approve write (`ApproveFileNotSaved_Interactive_...` fails: the
   generic error, no "pending request is kept"); drop it around the receipt read (`ReceiptNotReadable_...` fails); drop
   the `--vault-dir` suffix (`AcceptFails_WithVaultDir_...` fails); give the interactive mode the batch `-` form again
   (`Interactive_AcceptFails_TheHintNamesTheFileFormOfMerge` fails).
@@ -312,7 +321,7 @@ Files: `TswapCli/Commands/SlotEnrol.cs`, `TswapCli/CommandContext.cs` (`EnrolSea
 
 In `SshRelay`: `public const int MaxStderrLine = 4096;` (characters) and `public const int MaxStderr = 1024 * 1024;`
 (characters). `ProcessSshTransport.Run`'s relay reads `process.StandardError` in chunks (not `ReadLine`), splits on `\n`,
-holding an incomplete tail until the next chunk or the end of the stream (A8: a chunk boundary is not a line break),
+holding an incomplete tail until the next chunk or the end of the stream (a chunk boundary is not a line break),
 and for each line keeps at most `MaxStderrLine` characters. Every line written goes through `SshRelay.Line` (which trims
 a trailing `\r` and masks control characters); `SshRelay.Line` itself is unchanged. A longer line is written as `SshRelay.Line(destination,
 <its first 4096 characters>) + " [line cut]"` and the rest of it, up to its `\n`, is dropped. Every character read counts
@@ -356,7 +365,7 @@ Files: `TswapCli/Ssh/ProcessSshTransport.cs`, `TswapCli/Ssh/ISshTransport.cs`, `
   Break-it-once: remove the `SudoEscalated` check in `ExecuteStage`; the test fails.
 - **The console encoding of `put`/`get`.** Ruling (controller default; owner may change): **no byte-stream seam.** Every
   file that travels is tswap's own JSON, written by `System.Text.Json` with its default encoder, which escapes every
-  non-ASCII character, so it is pure ASCII and no code page changes it; anything else fails safe as a hash mismatch (A1)
+  non-ASCII character, so it is pure ASCII and no code page changes it; anything else fails safe as a hash mismatch (T28's A1: the hash check in `ReadStaged`)
   or a parse failure. The cost: if a file ever carries a raw non-ASCII byte, `put`/`get` through a non-UTF-8 Windows
   console refuse it instead of carrying it. Add a comment saying so at `put` and `get` in `ExecuteStage`, and pin the
   claim: `SlotStageTests.EnrolmentFiles_AreAscii_SoNoConsoleEncodingChangesThem`: after the round trip of
@@ -374,15 +383,16 @@ Files: `TswapCli/Ssh/ProcessSshTransport.cs`, `TswapCli/Ssh/ISshTransport.cs`, `
 Files: `TswapCli/Commands/SlotStage.cs`, `TswapCli/Commands/SlotCommand.cs` (`HumanLinesToStderrConsole` comment),
 `TswapTests/SlotStageTests.cs`, `TswapTests/SlotStdioTests.cs`.
 
-## Task 6: the init banner lines up, in British spelling (#337.6; amendments A1, A2)
+## Task 6: the init banner lines up, in British spelling (#337.6)
 
-Six literals change; every one keeps its length apart from the two padding fixes:
+Eight literals change (six in `InitCommand.cs`, one each in `GuidedInit.cs` and `MigrateCommand.cs`); only the padding
+fixes change a length (the four `COMPLETE` sites gain one space, `MigrateCommand.cs:24` two):
 - `"║  ✓ INITIALIZATION COMPLETE            ║"` (41 characters) in `InitCommand.cs:373`, `:441`, `:759` and
   `GuidedInit.cs:448` becomes `"║  ✓ INITIALISATION COMPLETE             ║"` (42: respelt, and the missing space added).
 - The three `Initialization` headers in `InitCommand.cs` are respelt `Initialisation`, same length:
   `:326` `║  tswap - Keyring Initialisation        ║`, `:409` `║  tswap - FIDO2 Keyring Initialisation  ║`,
   `:717` `║  tswap - TPM Keyring Initialisation    ║`. (`:718` says `Init` and stays.) So no `Initialization` is left in
-  `InitCommand.cs`/`GuidedInit.cs`, and #352 needn't touch these banners (A1).
+  `InitCommand.cs`/`GuidedInit.cs`, and #352 needn't touch these banners (controller amendment C1).
 - `MigrateCommand.cs:24`'s `"║  tswap - Security Configuration Migration                    ║"` is 64 characters against a
   66-character box (`:23`, `:25`): add two spaces before its closing `║`.
 No existing test asserts any of these banner texts (both reviewers searched the test project); say "none" in the commit
