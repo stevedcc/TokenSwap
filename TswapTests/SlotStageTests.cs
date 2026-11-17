@@ -140,6 +140,47 @@ public class SlotStageTests : IDisposable
         Assert.Null(_joiner.Config.PendingSlotId);
     }
 
+    /// <summary>
+    /// Brief T34 (the console-encoding ruling): every file an enrolment carries is tswap's own JSON, written by
+    /// System.Text.Json's default encoder, so pure ASCII: no console code page changes it on 'slot stage put' or 'get'.
+    /// </summary>
+    [Fact]
+    public void EnrolmentFiles_AreAscii_SoNoConsoleEncodingChangesThem()
+    {
+        var approve = StagedApprove(_joiner);
+        var receipt = Accept(_joiner, approve);
+
+        Assert.Null(_joiner.Config.PendingSlotId);
+        var files = new Dictionary<string, byte[]>
+        {
+            ["request"] = File.ReadAllBytes(_joiner.PathOf("request.json")),
+            ["approve"] = File.ReadAllBytes(Path.Combine(StagedFolder(_host), "approve.json")),
+            ["receipt"] = Encoding.UTF8.GetBytes(receipt),
+        };
+        foreach (var (name, bytes) in files)
+        {
+            Assert.NotEmpty(bytes);
+            Assert.True(bytes.All(b => b < 0x80), $"the {name} file has a byte of 0x80 or more");
+        }
+    }
+
+    /// <summary>Brief T34 (#331): a staged file over 1 MiB is refused by its length, before it is read.</summary>
+    [Fact]
+    public void ApproveStaged_AHugeStagedFile_IsRefusedBySize_BeforeItIsRead()
+    {
+        if (OperatingSystem.IsWindows())
+            return; // NTFS would allocate the sparse file; CI's Linux and macOS jobs run this
+        Assert.Equal(0, Stage(_host, RequestOf(_joiner), Id, "put", "request").Exit);
+        using (var file = new FileStream(Path.Combine(StagedFolder(_host), "request.json"), FileMode.Open, FileAccess.Write))
+            file.SetLength((long)int.MaxValue + 1);
+
+        var (exit, _, stderr) = _host.Run("", "slot", "approve", "--staged", Id, "--expect", new string('0', 64));
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("The staged request file is larger than 1 MiB, so it is not a request file. Nothing was approved.", stderr);
+        Assert.Null(_host.Config.ApprovedSlots);
+    }
+
     [Fact]
     public void Put_WritesTheStdinBytesVerbatim()
     {
@@ -472,8 +513,7 @@ public class SlotStageTests : IDisposable
     [Fact]
     public void Stage_UnderSudo_IsRefused()
     {
-        if (Environment.IsPrivilegedProcess)
-            return; // AGENTS.md's sudo-refusal convention
+        // Brief T34: no early return on a privileged runner; the refusal reads only ctx.Env.SudoEscalated, set here.
         _host.SudoEscalated = true;
 
         var (exit, _, stderr) = Stage(_host, "x", Id, "put", "request");

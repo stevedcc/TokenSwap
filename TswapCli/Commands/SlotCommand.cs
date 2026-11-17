@@ -2041,6 +2041,8 @@ public sealed partial class SlotCommand : ICliCommand
         public TextWriter Error => inner.Error;
         public TextReader In => inner.In;
         public bool IsInputRedirected => inner.IsInputRedirected;
+        // Brief T34 (#331): true on purpose. Out is the original stderr and stdout carries the file, so nothing may treat
+        // this console as a full terminal (guided questions and 'slot enrol' ask only when stdout is a terminal).
         public bool IsOutputRedirected => true;
         public string? ReadLine() => inner.ReadLine();
         public string ReadPassword(TextWriter? echo = null) => inner.ReadPassword(echo ?? inner.Error);
