@@ -50,6 +50,12 @@ There is no linter configured.
 and assert the platform-neutral "requires", not "sudo" (Windows says "requires an administrator
 prompt"). Run such commands with the sudo bypass off (`SudoBypass: false`, or `FleetMachine.Sudo = false`).
 
+**Docs and spelling guards** (`TswapTests/Docs/`): the doc-link tests and the British-spelling tests
+(`SpellingTests`, allowlist `TswapTests/Docs/us-spellings-allowed.txt`) read every file git tracks *or would
+track*: untracked files that `.gitignore` doesn't exclude count too. A stray local note with a US spelling or a
+broken link fails the unit suite; keep such notes outside the repository or in an ignored path
+(both guards already skip `wip-*.md` notes and build output).
+
 **The skill eval** (`evals/skill/run.sh`, Linux + bubblewrap) runs agents against scenarios with
 tswap and sudo shimmed; its fake agent is exercised by `SkillEvalTests` in the unit suite.
 Without a usable bwrap those tests skip with a message, unless `CI_REQUIRE_BWRAP=1` (set by the
