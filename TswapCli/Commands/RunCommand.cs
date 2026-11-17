@@ -274,20 +274,26 @@ public sealed partial class RunCommand : ICliCommand
                 // resolution path; output held back for a possible multi-line secret is released when the
                 // child waits for terminal input.
                 fingerprintKeys = FingerprintKeys.Derive(key);
+                matcher = FingerprintStreamMatcher.For(metadata, fingerprintKeys, shortForms);
+                // Brief T35 (#349): on a Windows console the child's window-title sequences are dropped too.
+                var stdoutMode = ctx.StdoutConsoleMode();
                 var options = new RedactionOptions
                 {
-                    Matchers = [matcher = FingerprintStreamMatcher.For(metadata, fingerprintKeys, shortForms)],
+                    Matchers = stdoutMode is null ? [matcher] : [matcher, new TerminalTitleMatcher()],
                     ReleaseWhenAwaitingInput = true,
                     // Brief T26: set for the child only, never in its argv; tswap's own environment is unchanged.
                     Environment = environment.Count > 0 ? environment : null,
                 };
                 var runner = ctx.PtyRunner();
                 childStarted = true;
-                var exitCode = files is null
-                    ? runner.Run(argv, replacements, options)
-                    : files.RunChild(() => runner.Run(argv, replacements, options));
-
-                return exitCode;
+                // Brief T35 (#349): VT processing on tswap's console stdout while the child runs, so the classic
+                // console interprets the pseudo console's sequences; the old mode is back before the warning below.
+                using (stdoutMode is null ? null : WindowsVirtualTerminal.AroundChild(stdoutMode))
+                {
+                    return files is null
+                        ? runner.Run(argv, replacements, options)
+                        : files.RunChild(() => runner.Run(argv, replacements, options));
+                }
             }
             finally
             {

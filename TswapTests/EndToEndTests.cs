@@ -1064,6 +1064,36 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         Assert.False(output.Contains("-conpty"), $"the value's ASCII tail leaked (mis-decoded, unredacted). {dump}");
     }
 
+    /// <summary>
+    /// Brief T35 Task 4 (#349): the child's pseudo console sets the window title to the child's path (OSC 0); on a
+    /// Windows console run drops it, so it reaches the outer capture neither as text (VT off) nor re-emitted by the
+    /// outer pseudo console (VT on). No ESC printed as the '←' glyph either (A3; the outer pseudo console's own
+    /// start-up sequences are in every capture, so those fragments can't be asserted). Windows only (CI). If the
+    /// outer pseudo console turns out to emit a title naming pwsh by itself, report the dump; never loosen this.
+    /// </summary>
+    [Fact]
+    public void Run_NoChildTitle_WindowsConPty()
+    {
+        if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 17763)) return; // ConPTY requires Win10 1809+
+
+        RunTswap("init", "--yubikey", "--no-recovery");
+        RunTswapWithStdin("s3cr3t-title-value", "ingest", "my-secret");
+        var printScript = Path.Combine(_tempDir, "print3.ps1");
+        File.WriteAllText(printScript,
+            "param($v)\nWrite-Output before\nWrite-Output $v\nWrite-Output after\nStart-Sleep -Milliseconds 1500\n");
+
+        var (exitCode, output) = RunTswapInConPty(waitForOutput: "[REDACTED: my-secret]",
+            "run", "pwsh", "-NoProfile", "-File", printScript, "{{my-secret}}");
+
+        var dump = $"exit={exitCode} ConPTY output ({output.Length} chars): [{EscapeVt(output)}]";
+        Assert.True(exitCode == 0, $"Expected exit 0. {dump}");
+        Assert.True(output.Contains("[REDACTED: my-secret]"), $"redaction marker missing. {dump}");
+        Assert.False(output.Contains("s3cr3t-title-value"), $"raw secret leaked. {dump}");
+        Assert.False(System.Text.RegularExpressions.Regex.IsMatch(output, "\\]0;[^\\x07\\x1b\\r\\n]*pwsh",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase), $"the child's window title reached the console. {dump}");
+        Assert.False(output.Contains("←["), $"an escape sequence was printed as text. {dump}");
+    }
+
     // --- ConPTY P/Invoke helpers (used by Run_CompoundCommand_RedactedOutput_WindowsConPty) ---
 
     [StructLayout(LayoutKind.Sequential)]

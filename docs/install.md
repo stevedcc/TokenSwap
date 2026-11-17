@@ -273,3 +273,13 @@ pwsh installTswap.ps1
   write in the window's code page, as before. A program `tswap run` starts inherits the UTF-8 code
   page. If a symbol shows as an empty box in the classic console window, its font lacks it; Windows
   Terminal shows it.
+- **`tswap run` in a console window.** The command runs in a pseudo console (ConPTY). tswap lets the
+  window interpret its escape sequences while the command runs and drops the title changes, so the
+  window keeps its title. The pseudo console clears the window before the command's output, as in
+  Windows Terminal. After a Ctrl+C or a killed tswap the window may keep interpreting escape
+  sequences; that is harmless.
+- **A Windows machine as an SSH host.** OpenSSH for Windows runs each `ssh -t` session in its own
+  pseudo console, which sets the title of the terminal window you connect from (for example to
+  `C:\WINDOWS\system32\conhost.exe`) and leaves it after the session, as after `slot enrol --via
+  <windows-host>`'s approve and merge steps. That is OpenSSH's behaviour, not tswap's; the title comes
+  back the next time your shell or terminal sets one.
