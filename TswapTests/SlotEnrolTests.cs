@@ -685,6 +685,72 @@ public class SlotEnrolTests : IDisposable
             $"press Ctrl-C now (the host's staging folder is then left; remove it with 'tswap slot stage {id} clean').", stdout);
     }
 
+    // ------------------------------------------------------------------ brief T34 task 1: enrol's own wording
+
+    /// <summary>Every line of <paramref name="note"/> is in <paramref name="text"/>.</summary>
+    private static void AssertContainsEveryLine(string[] note, string text)
+    {
+        Assert.NotEmpty(note);
+        foreach (var line in note)
+            Assert.Contains(line, text);
+    }
+
+    [Fact]
+    public void Interactive_RequestAndAccept_PrintEnrolsOwnSteps_NotTheHandCarriedOnes()
+    {
+        _joiner.Ssh = InteractiveSsh();
+
+        var (exit, stdout, stderr) = EnrolOnTerminal(TerminalAnswers);
+
+        Assert.True(exit == 0, stderr + stdout);
+        var text = stdout.ReplaceLineEndings("\n");
+        AssertContainsEveryLine(TswapCli.Commands.SlotCommand.EnrolInteractiveFingerprintNote, text);
+        Assert.Contains("X25519 keypair. Nothing is shared or usable as a vault yet: 'slot enrol' has\nthe host approve the request next.\n", text);
+        Assert.Contains("('slot enrol' has the host merge it next).", text);
+        foreach (var handCarried in (string[])["Move this file", "Carry it back", "Not load-bearing", "slot approve <this-file>", "slot merge <receipt-file>"])
+            Assert.DoesNotContain(handCarried, text);
+    }
+
+    [Fact]
+    public void Interactive_TheHostsApprove_SaysItDoesntWait()
+    {
+        var ssh = InteractiveSsh();
+        _joiner.Ssh = ssh;
+
+        var (exit, stdout, stderr) = EnrolOnTerminal(TerminalAnswers);
+
+        Assert.True(exit == 0, stderr + stdout);
+        var host = ssh.InteractiveOutput.ToString();
+        AssertContainsEveryLine(TswapCli.Commands.SlotCommand.StagedApproveFingerprintNote, host);
+        Assert.DoesNotContain("Compare this against", host);
+        Assert.DoesNotContain("Not load-bearing", host);
+    }
+
+    [Fact]
+    public void Batch_Request_NotesTheHostsLabelledLine()
+    {
+        var (exit, stdout, stderr) = Enrol("");
+
+        Assert.True(exit == 0, stderr + stdout);
+        AssertContainsEveryLine(TswapCli.Commands.SlotCommand.EnrolBatchFingerprintNote(Via), stdout);
+        Assert.DoesNotContain("Move this file", stdout);
+        Assert.DoesNotContain("Carry it back", stdout);
+        const string Mine = "This machine's slot fingerprint: ";
+        var mine = Assert.Single(stdout.Split('\n'), l => l.StartsWith(Mine)).TrimEnd('\r')[Mine.Length..];
+        var hostLabel = $"[{Via}] Requesting machine's slot fingerprint: ";
+        var hosts = Assert.Single(stderr.Split('\n'), l => l.StartsWith(hostLabel)).TrimEnd('\r')[hostLabel.Length..];
+        Assert.Equal(mine, hosts);
+    }
+
+    [Fact]
+    public void SlotRequest_ByHand_StillPrintsTheHandCarriedSteps()
+    {
+        var stdout = _joiner.Ok("", "slot", "request", _joiner.PathOf("request.json"));
+
+        Assert.Contains("Move this file to an already-enrolled machine yourself (scp/USB/paste) —", stdout);
+        Assert.Contains("(Not load-bearing in v0", stdout);
+    }
+
     [Fact]
     public void Interactive_AnApproveFileSwappedOnTheHost_ShowsAnotherFingerprint_AndEofAtTheEnterKeepsTheRequest()
     {

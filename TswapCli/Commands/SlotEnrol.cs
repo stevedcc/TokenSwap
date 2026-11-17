@@ -48,6 +48,23 @@ public sealed partial class SlotCommand
         "slot enrol needs a terminal here, because the host's sudo and vault may ask for a password. In a script, add " +
         "--batch (the host then must need no password: docs/multi-machine.md#enrolling-over-ssh). Nothing was changed.";
 
+    /// <summary>
+    /// Brief T34 (#337.2): the interactive request's note under this machine's slot fingerprint (instead of the v0 lines:
+    /// here the check that counts is the approve file's fingerprint, confirmed at the Enter).
+    /// </summary>
+    internal static readonly string[] EnrolInteractiveFingerprintNote =
+    [
+        "(The host shows this fingerprint too when it approves. The check that guards",
+        " the enrolment is the approve file's fingerprint, before you press Enter here.)",
+    ];
+
+    /// <summary>Brief T34 (#337.2): the batch request's note; the host's approve prints the fingerprint on stderr, relayed labelled.</summary>
+    internal static string[] EnrolBatchFingerprintNote(string via) =>
+    [
+        "(The host shows this fingerprint too when it approves,",
+        $" on a line starting [{via}].)",
+    ];
+
     private static int ExecuteEnrol(CommandContext ctx, string[] args)
     {
         var usage = EnrolUsage(ctx);
@@ -140,7 +157,8 @@ public sealed partial class SlotCommand
                 "(docs/multi-machine.md#enrolling-over-ssh); or carry the files by hand (slot request, approve, accept, merge).");
 
         // --- 2. request, here ---
-        if (RequestStep(ctx, folder, enrolRoot, backend, requirePresence, passwordFlag, vaultDir, fresh) is not { } kept)
+        if (RequestStep(ctx, folder, enrolRoot, backend, requirePresence, passwordFlag, vaultDir, fresh, EnrolBatchFingerprintNote(via))
+            is not { } kept)
             return 1;
         folder = kept;
         var (device, publicKey, requestFile, approveFile, receiptFile) = Paths(ctx, folder);
@@ -202,7 +220,8 @@ public sealed partial class SlotCommand
         var versionNote = VersionNote(hostVersion);
 
         // --- 2. request, here ---
-        if (RequestStep(ctx, folder, enrolRoot, backend, requirePresence, passwordFlag, vaultDir, fresh) is not { } kept)
+        if (RequestStep(ctx, folder, enrolRoot, backend, requirePresence, passwordFlag, vaultDir, fresh, EnrolInteractiveFingerprintNote)
+            is not { } kept)
             return 1;
         folder = kept;
         var (device, publicKey, requestFile, approveFile, receiptFile) = Paths(ctx, folder);
@@ -309,11 +328,12 @@ public sealed partial class SlotCommand
     }
 
     /// <summary>
-    /// Step 2: <c>slot request</c> here, exactly as by hand (its prompts and output), into the enrolment folder; or the
+    /// Step 2: <c>slot request</c> here, as by hand (its prompts and output, without the hand-carry steps and with
+    /// <paramref name="fingerprintNote"/> under the slot fingerprint: brief T34), into the enrolment folder; or the
     /// kept <paramref name="folder"/> when continuing. Null when the person declined the overwrite question.
     /// </summary>
     private static string? RequestStep(CommandContext ctx, string? folder, string enrolRoot, HardwareBackend? backend, bool? requirePresence,
-        bool? passwordFlag, string? vaultDir, bool fresh)
+        bool? passwordFlag, string? vaultDir, bool fresh, string[] fingerprintNote)
     {
         if (folder is not null)
             return folder;
@@ -327,7 +347,11 @@ public sealed partial class SlotCommand
         // slot request takes --vault-dir only with --password; accept takes it either way (step 4).
         if (passwordFlag == true && vaultDir is not null)
             requestArgs.AddRange(["--vault-dir", vaultDir]);
-        var hooks = new RequestHooks { PathFor = slotId => Path.Combine(CreateEnrolmentFolder(enrolRoot, slotId), RequestFileName) };
+        var hooks = new RequestHooks
+        {
+            PathFor = slotId => Path.Combine(CreateEnrolmentFolder(enrolRoot, slotId), RequestFileName),
+            FingerprintNote = fingerprintNote,
+        };
         try
         {
             ExecuteRequest(ctx, [.. requestArgs], hooks);
@@ -361,7 +385,7 @@ public sealed partial class SlotCommand
     }
 
     /// <summary>
-    /// Step 4: <c>slot accept</c> here, exactly as by hand; its receipt into the enrolment folder. True: go on to the merge;
+    /// Step 4: <c>slot accept</c> here, as by hand (its closing line says enrol has the host merge: brief T34); its receipt into the enrolment folder. True: go on to the merge;
     /// false: joined a shared folder whose receipt wasn't written (nothing more is needed). Every other failure throws,
     /// with <paramref name="cleanNote"/> (interactive mode: the staging folder is left) after T27's lines.
     /// </summary>
@@ -374,7 +398,7 @@ public sealed partial class SlotCommand
             acceptArgs.AddRange(["--vault-dir", vaultDir]);
         try
         {
-            ExecuteAccept(ctx, [.. acceptArgs], approveText);
+            ExecuteAccept(ctx, [.. acceptArgs], approveText, fromEnrol: true);
             return true;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)

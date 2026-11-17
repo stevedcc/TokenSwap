@@ -161,8 +161,7 @@ public sealed partial class SlotCommand : ICliCommand
         c.Out.WriteLine("║  tswap - Slot Request (new machine)    ║");
         c.Out.WriteLine("╚════════════════════════════════════════╝\n");
         c.Out.WriteLine("Enrolling one YubiKey for this machine's slot, then generating the slot's");
-        c.Out.WriteLine("X25519 keypair. Nothing is shared or usable as a vault yet — carry the request");
-        c.Out.WriteLine("file this produces to an already-enrolled machine and run 'slot approve' there.\n");
+        PrintRequestIntroTail(c, hooks);
 
         // Brief T17 ruling 16: a YubiKey request only records the v2 blob (and the folder's vault-password
         // file); the password is typed at 'slot accept', which derives KEK_slot with it.
@@ -225,8 +224,11 @@ public sealed partial class SlotCommand : ICliCommand
         YubiKeySlotEnrolment.PrintTouchPolicy(c, blob);
         if (vaultPassword is not null)
             c.Out.WriteLine("This slot needs the vault password: 'slot accept' asks for it.");
-        PrintFingerprint(c, "This machine's slot", slotKeyPair.PublicKey);
+        PrintFingerprint(c, "This machine's slot", slotKeyPair.PublicKey, hooks?.FingerprintNote);
         c.Out.WriteLine($"\nRequest file written to: {path}");
+        // Brief T34 (#337.1): 'slot enrol' carries the files itself.
+        if (hooks is not null)
+            return 0;
         c.Out.WriteLine("Move this file to an already-enrolled machine yourself (scp/USB/paste) —");
         c.Out.WriteLine("do not drop it in a sync folder. There, run:");
         c.Out.WriteLine($"  sudo {ctx.Prefix} slot approve <this-file> <approve-file>");
@@ -262,8 +264,7 @@ public sealed partial class SlotCommand : ICliCommand
         c.Out.WriteLine("║  tswap - Slot Request (new machine)    ║");
         c.Out.WriteLine("╚════════════════════════════════════════╝\n");
         c.Out.WriteLine($"Enrolling this machine's {hardware} for its slot, then generating the slot's");
-        c.Out.WriteLine("X25519 keypair. Nothing is shared or usable as a vault yet — carry the request");
-        c.Out.WriteLine("file this produces to an already-enrolled machine and run 'slot approve' there.\n");
+        PrintRequestIntroTail(c, hooks);
 
         // Brief T17 ruling 16: a TPM or Secure Enclave request asks for the password now and seals with it
         // (unchecked: there is no K_v here; 'slot accept' checks it against the verifier).
@@ -330,8 +331,11 @@ public sealed partial class SlotCommand : ICliCommand
             if (!requirePresence)
                 c.Out.WriteLine("The approving machine can't see that this slot needs no presence: tell whoever approves it.");
         }
-        PrintFingerprint(c, "This machine's slot", slotKeyPair.PublicKey);
+        PrintFingerprint(c, "This machine's slot", slotKeyPair.PublicKey, hooks?.FingerprintNote);
         c.Out.WriteLine($"\nRequest file written to: {path}");
+        // Brief T34 (#337.1): 'slot enrol' carries the files itself.
+        if (hooks is not null)
+            return 0;
         c.Out.WriteLine("Move this file to an already-enrolled machine yourself (scp/USB/paste) —");
         c.Out.WriteLine("do not drop it in a sync folder. There, run:");
         c.Out.WriteLine($"  sudo {ctx.Prefix} slot approve <this-file> <approve-file>");
@@ -352,6 +356,25 @@ public sealed partial class SlotCommand : ICliCommand
         public bool Saved { get; set; }
         public bool Written { get; set; }
         public string? RequestPath { get; set; }
+
+        /// <summary>Brief T34 (#337.2): the lines under this machine's slot fingerprint, instead of the v0 note.</summary>
+        public string[]? FingerprintNote { get; init; }
+    }
+
+    /// <summary>
+    /// The request intro's last two lines and its blank line: by hand, how the request file travels; from
+    /// <c>slot enrol</c> (brief T34, #337.1), that enrol has the host approve it.
+    /// </summary>
+    private static void PrintRequestIntroTail(IConsole c, RequestHooks? hooks)
+    {
+        if (hooks is null)
+        {
+            c.Out.WriteLine("X25519 keypair. Nothing is shared or usable as a vault yet — carry the request");
+            c.Out.WriteLine("file this produces to an already-enrolled machine and run 'slot approve' there.\n");
+            return;
+        }
+        c.Out.WriteLine("X25519 keypair. Nothing is shared or usable as a vault yet: 'slot enrol' has");
+        c.Out.WriteLine("the host approve the request next.\n");
     }
 
     private static int Declined(RequestHooks? hooks)
@@ -462,6 +485,17 @@ public sealed partial class SlotCommand : ICliCommand
     /// machine's local keyring ends up a complete (if manually-propagated) picture of the fleet.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// Brief T34 (#337.3): the staged approve's note under the requester's fingerprint: approve doesn't wait, and the check
+    /// that counts is the approve file's fingerprint, which the joining machine asks the person to confirm.
+    /// </summary>
+    internal static readonly string[] StagedApproveFingerprintNote =
+    [
+        "(The joining machine shows the same fingerprint. Nothing here waits for you:",
+        " the check to make is the approve file fingerprint below, which the joining",
+        " machine asks you to confirm.)",
+    ];
+
     private static int ExecuteApprove(CommandContext ctx, string[] args)
     {
         var approveUsage = $"{ctx.Prefix} slot approve <request-file> <approve-file> [{RecoveryKeyFlag}]";
@@ -539,8 +573,18 @@ public sealed partial class SlotCommand : ICliCommand
 
         c.Out.WriteLine($"Read slot request from: {(requestPath == StdioPath ? "stdin" : requestPath)}");
         c.Out.WriteLine($"The requesting machine enrols {enrolled} as its own slot.");
-        PrintFingerprint(c, "Requesting machine's slot", requesterPublicKey);
-        c.Out.WriteLine("Compare this against the fingerprint shown on the requesting machine before continuing.\n");
+        // Brief T34 (#337.3): a staged approve runs for 'slot enrol', which asks the person to confirm the approve file's
+        // fingerprint; approve itself doesn't wait.
+        if (stagedId is not null)
+        {
+            PrintFingerprint(c, "Requesting machine's slot", requesterPublicKey, StagedApproveFingerprintNote);
+            c.Out.WriteLine();
+        }
+        else
+        {
+            PrintFingerprint(c, "Requesting machine's slot", requesterPublicKey);
+            c.Out.WriteLine("Compare this against the fingerprint shown on the requesting machine before continuing.\n");
+        }
 
         var config = ctx.Storage.LoadConfig();
         if (config.Keyring is null)
@@ -686,7 +730,9 @@ public sealed partial class SlotCommand : ICliCommand
     /// </summary>
     /// <param name="approveText">Brief T28: the approve file's text as <c>slot enrol</c> received it (its fingerprint was
     /// computed over those bytes), parsed instead of a re-read of the file at the path; null: the file.</param>
-    private static int ExecuteAccept(CommandContext ctx, string[] args, string? approveText = null)
+    /// <param name="fromEnrol">Brief T34 (#337.1): run by <c>slot enrol</c>, which has the host merge the receipt itself, so
+    /// the closing lines say that instead of how to carry it.</param>
+    private static int ExecuteAccept(CommandContext ctx, string[] args, string? approveText = null, bool fromEnrol = false)
     {
         var acceptUsage = $"{ctx.Prefix} slot accept <approve-file> [--receipt <file>] [--vault-dir <shared folder>]";
         // Brief T6 decision 8: --vault-dir joins a shared vault folder (record store).
@@ -938,7 +984,14 @@ public sealed partial class SlotCommand : ICliCommand
         if ((vaultDir ?? (ctx.Storage as RecordVaultStore)?.VaultDir) is { } folder)
         {
             c.Out.WriteLine($"\nThe new slot is in the keyring of the vault folder {folder}: every machine that shares that folder has it, with no merge.");
-            c.Out.WriteLine($"Receipt written to: {receiptPath} (only for a machine with its own copy of the vault, not this folder: there, run sudo {ctx.Prefix} slot merge <receipt-file>).");
+            c.Out.WriteLine(fromEnrol
+                ? $"Receipt written to: {receiptPath} ('slot enrol' has the host merge it next)."
+                : $"Receipt written to: {receiptPath} (only for a machine with its own copy of the vault, not this folder: there, run sudo {ctx.Prefix} slot merge <receipt-file>).");
+            return 0;
+        }
+        if (fromEnrol)
+        {
+            c.Out.WriteLine($"\nReceipt written to: {receiptPath} ('slot enrol' has the host merge it next).");
             return 0;
         }
         c.Out.WriteLine($"\nReceipt written to: {receiptPath}");
@@ -2076,12 +2129,20 @@ public sealed partial class SlotCommand : ICliCommand
 
     /// <summary>
     /// Prints the fingerprint (issue #122, <see cref="SlotFingerprint"/>) of a public key shown
-    /// during enrolment. Not load-bearing in v0 — see that type's doc comment — so this is
-    /// purely informational, not a gated confirmation prompt.
+    /// during enrolment, then a note: purely informational, not a gated confirmation prompt.
+    /// Without <paramref name="note"/>, the v0 lines (not load-bearing — see that type's doc
+    /// comment): true by hand, where the hand-carried file is the trust boundary. Brief T34
+    /// (#337.2-3): <c>slot enrol</c>'s steps pass their own note, each element one printed line.
     /// </summary>
-    internal static void PrintFingerprint(IConsole c, string label, byte[] publicKey)
+    internal static void PrintFingerprint(IConsole c, string label, byte[] publicKey, string[]? note = null)
     {
         c.Out.WriteLine($"{label} fingerprint: {SlotFingerprint.Compute(publicKey)}");
+        if (note is not null)
+        {
+            foreach (var line in note)
+                c.Out.WriteLine(line);
+            return;
+        }
         c.Out.WriteLine("(Not load-bearing in v0 — hand-carrying this file yourself is the trust");
         c.Out.WriteLine(" boundary — but worth reading aloud/comparing for extra assurance.)");
     }
