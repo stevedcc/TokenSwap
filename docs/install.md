@@ -265,3 +265,11 @@ pwsh installTswap.ps1
   and `apply` needs an elevated prompt. For a file with `# tswap:` markers use
   `tswap run helm upgrade --install app ./chart -f {{@values.yaml}}` (in PowerShell
   `-f '{{@values.yaml}}'`), which works in cmd and PowerShell: see the [Helm deployment patterns](examples.md#helm-deployment-patterns).
+- **Console output is UTF-8.** While tswap runs in a console window it sets the window's output code page
+  to UTF-8 (65001), so its symbols and box lines show, and puts the old code page back when it exits;
+  after a Ctrl+C or a killed tswap the window can stay at UTF-8 (`chcp` shows and sets it). A
+  long-running `tswap agent serve` in a console window keeps it at UTF-8 until it exits. When stdout or
+  stderr is redirected to a file or pipe, nothing changes: tswap and the programs `tswap run` starts
+  write in the window's code page, as before. A program `tswap run` starts inherits the UTF-8 code
+  page. If a symbol shows as an empty box in the classic console window, its font lacks it; Windows
+  Terminal shows it.

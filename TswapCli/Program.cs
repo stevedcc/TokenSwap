@@ -16,4 +16,8 @@ using TswapCore.Agent;
 // run in-process.
 ProcessHardening.HardenCli();
 
+// Brief T35 (#348.2, #294.4, #355): on Windows with stdout and stderr both consoles, UTF-8 output while tswap runs, the
+// window's code page back at exit. Here, not in CliHost, so in-process tests never change the test host's console.
+using var consoleOutput = ConsoleOutputEncoding.Utf8OnWindows(ConsoleOutputEncoding.System);
+
 return CliHost.Run(args, new SystemConsole(), Environment.GetEnvironmentVariable, Environment.IsPrivilegedProcess, Environment.ProcessPath);

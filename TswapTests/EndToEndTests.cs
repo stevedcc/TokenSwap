@@ -1000,6 +1000,70 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
             $"redaction marker missing — the inner ConPTY pipeline lost the child's output. {dump}");
     }
 
+    /// <summary>
+    /// Brief T35 Task 3 (#348.2, #294.4): tswap's glyphs reach a console as themselves. Before the change tswap
+    /// wrote the OEM code page's best fit, which the outer pseudo console renders as '?' and 'V'. Windows only
+    /// (CI); returns early elsewhere, as <see cref="Run_CompoundCommand_RedactedOutput_WindowsConPty"/> does.
+    /// Two captures, each waiting for an ASCII sentinel printed before and after the change (A8); short fragments
+    /// only, since ConPTY may wrap long lines, and no banner wording (A18).
+    /// </summary>
+    [Fact]
+    public void Glyphs_ReachTheConsole_WindowsConPty()
+    {
+        if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 17763)) return; // ConPTY requires Win10 1809+
+
+        // A refused run (no token, nothing is opened): the error line's ❌.
+        var (refusedExit, refused) = RunTswapInConPty(waitForOutput: "No {{tokens}}", "run", "tool", "{x}");
+        var refusedDump = $"exit={refusedExit} ConPTY output ({refused.Length} chars): [{EscapeVt(refused)}]";
+        Assert.True(refusedExit == 1, $"Expected exit 1. {refusedDump}");
+        Assert.True(refused.Contains("Error: No {{tokens}}"), $"error line missing. {refusedDump}");
+        Assert.True(refused.Contains('❌'), $"'❌' missing. {refusedDump}");
+        Assert.False(refused.Contains("? Error"), $"'❌' shown as '?'. {refusedDump}");
+
+        // init's closing banner: ✓ and the box lines.
+        var (initExit, init) = RunTswapInConPty(waitForOutput: "COMPLETE", "init", "--yubikey", "--no-recovery", "--no-password");
+        var initDump = $"exit={initExit} ConPTY output ({init.Length} chars): [{EscapeVt(init)}]";
+        Assert.True(initExit == 0, $"Expected exit 0. {initDump}");
+        Assert.True(init.Contains("COMPLETE"), $"banner missing. {initDump}");
+        Assert.True(init.Contains('✓'), $"'✓' missing. {initDump}");
+        Assert.True(init.Contains("╔═"), $"box lines missing. {initDump}");
+    }
+
+    /// <summary>
+    /// Brief T35 Task 3 (#355, A4): a secret value with non-ASCII characters is redacted on the ConPTY path.
+    /// RedactingPty's WindowsPty decodes ConPTY's UTF-8 with Console.OutputEncoding; before the change that was the
+    /// OEM code page, so the value didn't match and its bytes reached the console. Windows only (CI).
+    /// </summary>
+    [Fact]
+    public void NonAsciiValue_Redacted_WindowsConPty()
+    {
+        if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 17763)) return; // ConPTY requires Win10 1809+
+
+        const string value = "pässwört-conpty";
+        RunTswap("init", "--yubikey", "--no-recovery");
+        RunTswapWithStdin(value, "ingest", "umlaut");
+        // A16: the stored value is the one typed ('ä' and 'ö' exist in code pages 437, 850 and 1252); if this fails,
+        // the ingest leg is what to fix, not the redaction.
+        var get = RunTswap("get", "umlaut");
+        Assert.True(get.exitCode == 0, get.stderr);
+        Assert.Equal(value, get.stdout.Trim());
+
+        // A13: print3.ps1 as the existing ConPTY test writes it; its trailing sleep is existing child behaviour (a
+        // child that exits at once can render as a blank session), not a test wait.
+        var printScript = Path.Combine(_tempDir, "print3.ps1");
+        File.WriteAllText(printScript,
+            "param($v)\nWrite-Output before\nWrite-Output $v\nWrite-Output after\nStart-Sleep -Milliseconds 1500\n");
+        var (exitCode, output) = RunTswapInConPty(waitForOutput: "[REDACTED: umlaut]",
+            "run", "pwsh", "-NoProfile", "-File", printScript, "{{umlaut}}");
+
+        var dump = $"exit={exitCode} ConPTY output ({output.Length} chars): [{EscapeVt(output)}]";
+        Assert.True(exitCode == 0, $"Expected exit 0. {dump}");
+        Assert.True(output.Contains("[REDACTED: umlaut]"), $"redaction marker missing. {dump}");
+        Assert.False(output.Contains("pässwört"), $"raw secret leaked. {dump}");
+        // An unredacted value mis-decoded on the way still carries its ASCII tail.
+        Assert.False(output.Contains("-conpty"), $"the value's ASCII tail leaked (mis-decoded, unredacted). {dump}");
+    }
+
     // --- ConPTY P/Invoke helpers (used by Run_CompoundCommand_RedactedOutput_WindowsConPty) ---
 
     [StructLayout(LayoutKind.Sequential)]
