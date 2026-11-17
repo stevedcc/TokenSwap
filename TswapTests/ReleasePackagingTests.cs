@@ -1609,8 +1609,10 @@ public class ReleasePackagingTests : IDisposable
         Assert.Equal(2, steps.Count);
         foreach (var step in steps)
         {
-            var with = step[..step.IndexOf("files:", StringComparison.Ordinal)];
-            Assert.Contains("prerelease: ${{ contains(github.ref_name, '-') }}", with);
+            // The step's own lines: up to the next step ("- name:") or the end of the job, whichever comes first.
+            var end = step.IndexOf("\n      - ", StringComparison.Ordinal);
+            var own = end < 0 ? step : step[..end];
+            Assert.Contains("\n          prerelease: ${{ contains(github.ref_name, '-') }}\n", own);
         }
     }
 }
