@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using TswapCore;
+using TswapCore.Broker;
 using Xunit;
 
 namespace TswapTests;
@@ -34,12 +35,18 @@ public class InstallScriptUpgradeTests
         // What install_binary must do. On Linux `cp -f` already survives a running target (it unlinks and
         // recreates on ETXTBSY), so this pins the function, not a Linux regression; the hazard it removes is
         // macOS's in-place rewrite of a running binary (and the Secure Enclave library), which CI can't provoke.
+        // The stand-in is a copy of bash, blocked reading its stdin: a multi-call binary (26.04's uutils `sleep`)
+        // picks its tool from its own file name and exits at once under the name `tswap` (#339).
         var dir = Directory.CreateTempSubdirectory("tswap-install-").FullName;
         try
         {
             var target = Path.Combine(dir, "tswap");
-            File.Copy("/usr/bin/sleep", target);
-            using var running = Process.Start(new ProcessStartInfo(target, "30") { UseShellExecute = false })!;
+            File.Copy("/bin/bash", target);
+            var oldBinary = BrokerNative.RealPath(target);
+            var start = new ProcessStartInfo(target) { UseShellExecute = false, RedirectStandardInput = true };
+            start.ArgumentList.Add("-c");
+            start.ArgumentList.Add("read -r _");
+            using var running = Process.Start(start)!;
             var source = Path.Combine(dir, "new-tswap");
             File.WriteAllText(source, "#!/bin/sh\necho new\n");
 
@@ -50,6 +57,7 @@ public class InstallScriptUpgradeTests
             Assert.True(exit == 0, $"install_binary failed: {error}");
             Assert.Equal("#!/bin/sh\necho new\n", File.ReadAllText(target));
             Assert.False(running.HasExited, "the running process was killed");
+            Assert.Equal(oldBinary + " (deleted)", new FileInfo($"/proc/{running.Id}/exe").LinkTarget);
             Assert.Empty(Directory.GetFiles(dir, "tswap.new.*")); // no temp file left
             running.Kill();
             running.WaitForExit();

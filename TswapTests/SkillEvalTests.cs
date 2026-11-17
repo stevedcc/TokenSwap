@@ -207,6 +207,110 @@ public class SkillEvalTests(ITestOutputHelper output)
         }
     }
 
+    // Brief T37 (#339): a real sudo is still refused, wherever the system's sudo really lives
+    // (/usr/bin/sudo on Fedora and 24.04, /usr/lib/cargo/bin/sudo behind the link on 26.04).
+    [Fact]
+    public void IsolationCheck_AbortsWhenARealSudoIsReachable()
+    {
+        if (!CanRun())
+            return;
+        var realSudo = TswapCore.Broker.BrokerNative.RealPath("/usr/bin/sudo");
+        if (realSudo is null)
+        {
+            output.WriteLine("SKIPPED: no /usr/bin/sudo here");
+            return;
+        }
+        var dir = Path.Combine(Path.GetTempPath(), "tswap-eval-sudo-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var standIn = Path.Combine(dir, "sudo");
+            File.WriteAllText(standIn, "#!/bin/sh\necho 'a real sudo'\n");
+            if (!OperatingSystem.IsWindows()) // always true here (CanRun is Linux-only); for the analyser
+                File.SetUnixFileMode(standIn, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+            var (exit, stdout) = RunEval(["--agent", "fake", "--skill", "off", "--scenario", "01-secret-in-log"],
+                psi => psi.Environment["EVAL_TEST_EXTRA_RO_BIND"] = $"{standIn}:{realSudo}");
+
+            output.WriteLine(stdout);
+            Assert.Equal(2, exit);
+            Assert.Contains("ABORT 01-secret-in-log/pass: isolation check failed", stdout);
+            Assert.Contains("isolation: /usr/bin/sudo exists and is not the eval shim", stdout);
+            Assert.DoesNotContain("PASS ", stdout);
+        }
+        finally
+        {
+            Directory.Delete(dir, true);
+        }
+    }
+
+    // Brief T37 (#339): where the shim is bound. A shimmed name that is a link into another folder
+    // (26.04's sudo-rs and uutils) gets the shim over the link's target, and the link's own paths
+    // count as shim paths; a link to a multi-call binary under another name (busybox) gets nothing.
+    [LinuxFact]
+    public void ShimMounts_FollowLinksIntoOtherFolders_ButNotIntoAMultiCallBinary()
+    {
+        if (!File.Exists("/usr/bin/python3"))
+        {
+            if (Environment.GetEnvironmentVariable("CI_REQUIRE_BWRAP") == "1")
+                Assert.Fail("CI_REQUIRE_BWRAP=1 but there is no /usr/bin/python3 to run the eval's runner");
+            output.WriteLine("SKIPPED: no /usr/bin/python3 here");
+            return;
+        }
+        var root = TswapCore.Broker.BrokerNative.RealPath(Directory.CreateTempSubdirectory("tswap-eval-mounts-").FullName)!;
+        try
+        {
+            void FileAt(string rel) => File.WriteAllText(Path.Combine(root, rel), "");
+            void LinkAt(string rel, string target) => File.CreateSymbolicLink(Path.Combine(root, rel), target);
+            Directory.CreateDirectory(Path.Combine(root, "usr", "bin"));
+            Directory.CreateDirectory(Path.Combine(root, "usr", "lib", "cargo", "bin", "coreutils"));
+            Directory.CreateDirectory(Path.Combine(root, "etc", "alternatives"));
+            LinkAt("bin", "usr/bin");
+            FileAt("usr/lib/cargo/bin/sudo");
+            LinkAt("etc/alternatives/sudo", $"{root}/usr/lib/cargo/bin/sudo");
+            LinkAt("usr/bin/sudo", $"{root}/etc/alternatives/sudo");
+            FileAt("usr/lib/cargo/bin/coreutils/cat");
+            LinkAt("usr/bin/cat", "../lib/cargo/bin/coreutils/cat");
+            FileAt("usr/bin/gawk");
+            LinkAt("usr/bin/awk", "gawk");
+            FileAt("usr/lib/busybox");
+            LinkAt("usr/bin/su", "../lib/busybox");
+            FileAt("usr/bin/pkexec");
+
+            const string snippet = """
+                import json, sys
+                sys.path.insert(0, sys.argv[1])
+                import runner
+                root = sys.argv[2]
+                targets, shim_paths = runner.shim_mounts(["sudo", "cat", "awk", "gawk", "su", "pkexec"], [root + "/usr/bin", root + "/bin"])
+                print(json.dumps({"targets": sorted(targets), "shim_paths": sorted(shim_paths)}))
+                """;
+            var psi = new ProcessStartInfo("/usr/bin/python3") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
+            foreach (var a in new[] { "-I", "-B", "-c", snippet, Path.Combine(EvalRoot, "lib"), root })
+                psi.ArgumentList.Add(a);
+            using var python = Process.Start(psi)!;
+            var stdout = python.StandardOutput.ReadToEndAsync();
+            var stderr = python.StandardError.ReadToEndAsync();
+            Assert.True(python.WaitForExit(TimeSpan.FromMinutes(1)), "python3 did not finish");
+            Assert.True(python.ExitCode == 0, stderr.Result);
+
+            using var result = JsonDocument.Parse(stdout.Result);
+            string[] Sorted(params string[] rels) => [.. rels.Select(r => $"{root}/{r}").Order(StringComparer.Ordinal)];
+            string[] Read(string key) => [.. result.RootElement.GetProperty(key).EnumerateArray().Select(e => e.GetString()!)];
+            Assert.Equal(Sorted("usr/lib/cargo/bin/sudo", "usr/lib/cargo/bin/coreutils/cat", "usr/bin/gawk", "usr/bin/pkexec"),
+                Read("targets"));
+            Assert.Equal(Sorted("usr/bin/sudo", "bin/sudo", "usr/lib/cargo/bin/sudo",
+                    "usr/bin/cat", "bin/cat", "usr/lib/cargo/bin/coreutils/cat",
+                    "usr/bin/awk", "bin/awk", "usr/bin/gawk", "bin/gawk",
+                    "usr/bin/pkexec", "bin/pkexec"),
+                Read("shim_paths"));
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
     // Fix round 1 (MiMo): the agent is root in its user namespace; with no capabilities it can't
     // unmount or re-bind the shims. A script that tries, then calls sudo directly, is still caught.
     [Fact]

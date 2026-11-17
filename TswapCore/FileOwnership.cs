@@ -39,6 +39,60 @@ public interface IUnixFileModes
     UnixFileMode? GetMode(string path);
 }
 
+/// <summary>What <see cref="DirectoryOwnerMatcher.Tighten"/> did (brief T36, #347).</summary>
+public enum TightenResult
+{
+    Unchanged,
+    Tightened,
+    OwnedByAnother,
+    ModeKept,
+}
+
+/// <summary>
+/// Brief T36: the real <see cref="IUnixFileModes"/> of <see cref="DirectoryOwnerMatcher.Tighten"/>: the mode, or null
+/// when it can't be read.
+/// </summary>
+internal sealed class UnixFileModeReader : IUnixFileModes
+{
+    public UnixFileMode? GetMode(string path)
+    {
+        if (OperatingSystem.IsWindows())
+            return null;
+        try
+        {
+            return File.GetUnixFileMode(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+}
+
+/// <summary>
+/// Brief T36 (#347): the warnings both stores print for a path <see cref="DirectoryOwnerMatcher.Tighten"/> could not
+/// narrow (<see cref="TightenResult.OwnedByAnother"/>, <see cref="TightenResult.ModeKept"/>, or the change threw).
+/// </summary>
+internal static class LooseModeTexts
+{
+    public static string OwnedByAnother(string path) =>
+        $"Warning: could not narrow the permissions of {path} (it belongs to another user, so tswap leaves it as it is).";
+
+    public static string ModeKept(string path, UnixFileMode mode) =>
+        $"Warning: could not narrow the permissions of {path} (the file system kept mode {Convert.ToString((int)mode, 8).PadLeft(4, '0')}).";
+
+    public static string Failed(string path, Exception ex) =>
+        $"Warning: could not narrow the permissions of {path} ({ex.Message}).";
+
+    /// <summary>The warning for <paramref name="result"/>, or null when there is none.</summary>
+    public static string? For(TightenResult result, string path, IUnixFileModes modes) => result switch
+    {
+        TightenResult.OwnedByAnother => OwnedByAnother(path),
+        TightenResult.ModeKept => ModeKept(path, modes.GetMode(path) ?? 0),
+        _ => null,
+    };
+}
+
 /// <summary>
 /// T12 fix round 1: acting as a folder's owner failed: the switch itself, or its setup (reading this
 /// process's groups in <see cref="IUnixOwnership.ActAs"/>; at the Secure Enclave's scope also reading
@@ -74,13 +128,15 @@ public sealed class OwnerSwitchException(string message, int exitCode = 1) : Tsw
 /// </para>
 /// </summary>
 /// <param name="time">The clock of the orphan temp file sweep's one-hour cutoff (null: the system clock).</param>
-public sealed class DirectoryOwnerMatcher(IUnixOwnership? ownership = null, TimeProvider? time = null)
+/// <param name="modes">Brief T36: how <see cref="Tighten"/> reads a mode (null: <see cref="File.GetUnixFileMode(string)"/>).</param>
+public sealed class DirectoryOwnerMatcher(IUnixOwnership? ownership = null, TimeProvider? time = null, IUnixFileModes? modes = null)
 {
     private const UnixFileMode OwnerOnly = UnixFileMode.UserRead | UnixFileMode.UserWrite;
     private const UnixFileMode FolderOwnerOnly = OwnerOnly | UnixFileMode.UserExecute;
 
     private readonly IUnixOwnership _ownership = ownership ?? new UnixOwnership();
     private readonly TimeProvider _time = time ?? TimeProvider.System;
+    private readonly IUnixFileModes _modes = modes ?? new UnixFileModeReader();
 
     /// <summary>The matcher every real <see cref="Storage"/> uses.</summary>
     public static DirectoryOwnerMatcher Default { get; } = new();
@@ -90,6 +146,9 @@ public sealed class DirectoryOwnerMatcher(IUnixOwnership? ownership = null, Time
     /// owner's uid through it, so tests that fake root fake it for the agent too).
     /// </summary>
     public IUnixOwnership Ownership => _ownership;
+
+    /// <summary>Brief T36: the mode seam <see cref="Tighten"/> reads through (the stores name a kept mode with it).</summary>
+    internal IUnixFileModes Modes => _modes;
 
     /// <summary>
     /// Replaces <paramref name="path"/> atomically: a new temp file in the same folder, then a
@@ -328,29 +387,37 @@ public sealed class DirectoryOwnerMatcher(IUnixOwnership? ownership = null, Time
     /// <summary>
     /// Brief T6 decision 10 (#194): narrows <paramref name="path"/> to 0700 (a folder) or 0600 (a
     /// regular file) when its mode is wider, as the folder's owner. A symlink is never changed (nor
-    /// followed). Returns true when it changed something. Windows: no change (profile ACLs).
+    /// followed). Windows: no change (profile ACLs).
+    /// <para>Brief T36 (#347): only a path owned by the identity doing the work (the folder's owner switched to under
+    /// sudo, otherwise the effective uid) is changed; another user's, or one whose owner can't be read, is
+    /// <see cref="TightenResult.OwnedByAnother"/>. The owner is read only once the mode was found wider, so a tight
+    /// vault costs no extra <c>lstat</c>. After the change the mode is read back: a file system that keeps its own
+    /// mode (a CIFS mount with fixed modes, exFAT) is <see cref="TightenResult.ModeKept"/>, never claimed as narrowed.
+    /// An <see cref="IOException"/> or <see cref="UnauthorizedAccessException"/> of the change itself propagates.</para>
     /// </summary>
-    public bool Tighten(string path)
+    public TightenResult Tighten(string path)
     {
         if (OperatingSystem.IsWindows())
-            return false;
+            return TightenResult.Unchanged;
         var fullPath = Path.GetFullPath(path);
-        using var _ = AsOwnerOf(fullPath);
+        using var _ = AsOwnerOf(fullPath, out var switchedTo);
         var info = new FileInfo(fullPath);
         if (info.LinkTarget is not null)
-            return false;
+            return TightenResult.Unchanged;
         UnixFileMode limit;
         if (Directory.Exists(fullPath))
             limit = FolderOwnerOnly;
         else if (info.Exists)
             limit = OwnerOnly;
         else
-            return false;
-        var mode = File.GetUnixFileMode(fullPath);
-        if ((mode & ~limit) == 0)
-            return false;
+            return TightenResult.Unchanged;
+        if (_modes.GetMode(fullPath) is not { } mode || (mode & ~limit) == 0)
+            return TightenResult.Unchanged;
+        var workingUid = switchedTo?.Uid ?? _ownership.EffectiveUid;
+        if (_ownership.GetOwner(fullPath) is not { } owner || owner.Uid != workingUid)
+            return TightenResult.OwnedByAnother;
         File.SetUnixFileMode(fullPath, mode & limit);
-        return true;
+        return _modes.GetMode(fullPath) is { } after && (after & ~limit) != 0 ? TightenResult.ModeKept : TightenResult.Tightened;
     }
 
     /// <summary>

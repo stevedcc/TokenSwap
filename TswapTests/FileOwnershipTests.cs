@@ -428,4 +428,30 @@ public class FileOwnershipTests : IDisposable
         File.CreateSymbolicLink(link, "/"); // the target is root's; the link itself is ours
         Assert.Equal(owner, real.GetOwner(link));
     }
+
+    [UnixFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
+    public void Tighten_ReturnsWhatHappened()
+    {
+        // Brief T36 (#347): the result says what happened, so a caller can tell a narrowed file from one left alone.
+        var matcher = new DirectoryOwnerMatcher();
+        var wide = P("wide");
+        var tight = P("tight");
+        var link = P("link");
+        File.WriteAllText(wide, "x");
+        File.WriteAllText(tight, "x");
+        File.SetUnixFileMode(wide, OwnerOnly | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
+        File.SetUnixFileMode(tight, OwnerOnly);
+        var target = P("target");
+        File.WriteAllText(target, "x");
+        File.SetUnixFileMode(target, OwnerOnly | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
+        File.CreateSymbolicLink(link, target);
+
+        Assert.Equal(TightenResult.Tightened, matcher.Tighten(wide));
+        Assert.Equal(OwnerOnly, File.GetUnixFileMode(wide));
+        Assert.Equal(TightenResult.Unchanged, matcher.Tighten(tight));
+        Assert.Equal(TightenResult.Unchanged, matcher.Tighten(link));
+        Assert.Equal(OwnerOnly | UnixFileMode.GroupRead | UnixFileMode.OtherRead, File.GetUnixFileMode(target));
+        Assert.Equal(TightenResult.Unchanged, matcher.Tighten(P("missing")));
+    }
 }

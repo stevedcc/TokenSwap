@@ -426,6 +426,18 @@ public static class Validation
         "Put the commands in a script file and run that instead, e.g. 'run ./script.sh {{secret}}' " +
         "(the script reads the value as $1).";
 
+    // Brief T35 (#348.3): Windows has no ./script.sh or $1. A .ps1 run by Windows PowerShell (on every Windows),
+    // never a .cmd, whose cmd.exe would parse a secret's & | ^ % " again.
+    private const string WindowsWayOut =
+        "Put the commands in a script file and run that instead, e.g. 'run powershell -File .\\script.ps1 {{secret}}' " +
+        "(the script reads the value as $args[0]; in PowerShell quote the token: '{{secret}}').";
+
+    /// <summary>
+    /// Brief T35: the way out of an inline-code refusal. <see cref="GetBlockedInvocation"/> always appends the Unix
+    /// sentence (<paramref name="windows"/> false) whole, at the end of the reason; <c>run</c> swaps it on Windows.
+    /// </summary>
+    public static string WayOutFor(bool windows) => windows ? WindowsWayOut : WayOut;
+
     /// <summary>
     /// Checks a whole <c>run</c> command line (issue #105). Returns null when allowed, or the
     /// program and the reason when refused: the existing blocklist (by basename), a shell or

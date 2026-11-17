@@ -254,10 +254,32 @@ pwsh installTswap.ps1
 
 ## Windows notes
 
+- **PowerShell and `{{tokens}}`.** In PowerShell (Windows PowerShell 5.1 and PowerShell 7) quote every
+  argument that holds a token: `tswap run psql -h db -U app '--password={{db-pw}}'`, `-f '{{@values.yaml}}'`.
+  Unquoted, PowerShell reads `{...}` as a script block and passes `{{db-pw}}` on as `{db-pw}`; `run` then
+  finds no token and shows the quoted form. cmd needs no quotes.
 - **Privileged commands** (`add`, `get`, `list`, `delete`, `export`, `import`, and the others that
   need sudo, listed in [commands.md](commands.md#which-commands-need-sudo)) run from an **elevated
   command prompt** (right-click → "Run as administrator") instead of `sudo`.
 - **Process substitution** (`<(…)`) is a bash feature and is not available in cmd or PowerShell,
   and `apply` needs an elevated prompt. For a file with `# tswap:` markers use
-  `tswap run helm upgrade --install app ./chart -f {{@values.yaml}}`, which works in cmd and
-  PowerShell: see the [Helm deployment patterns](examples.md#helm-deployment-patterns).
+  `tswap run helm upgrade --install app ./chart -f {{@values.yaml}}` (in PowerShell
+  `-f '{{@values.yaml}}'`), which works in cmd and PowerShell: see the [Helm deployment patterns](examples.md#helm-deployment-patterns).
+- **Console output is UTF-8.** While tswap runs in a console window it sets the window's output code page
+  to UTF-8 (65001), so its symbols and box lines show, and puts the old code page back when it exits;
+  after a Ctrl+C or a killed tswap the window can stay at UTF-8 (`chcp` shows and sets it). A
+  long-running `tswap agent serve` in a console window keeps it at UTF-8 until it exits. When stdout or
+  stderr is redirected to a file or pipe, nothing changes: tswap and the programs `tswap run` starts
+  write in the window's code page, as before. A program `tswap run` starts inherits the UTF-8 code
+  page. If a symbol shows as an empty box in the classic console window, its font lacks it; Windows
+  Terminal shows it.
+- **`tswap run` in a console window.** The command runs in a pseudo console (ConPTY). tswap lets the
+  window interpret its escape sequences while the command runs and drops the title changes, so the
+  window keeps its title. The pseudo console clears the window before the command's output, as in
+  Windows Terminal. After a Ctrl+C or a killed tswap the window may keep interpreting escape
+  sequences; that is harmless.
+- **A Windows machine as an SSH host.** OpenSSH for Windows runs each `ssh -t` session in its own
+  pseudo console, which sets the title of the terminal window you connect from (for example to
+  `C:\WINDOWS\system32\conhost.exe`) and leaves it after the session, as after `slot enrol --via
+  <windows-host>`'s approve and merge steps. That is OpenSSH's behaviour, not tswap's; the title comes
+  back the next time your shell or terminal sets one.

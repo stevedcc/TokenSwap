@@ -35,6 +35,9 @@ a secret value:
 | `prompt` / `prompt-hash` | Self-documentation | None |
 | `migrate` / `slot request` / `slot accept` | Migration status, joining a vault | Requires physical hardware interaction |
 
+**PowerShell.** An agent whose shell is PowerShell quotes every argument that holds a token (`'{{name}}'`,
+`'{{@file}}'`): unquoted, PowerShell drops a pair of braces and `run` finds no token.
+
 `init` needs no sudo either, but AI agents shouldn't run it: creating a vault is the user's work
 (even with `--no-recovery`), and `init` prints the recovery private key once
 ([setup.md](setup.md#the-recovery-key)). The skill (`tswap prompt`) lists `init` among the

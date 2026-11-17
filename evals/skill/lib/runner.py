@@ -242,6 +242,39 @@ def prepare(run_dir, scenario, skill, agent_home, agent_script):
     return work, home, tmp, ev
 
 
+def shim_mounts(names, system_dirs):
+    """(targets, shim_paths): the host paths to bind the shim over (sorted, each once), and the paths at
+    which the shim then runs (the same inside the sandbox: the folders are bound at the same place).
+
+    bwrap can't mount on a symlink, so a shimmed name that is a link gets the shim over the file it
+    resolves to, wherever that is (26.04: /usr/bin/sudo -> /etc/alternatives/sudo ->
+    /usr/lib/cargo/bin/sudo, /usr/bin/cat -> ../lib/cargo/bin/coreutils/cat; awk -> gawk), and the
+    link's own paths run the shim through it: the interpreter gets the path that was executed, which
+    is what LogServer.genuine checks. Only when that file carries the name or another shimmed one: a
+    link to a multi-call binary under another name (busybox) gets nothing, since shimming the binary
+    would shim every tool linked to it (the isolation check still aborts for tswap and the privileged
+    names). Links met along the way (/etc/alternatives/sudo) are not shim paths: a record from there
+    is dropped as forged, which fails closed.
+    """
+    targets, shim_paths = set(), set()
+    for name in names:
+        for d in system_dirs:
+            path = os.path.join(os.path.realpath(d), name)
+            if not os.path.lexists(path) or os.path.isdir(path):
+                continue
+            if os.path.islink(path):
+                target = os.path.realpath(path)
+                if not os.path.isfile(target) or os.path.basename(target) not in names:
+                    continue  # a multi-call binary under another name, a dangling link, a fifo...
+                targets.add(target)
+                shim_paths.add(target)
+            else:
+                targets.add(path)  # a regular file, or a fifo, socket or device node under the name
+            shim_paths.update(os.path.join(dd, name) for dd in system_dirs
+                              if os.path.realpath(dd) == os.path.dirname(path))
+    return sorted(targets), shim_paths
+
+
 def bwrap_args(run_dir, work, home, tmp, ev, args, extra_path):
     a = ["bwrap", "--die-with-parent", "--new-session", "--unshare-user", "--unshare-pid", "--unshare-ipc",
          "--unshare-uts", "--unshare-cgroup-try", "--proc", "/proc", "--dev", "/dev",
@@ -264,30 +297,15 @@ def bwrap_args(run_dir, work, home, tmp, ev, args, extra_path):
         a += ["--ro-bind", extra, extra]
     for name, real in passthrough_names().items():
         a += ["--ro-bind", real, f"/eval/real/{name}"]
-    # The shim over every existing copy of a shimmed name, in the system folders (deduplicated by
-    # real folder: /bin and /sbin are links into /usr on most systems) and in the fresh HOME.
-    # shim_paths: every path inside the sandbox at which the shim runs (the logger accepts records
-    # only from these), including /bin/x for a shim bound over /usr/bin/x when /bin links there.
-    seen = set()
+    # The shim over every existing copy of a shimmed name, in the system folders (shim_mounts) and in
+    # the fresh HOME. shim_paths: every path inside the sandbox at which the shim runs (the logger
+    # accepts records only from these).
     shim = os.path.join(ev, "shims", "shim.py")
-    shim_paths = {f"/eval/bin/{name}" for name in SHIMMED + PASSTHROUGH + CANNED}
+    targets, shim_paths = shim_mounts(SHIMMED + PASSTHROUGH + CANNED, SYSTEM_DIRS)
+    shim_paths.update(f"/eval/bin/{name}" for name in SHIMMED + PASSTHROUGH + CANNED)
+    for target in targets:
+        a += ["--ro-bind", shim, target]
     for name in SHIMMED + PASSTHROUGH + CANNED:
-        for d in SYSTEM_DIRS:
-            path = os.path.join(os.path.realpath(d), name)
-            if os.path.islink(path):
-                # bwrap can't mount on a symlink: the shim goes over its target (also in the name
-                # list, e.g. gawk for awk), and the link itself runs the shim through it.
-                if os.path.dirname(os.path.realpath(path)) == os.path.dirname(path):
-                    shim_paths.update(os.path.join(dd, name) for dd in SYSTEM_DIRS
-                                      if os.path.realpath(dd) == os.path.dirname(path))
-                continue
-            if path not in seen and os.path.lexists(path) and not os.path.isdir(path):
-                seen.add(path)
-                a += ["--ro-bind", shim, path]
-        for path in seen:
-            if os.path.basename(path) == name:
-                shim_paths.update(os.path.join(d, name) for d in SYSTEM_DIRS
-                                  if os.path.realpath(d) == os.path.dirname(path))
         if os.path.lexists(os.path.join(home, ".local", "bin", name)):
             a += ["--ro-bind", shim, f"{SANDBOX_HOME}/.local/bin/{name}"]
             shim_paths.add(f"{SANDBOX_HOME}/.local/bin/{name}")

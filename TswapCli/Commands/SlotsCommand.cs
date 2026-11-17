@@ -21,18 +21,15 @@ namespace TswapCli.Commands;
 /// surfaced.</para>
 ///
 /// <para><b>Known limitation, not an oversight:</b> a <see cref="Slot"/> carries no
-/// backend/label/enrolledAt field yet (see that type's doc comment) — v0 keyrings are YubiKey-only
-/// (issue #119), so every <see cref="SlotKind.Machine"/> slot is implicitly YubiKey-backed and
-/// its touch requirement is read off <see cref="Config.RequiresTouch"/> (vault-wide, since v0
-/// has exactly one machine slot). Nothing here invents per-slot backend/presence data that
-/// doesn't exist; a future multi-backend keyring (design doc's v0 step 2) would need real
-/// per-slot metadata for this to stay accurate once a keyring can mix backends. Likewise, if a
-/// keyring ever holds more than one <see cref="SlotKind.Machine"/> slot (possible today per
-/// <see cref="KeyringCodec"/>'s format even though only #121's hand-carried enrolment, not yet
-/// landed, would produce one), there is no data available to say which slot is "this machine's
-/// own" without attempting an actual hardware unwrap per slot — this command deliberately does
-/// not do that (it would turn a passive listing into a hardware-touching operation), so it lists
-/// every machine slot on equal footing and says so when more than one is present.</para>
+/// backend/label/enrolledAt field (see that type's doc comment). Each machine slot's kind is read from
+/// its own hardware blob instead (brief T36, #350, <see cref="HardwareSlotKinds"/>): a YubiKey blob names
+/// its key and touch policy, a TPM or Secure Enclave blob its kind by header or package layout, never the
+/// machine doing the listing. Which slot is this machine's own is what its <c>config.json</c> names
+/// (<see cref="Config.KeyringSlotId"/>, as the unlock finds it), and only that row says "this machine's"
+/// or "this Mac's"; a Secure Enclave slot's touch setting is shown only there, since it lives in that
+/// Mac's config and key, not in the blob. There is still no per-slot label (a machine name), so the other
+/// rows say "the machine it was made on", and this command never attempts a hardware unwrap to tell
+/// (it would turn a passive listing into a hardware-touching operation).</para>
 /// </summary>
 public sealed class SlotsCommand : ICliCommand
 {
@@ -112,12 +109,15 @@ public sealed class SlotsCommand : ICliCommand
 
         // Task 4b: only one-key slots are remembered; nothing marks a legacy pair slot, or a key nothing is remembered for.
         var lastOpened = remembered?.ForVault(keyring.VaultId) ?? new Dictionary<int, byte[]>();
+        // Brief T36 (#350): the one row that may say "this machine's" / "this Mac's".
+        var ownRow = OwnHardwareRow(config, keyring);
         foreach (var slot in keyring.Slots)
         {
             var shortId = AbbreviateSlotId(slot.SlotId);
             var kindLabel = slot.Kind == SlotKind.Machine ? "machine" : "recovery";
+            var isOwn = ownRow is not null && slot.SlotId.AsSpan().SequenceEqual(ownRow.SlotId);
             var protection = slot.Kind == SlotKind.Machine
-                ? DescribeMachineProtection(config, slot)
+                ? DescribeMachineProtection(config, slot, isOwn)
                 : DescribeRecoveryProtection();
             // Only OTP slots are remembered (FIDO2 plan, task 2: a FIDO2 slot is never marked).
             if (slot.Kind == SlotKind.Machine && YubiKeySlotKinds.Classify(slot.HwBlob) is YubiKeySlotKind.Otp(var blob)
@@ -148,7 +148,9 @@ public sealed class SlotsCommand : ICliCommand
             sb.Append("\nTouch setting not acknowledged on this machine: " +
                 string.Join("; ", changed.Select(c => c.Slot.Label)) + ". Run 'tswap slots --ack' once you've decided.\n");
 
-        if (machineSlotCount > 1)
+        if (machineSlotCount > 1 && ownRow is not null)
+            sb.Append("\n" + MultiSlotOwnRowNote);
+        else if (machineSlotCount > 1)
         {
             sb.Append(
                 "\nNote: this keyring has more than one machine slot. Slot data alone (no\n" +
@@ -161,6 +163,16 @@ public sealed class SlotsCommand : ICliCommand
 
         return sb.ToString().TrimEnd('\n');
     }
+
+    /// <summary>
+    /// Brief T36: the multi-slot note when one row says it is this machine's (the old note stays word for word when
+    /// none does: a YubiKey machine, or an own slot that is corrupt, needs a newer tswap or holds the other chip's data).
+    /// </summary>
+    internal const string MultiSlotOwnRowNote =
+        "Note: this keyring has more than one machine slot. The row that says\n" +
+        "\"this machine's TPM\" or \"this Mac's Secure Enclave\" is the slot this machine's\n" +
+        "config.json names as its own; the other rows show what their slot data records\n" +
+        "(slots carry no machine name yet).";
 
     /// <summary>
     /// Issue #261: the note for this machine's Linux TPM slot sealed under the RSA-2048 primary. Its only variable part
@@ -176,13 +188,31 @@ public sealed class SlotsCommand : ICliCommand
     /// a <c>TSTP</c> header without the ECC bit); otherwise null. Found as the unlock finds it
     /// (<c>HardwareBlobLocator</c>): a TPM vault's machine slot named by <see cref="Config.KeyringSlotId"/>, or its
     /// first machine slot when that is unset. A corrupt slot or one from a newer tswap gets no note: it is already
-    /// marked. YubiKey and Secure Enclave blobs are told apart by their magic; a header-less or <c>TSTP 0x01</c> package
-    /// a Windows machine wrote can't be told from a Linux RSA one, an accepted ambiguity: this machine's own slot in a
+    /// marked. YubiKey and Secure Enclave blobs are told apart by their magic. The note fires on any own non-ECC slot,
+    /// a Windows-shaped package included (brief T36 left the note's rules as they were): this machine's own slot in a
     /// TPM vault on Linux is a Linux one unless the config was copied from Windows, and then the unlock fails anyway.
     /// </summary>
     private static Slot? OwnRsaTpmSlot(Config config, Keyring keyring)
     {
         if (config.Backend != HardwareBackend.Tpm)
+            return null;
+        var own = OwnHardwareSlot(config, keyring);
+        if (own?.HwBlob is not { Length: > 0 } hwBlob || YubiKeySlotKinds.IsYubiKey(hwBlob) || SecureEnclaveSlotBlob.HasHeader(hwBlob))
+            return null;
+        if (SlotPassword.Classify(own) is not (SlotPasswordKind.None or SlotPasswordKind.Password))
+            return null;
+        return TpmSlotBlob.SealedUnderEccPrimary(hwBlob) ? null : own;
+    }
+
+    /// <summary>
+    /// Brief T36: this machine's own slot on a TPM or Secure Enclave machine, found as the unlock finds it
+    /// (<c>VaultUnlocker.FindOwnMachineSlot</c>): the machine slot <see cref="Config.KeyringSlotId"/> names, or the
+    /// first machine slot when that is unset. Null for any other backend, and for a <see cref="Config.KeyringSlotId"/>
+    /// that is not base64 (no throw: the unlock reports that itself).
+    /// </summary>
+    private static Slot? OwnHardwareSlot(Config config, Keyring keyring)
+    {
+        if (config.Backend != HardwareBackend.Tpm && config.Backend != HardwareBackend.SecureEnclave)
             return null;
         byte[]? ownId;
         try
@@ -193,14 +223,34 @@ public sealed class SlotsCommand : ICliCommand
         {
             return null;
         }
-        var own = ownId is null
+        return ownId is null
             ? keyring.Slots.FirstOrDefault(s => s.Kind == SlotKind.Machine)
             : keyring.Slots.FirstOrDefault(s => s.Kind == SlotKind.Machine && s.SlotId.AsSpan().SequenceEqual(ownId));
-        if (own?.HwBlob is not { Length: > 0 } hwBlob || YubiKeySlotKinds.IsYubiKey(hwBlob) || SecureEnclaveSlotBlob.HasHeader(hwBlob))
+    }
+
+    /// <summary>
+    /// Brief T36: the row that says "this machine's TPM" or "this Mac's Secure Enclave": this machine's own slot
+    /// (<see cref="OwnHardwareSlot"/>) when its blob agrees with the backend (a TPM kind or not recorded on a TPM
+    /// machine, Secure Enclave or not recorded on a Mac) and the row describes it as hardware: not a legacy pair slot
+    /// (no blob), a YubiKey blob, or a blob that is corrupt or needs a newer tswap. A slot whose data says the other
+    /// chip (a config copied from another machine) is described as any other machine's.
+    /// </summary>
+    private static Slot? OwnHardwareRow(Config config, Keyring keyring)
+    {
+        var own = OwnHardwareSlot(config, keyring);
+        if (own?.HwBlob is not { Length: > 0 } hwBlob || YubiKeySlotKinds.IsYubiKey(hwBlob))
             return null;
         if (SlotPassword.Classify(own) is not (SlotPasswordKind.None or SlotPasswordKind.Password))
             return null;
-        return TpmSlotBlob.SealedUnderEccPrimary(hwBlob) ? null : own;
+        var agrees = (config.Backend, HardwareSlotKinds.Classify(hwBlob)) switch
+        {
+            (_, HardwareSlotKind.NotRecorded) => true,
+            (HardwareBackend.Tpm, HardwareSlotKind.LinuxTpmEcc or HardwareSlotKind.LinuxTpmRsa or HardwareSlotKind.WindowsTpm
+                or HardwareSlotKind.TpmPlatformNotRecorded) => true,
+            (HardwareBackend.SecureEnclave, HardwareSlotKind.SecureEnclave) => true,
+            _ => false,
+        };
+        return agrees ? own : null;
     }
 
     /// <summary>Brief T7 item 5: a classic YubiKey vault's touch posture (both keys share it).</summary>
@@ -235,12 +285,12 @@ public sealed class SlotsCommand : ICliCommand
     /// physical custody of it, which is a real, if unusual, control (see
     /// <c>docs/design/multi-machine-keying.md</c> §Why not k &gt;= 2 (yet)).
     /// </summary>
-    private static string DescribeMachineProtection(Config config, Slot slot) => SlotPassword.Classify(slot) switch
+    private static string DescribeMachineProtection(Config config, Slot slot, bool isOwn) => SlotPassword.Classify(slot) switch
     {
         // Brief T17 ruling 3: a slot this build can't use is named, never described as if it worked.
         SlotPasswordKind.NeedsNewerTswap => NeedsNewerTswapMark,
         SlotPasswordKind.Corrupt => CorruptMark,
-        var kind => DescribeHardware(config, slot) + (kind == SlotPasswordKind.Password ? ", vault password" : ", no password"),
+        var kind => DescribeHardware(config, slot, isOwn) + (kind == SlotPasswordKind.Password ? ", vault password" : ", no password"),
     };
 
     /// <summary>FIDO2 plan, task 8: what protects a FIDO2 slot, after its key's name.</summary>
@@ -256,7 +306,7 @@ public sealed class SlotsCommand : ICliCommand
     /// <summary>Brief T17: the PROTECTION of a slot whose blob is corrupt.</summary>
     internal const string CorruptMark = "corrupt (restore config.json from backup)";
 
-    private static string DescribeHardware(Config config, Slot slot) => YubiKeySlotKinds.Classify(slot.HwBlob) switch
+    private static string DescribeHardware(Config config, Slot slot, bool isOwn) => YubiKeySlotKinds.Classify(slot.HwBlob) switch
     {
         // Brief T4: a one-key YubiKey slot names its own key and touch policy, whatever the
         // vault's backend (a TPM vault on the router may hold the owner's YubiKeys as slots).
@@ -264,10 +314,47 @@ public sealed class SlotsCommand : ICliCommand
         // FIDO2 plan, task 8: the key (its model from the AAGUID when the serial is unknown); always PIN and touch.
         YubiKeySlotKind.Fido2(var blob) => $"{Fido2SlotBlob.DisplayName(blob.Serial, blob.Aaguid)}, {Fido2Protection}",
         // Not reached for a TSYK blob this build can't read: DescribeMachineProtection names it first.
-        // Issue #261: only a TSTP header with the ECC-primary bit says which primary; a legacy package can't be told
-        // apart from a Windows one, so no other row names an algorithm.
-        _ when TpmSlotBlob.SealedUnderEccPrimary(slot.HwBlob) => "TPM (ECC P-256), sealed to this machine's TPM",
-        _ => DescribeMachineProtection(config),
+        // A legacy YubiKey pair slot has no blob: its touch setting is the vault's (config.json).
+        _ when slot.HwBlob is not { Length: > 0 } => DescribeYubiKeyProtection(config.RequiresTouch),
+        // Brief T36 (#350): every other kind comes from the slot's own blob, never from the machine doing the listing,
+        // except this machine's own slot, whose config.json says what it is. Issue #261's ECC bit names that primary;
+        // a header-less or TSTP 0x01 package is told Windows from Linux (RSA-2048) by its layout.
+        _ => DescribeHardwareKind(HardwareSlotKinds.Classify(slot.HwBlob), isOwn, config),
+    };
+
+    /// <summary>Brief T36: a TPM slot's words before "sealed to …", by its kind.</summary>
+    internal static string TpmKindName(HardwareSlotKind kind) => kind switch
+    {
+        HardwareSlotKind.LinuxTpmEcc => "TPM (Linux, ECC P-256)",
+        HardwareSlotKind.LinuxTpmRsa => "TPM (Linux, RSA-2048)",
+        HardwareSlotKind.WindowsTpm => "TPM (Windows)",
+        _ => "TPM (platform not recorded)",
+    };
+
+    /// <summary>Brief T36: how a TPM row ends, this machine's slot or any other.</summary>
+    internal static string TpmSealedTo(bool isOwn) => isOwn ? "sealed to this machine's TPM" : "sealed to the TPM of the machine it was made on";
+
+    /// <summary>Brief T36: this Mac's own Secure Enclave slot; its touch setting lives only in this Mac's config.json.</summary>
+    internal static string OwnSecureEnclave(bool? requiresTouch) =>
+        (requiresTouch == false ? "Secure Enclave, no touch required" : "Secure Enclave, touch required (Touch ID or password)") +
+        ", sealed to this Mac's Secure Enclave";
+
+    /// <summary>Brief T36: another Mac's Secure Enclave slot: its touch setting isn't in the blob.</summary>
+    internal const string OtherSecureEnclave = "Secure Enclave, sealed to the Mac it was made on (touch setting recorded only there)";
+
+    /// <summary>Brief T36: an own slot whose blob none of the rules recognises, on a TPM machine.</summary>
+    internal const string OwnTpmNotRecorded = "TPM, sealed to this machine's TPM";
+
+    /// <summary>Brief T36: any other slot whose blob none of the rules recognises.</summary>
+    internal const string HardwareNotRecorded = "hardware-sealed (kind not recorded)";
+
+    private static string DescribeHardwareKind(HardwareSlotKind kind, bool isOwn, Config config) => kind switch
+    {
+        HardwareSlotKind.SecureEnclave => isOwn ? OwnSecureEnclave(config.RequiresTouch) : OtherSecureEnclave,
+        HardwareSlotKind.NotRecorded when isOwn && config.Backend == HardwareBackend.SecureEnclave => OwnSecureEnclave(config.RequiresTouch),
+        HardwareSlotKind.NotRecorded when isOwn => OwnTpmNotRecorded,
+        HardwareSlotKind.NotRecorded => HardwareNotRecorded,
+        _ => $"{TpmKindName(kind)}, {TpmSealedTo(isOwn)}",
     };
 
     private static string DescribeYubiKeySlot(YubiKeySlotBlob blob) =>
@@ -277,18 +364,6 @@ public sealed class SlotsCommand : ICliCommand
             false => "no touch required — protected by physical custody of the YubiKey",
             null => "touch requirement unknown — protected by physical custody of the YubiKey",
         };
-
-    private static string DescribeMachineProtection(Config config) => (config.Backend, config.RequiresTouch) switch
-    {
-        // Brief T2: TPM and Secure Enclave keyring vaults exist now; describe their machine slot
-        // by its real hardware instead of as a YubiKey. (Presence detail per slot is #158.)
-        (HardwareBackend.Tpm, _) => "TPM, sealed to this machine's TPM",
-        // Brief T11: a --no-touch Secure Enclave slot records RequiresTouch = false.
-        // The words match the enrolment flags (--with-touch / --no-touch).
-        (HardwareBackend.SecureEnclave, false) => "Secure Enclave, no touch required",
-        (HardwareBackend.SecureEnclave, _) => "Secure Enclave, touch required (Touch ID or password)",
-        (_, var touch) => DescribeYubiKeyProtection(touch),
-    };
 
     private static string DescribeYubiKeyProtection(bool? requiresTouch) => requiresTouch switch
     {

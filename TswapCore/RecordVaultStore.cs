@@ -68,6 +68,7 @@ public sealed class RecordVaultStore : IFileVaultStore
     private Config? _machineConfig;
     private readonly bool _detached;
     private bool _modesChecked;
+    private bool _openModesChecked;
     private Hlc _highestSeen = Hlc.Zero;
     private Dictionary<string, LoadedRecord>? _loaded;
     private TextWriter? _warnings;
@@ -180,6 +181,7 @@ public sealed class RecordVaultStore : IFileVaultStore
     public Config LoadConfig()
     {
         var config = ReadMachineConfig();
+        TightenVaultFolderOnOpen();
         var keyring = ReadKeyring();
         return config with { Keyring = Convert.ToBase64String(KeyringCodec.Encode(keyring)) };
     }
@@ -2069,42 +2071,100 @@ public sealed class RecordVaultStore : IFileVaultStore
     }
 
     /// <summary>
-    /// Decision 10 (#194): before this command's first write, narrows the config dir, the vault
-    /// folder and records/ to 0700 and their files (config.json, the keyring, records, conflicted
-    /// copies) to 0600 where they are wider, with one notice naming what changed. Never on a read;
-    /// never through a symlink; Windows: no change.
+    /// Brief T36 (#347): the notice when narrowing changed something; <paramref name="paths"/> are what it changed.
+    /// </summary>
+    internal static string TightenedNotice(IEnumerable<string> paths) =>
+        "Notice: tightened permissions (folders 0700, files 0600; they were readable by others) on: " +
+        string.Join(", ", paths) + ". A sync tool may have loosened them (see 'Sync transports' in docs/multi-machine.md).";
+
+    /// <summary>Brief T36: the warning for a vault-folder path another user owns, left as it is.</summary>
+    internal static string OwnedByAnotherWarning(string path) => LooseModeTexts.OwnedByAnother(path);
+
+    /// <summary>Brief T36: the warning for a path whose file system kept <paramref name="mode"/> after the change.</summary>
+    internal static string ModeKeptWarning(string path, UnixFileMode mode) => LooseModeTexts.ModeKept(path, mode);
+
+    /// <summary>
+    /// Brief T36 (#347): the vault folder part of the narrowing: <see cref="VaultDir"/>, its top-level files
+    /// (<c>keyring</c>, <c>record-format</c>, <c>vault-password</c>, anything else there), <see cref="RecordsDir"/> and
+    /// every file in it (records and conflicted copies). Never <see cref="ConfigFile"/> or <see cref="ConfigDir"/>,
+    /// even when the vault folder is the config folder: they are machine-local and wait for the first write.
+    /// </summary>
+    private List<string> VaultFolderPaths()
+    {
+        var vaultDir = VaultDir;
+        var recordsDir = RecordsDir;
+        List<string> paths = [vaultDir];
+        paths.AddRange(_owner.AsOwner(vaultDir, () => Directory.Exists(vaultDir) ? Directory.GetFiles(vaultDir) : []));
+        paths.Add(recordsDir);
+        paths.AddRange(_owner.AsOwner(recordsDir, () => Directory.Exists(recordsDir) ? Directory.GetFiles(recordsDir) : []));
+        // Round-2 review (MiMo Minor-6): macOS and Windows file systems ignore case by default, so two spellings of the
+        // config folder must not let config.json into the open-time list.
+        var comparison = OperatingSystem.IsLinux() ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+        string[] configPair = [Path.TrimEndingDirectorySeparator(Path.GetFullPath(ConfigDir)), Path.GetFullPath(ConfigFile)];
+        return paths.Where(p => !configPair.Any(c => string.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(p)), c, comparison)))
+            .ToList();
+    }
+
+    /// <summary>
+    /// Narrows each of <paramref name="paths"/> (<see cref="DirectoryOwnerMatcher.Tighten"/>) and writes at most the
+    /// notice (when something changed), then one warning per path that another user owns, whose mode the file system
+    /// kept, or whose change threw.
+    /// </summary>
+    private void Narrow(IEnumerable<string> paths)
+    {
+        List<string> changed = [];
+        List<string> warnings = [];
+        foreach (var path in paths)
+        {
+            try
+            {
+                var result = _owner.Tighten(path);
+                if (result == TightenResult.Tightened)
+                    changed.Add(path);
+                else if (LooseModeTexts.For(result, path, _owner.Modes) is { } warning)
+                    warnings.Add(warning);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                warnings.Add(LooseModeTexts.Failed(path, ex));
+            }
+        }
+        if (changed.Count > 0)
+            _warnings?.WriteLine(TightenedNotice(changed));
+        foreach (var warning in warnings)
+            _warnings?.WriteLine(warning);
+    }
+
+    /// <summary>
+    /// Brief T36 (#347): when a command opens this vault (<see cref="LoadConfig"/>, before the keyring is read), narrows
+    /// the vault folder part (<see cref="VaultFolderPaths"/>), reads included: a sync tool may loosen the files at any
+    /// time, and on a sync peer most commands are reads. A chmod changes metadata only (no byte, no mtime), so the
+    /// stale-write guard, the HLC order and the merge see nothing. Once per store; never for a detached store (a copy
+    /// tswap only reads), on Windows, or when privileged (under sudo the first write narrows, as the folder's owner).
+    /// </summary>
+    private void TightenVaultFolderOnOpen()
+    {
+        if (_openModesChecked || _detached || OperatingSystem.IsWindows() || _owner.Ownership.IsPrivileged)
+            return;
+        _openModesChecked = true;
+        Narrow(VaultFolderPaths());
+    }
+
+    /// <summary>
+    /// Decision 10 (#194): before this command's first write, narrows the config dir and config.json, and the vault
+    /// folder part (<see cref="VaultFolderPaths"/>) to 0700 / 0600 where they are wider, with one notice naming what
+    /// changed. Paths already narrowed when the vault was opened are unchanged now, so this notice typically names only
+    /// the config folder. Never through a symlink; Windows: no change.
     /// </summary>
     private void TightenModes()
     {
         if (_modesChecked || _detached || OperatingSystem.IsWindows())
             return;
         _modesChecked = true;
-        var candidates = new List<string> { ConfigDir, ConfigFile };
+        List<string> candidates = [ConfigDir, ConfigFile];
         if (_machineConfig?.VaultDir is not null)
-        {
-            var vaultDir = VaultDir;
-            var recordsDir = RecordsDir;
-            candidates.Add(vaultDir);
-            candidates.AddRange(_owner.AsOwner(vaultDir, () => Directory.Exists(vaultDir) ? Directory.GetFiles(vaultDir) : []));
-            candidates.Add(recordsDir);
-            candidates.AddRange(_owner.AsOwner(recordsDir, () => Directory.Exists(recordsDir) ? Directory.GetFiles(recordsDir) : []));
-        }
-        List<string> changed = [];
-        foreach (var path in candidates)
-        {
-            try
-            {
-                if (_owner.Tighten(path))
-                    changed.Add(path);
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                _warnings?.WriteLine($"Warning: could not narrow the permissions of {path} ({ex.Message}).");
-            }
-        }
-        if (changed.Count > 0)
-            _warnings?.WriteLine(
-                $"Notice: tightened permissions (folders 0700, files 0600; they were readable by others) on: {string.Join(", ", changed)}");
+            candidates.AddRange(VaultFolderPaths());
+        Narrow(candidates);
     }
 
     /// <summary>Decision 6: every record about to be written is unchanged since this command loaded it.</summary>

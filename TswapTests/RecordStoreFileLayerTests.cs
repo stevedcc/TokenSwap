@@ -10,8 +10,9 @@ namespace TswapTests;
 /// Brief T6 item 8 (decision 10, T5, #194): every file of the record store's vault folder and the
 /// config dir goes through <see cref="DirectoryOwnerMatcher"/>: under sudo as the folder's owner
 /// (T5's fake identity switch and "root-only" file stand in for root), files created 0600 and
-/// folders 0700 whatever the umask, and an existing vault with wider modes is tightened on the next
-/// write with one notice, while a read changes nothing. Unix only (every test returns on Windows).
+/// folders 0700 whatever the umask, and an existing vault with wider modes has its vault folder narrowed
+/// when a command opens it (brief T36, #347) and its config folder on the next write, each with one
+/// notice. Unix only (every test returns on Windows).
 /// </summary>
 [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
 public sealed class RecordStoreFileLayerTests : IDisposable
@@ -183,7 +184,7 @@ public sealed class RecordStoreFileLayerTests : IDisposable
     }
 
     [UnixFact]
-    public void AVaultWithWiderModes_IsTightenedOnTheNextWrite_WithOneNotice_AndAReadChangesNothing()
+    public void AVaultWithWiderModes_IsNarrowedWhenOpened_ThenTheConfigOnTheNextWrite()
     {
         _keys.PluggedIn = [SerialA];
         InitRecordVault(_m);
@@ -200,20 +201,23 @@ public sealed class RecordStoreFileLayerTests : IDisposable
 
         var read = _m.Run("", "names");
         Assert.Equal(0, read.Exit);
-        Assert.All(folders, f => Assert.Equal(wideFolder, File.GetUnixFileMode(f)));
-        Assert.All(files, f => Assert.Equal(wideFile, File.GetUnixFileMode(f)));
-        Assert.DoesNotContain("tightened", read.Out + read.Err);
+        Assert.Equal(FolderOwnerOnly, File.GetUnixFileMode(_m.VaultDir!));
+        Assert.Equal(FolderOwnerOnly, File.GetUnixFileMode(_m.RecordsDir));
+        Assert.All(Directory.GetFiles(_m.VaultDir!, "*", SearchOption.AllDirectories), f => Assert.Equal(OwnerOnly, File.GetUnixFileMode(f)));
+        Assert.Equal(wideFolder, File.GetUnixFileMode(_m.Dir));
+        Assert.Equal(wideFile, File.GetUnixFileMode(_m.ConfigPath));
+        var readNotice = Assert.Single((read.Out + read.Err).Split('\n'), l => l.Contains("tightened", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(_m.RecordsDir, readNotice);
+        Assert.Contains(Path.Combine(_m.VaultDir!, "keyring"), readNotice);
+        Assert.DoesNotContain(_m.ConfigPath, readNotice);
 
         var write = _m.Run("v3", "ingest", "c");
 
         Assert.Equal(0, write.Exit);
-        Assert.All(folders, f => Assert.Equal(FolderOwnerOnly, File.GetUnixFileMode(f)));
-        Assert.All(Directory.GetFiles(_m.VaultDir!, "*", SearchOption.AllDirectories).Append(_m.ConfigPath),
-            f => Assert.Equal(OwnerOnly, File.GetUnixFileMode(f)));
+        Assert.Equal(FolderOwnerOnly, File.GetUnixFileMode(_m.Dir));
+        Assert.Equal(OwnerOnly, File.GetUnixFileMode(_m.ConfigPath));
         var notices = (write.Out + write.Err).Split('\n').Where(l => l.Contains("tightened", StringComparison.OrdinalIgnoreCase)).ToList();
         var notice = Assert.Single(notices);
-        Assert.Contains(_m.RecordsDir, notice);
-        Assert.Contains(Path.Combine(_m.VaultDir!, "keyring"), notice);
         Assert.Contains(_m.ConfigPath, notice);
     }
 }

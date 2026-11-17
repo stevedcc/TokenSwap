@@ -60,12 +60,17 @@ public class Storage : IFileVaultStore
             {
                 // Checked first without acting as the folder's owner: a vault that is already tight
                 // (every vault made since T5) needs no identity switch under sudo.
-                if (IsWider(path) && _owner.Tighten(path))
+                if (!IsWider(path))
+                    continue;
+                var result = _owner.Tighten(path);
+                if (result == TightenResult.Tightened)
                     changed.Add(path);
+                else if (LooseModeTexts.For(result, path, _owner.Modes) is { } warning)
+                    _warnings?.WriteLine(warning);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                _warnings?.WriteLine($"Warning: could not narrow the permissions of {path} ({ex.Message}).");
+                _warnings?.WriteLine(LooseModeTexts.Failed(path, ex));
             }
         }
         if (changed.Count > 0)
