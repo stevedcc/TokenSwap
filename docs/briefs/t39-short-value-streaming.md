@@ -13,7 +13,7 @@ first, then:
   (:233-238), for the perf note;
 - `TswapCore/Fingerprints/TokenBoundary.cs` (`HoldOutsideWord`, `IsDelimited`), `TswapCore/Redaction.cs` (`Variants`:
   the forms `run` builds for a value);
-- `TswapCli/Commands/RunCommand.cs:153-165` and `:252-270` (how `shortForms` is filled and handed to
+- `TswapCli/Commands/RunCommand.cs:153-167` and `:252-270` (how `shortForms` is filled and handed to
   `FingerprintStreamMatcher.For`; T39 does not change this file);
 - RedactingPty 1.2.0's `StreamRedactor.ProcessWithMatchers` (`git show v1.2.0:RedactingPty/StreamRedactor.Matchers.cs`
   in `~/RiderProjects/redactingpty-wt/main`, :85-121): the hold is the minimum of the plaintext pending point and
@@ -32,7 +32,7 @@ only. Tests never use the real clock or sleeps. Commits end with
 report when the brief can't be built as written. Never change an existing test's assertion; the sanctioned
 changes to existing tests are Task 1's (how the matcher reaches `StreamRedactor`) and Task 2's additions to existing test
 files (`RecordingPty.Pieces`, `RunRedactionThroughputTests.Matcher`'s optional parameter and its new last `cases` entry,
-the new tests in `RunShortValueTests` and `ShortValueStreamTests`); no assertion expression changes anywhere (A2). If
+the private `Forms` helper and the new tests in `ShortValueStreamTests`, the new tests in `RunShortValueTests`); no assertion expression changes anywhere (A2). If
 an existing test not named here fails after Task 2, stop and report it with its name. British spelling in new text.
 
 **Review history.** Round 1: GLM "yes", MiMo "no", folded A1-A6. MiMo I-1, `Run_ShortTokenWithWhitespace_Masked`
@@ -40,8 +40,11 @@ cannot fail (the vault record `a b` puts its own plain form in the free class, w
 `Matcher_PendingFrom_NeverSplitsAWordItCanHold` had no break: the first is marked a run-level outcome pin, the second
 gets a break-it (A1). MiMo M-2 / GLM M1, the sanction sentence vs Task 2's additions to existing test files (A2). MiMo
 M-1, the security property overstated a prompt release: "complete occurrence", the documented Limit kept (A3). MiMo M-3
-/ GLM M2, the class-and-bucket test's vault and "middle" of a 1-character value (A4). GLM M3, the perf run's command
-(A5). MiMo M-4 / GLM M3, line references re-anchored and the surrogate-pair half of the pull-back named (A6).
+/ GLM M2, the class-and-bucket test's vault and "middle" of a 1-character value (A4). GLM M3 (its first half), the perf run's command
+(A5). MiMo M-4 / GLM M3 (its second half), line references re-anchored and the surrogate-pair half of the pull-back named (A6).
+Round 2 (MiMo, scoped, "no"), folded A7: I-1, A5's command printed nothing (the console logger hides a passing test's
+output): `--logger "console;verbosity=detailed"` added. M-1, four anchors corrected. M-2, the private `Forms` helper
+named in A2's list. M-3, GLM M3 had two halves (the command and the anchors): the history now says which.
 
 **Parallel briefs.** T35 (PR #356, Windows output) changes `TswapCli/Commands/RunCommand.cs` around the matcher list
 (it builds `matcher = FingerprintStreamMatcher.For(...)` on its own line and adds a `TerminalTitleMatcher` on Windows
@@ -66,9 +69,9 @@ line waits until more output, a prompt release or exit. The scanner's vault valu
 holds per character class, `max(trailing run of the class, n − (cap − 1))`, so a window ending in a line break holds
 nothing for whitespace-free values. `docs/security-model.md:349-351` documents the batching as a known cost.
 
-**#343.** `ShortValueStreamTests.Redacted` (:36-44) runs a `StreamRedactor` over a matcher the caller built once, and
-`AssertEveryCut` (:52-57), `Matcher_LongJsonLine_EveryChunkSize_Unchanged` (:117-121) and
-`Matcher_RandomText_ChunkedEqualsWhole` (its `Redacted` calls, :243-249) call it many times with the same matcher. The matcher's
+**#343.** `ShortValueStreamTests.Redacted` (:36-43) runs a `StreamRedactor` over a matcher the caller built once, and
+`AssertEveryCut` (:52-57), `Matcher_LongJsonLine_EveryChunkSize_Unchanged` (:118-122) and
+`Matcher_RandomText_ChunkedEqualsWhole` (its `Redacted` calls, :243-251) call it many times with the same matcher. The matcher's
 `ThreadLocal<ScanState>` survives between runs (only `Dispose` clears it) and the scanner's carry check compares text
 only (`FingerprintScanner.cs:233-238`), so a run whose first window starts with the previous run's held tail reuses
 that run's state. That can only make a test fail spuriously (the one-chunk `whole` is computed the same way), never
@@ -235,7 +238,7 @@ entry (last, so the earlier cases draw the same random numbers): `("after D (A +
 Matcher(Values(rng, 200, 16, 64, 10), keys, <every Redaction.Variants of RandomString(rng, 5, Word)> → "[REDACTED:
 short]"))`. Not asserted (the test only prints). Run it once to show it runs:
 `TSWAP_PERF=1 TSWAP_PERF_MB=4 flock ~/.cache/tswap-suite.lock dotnet test TswapTests --filter
-FullyQualifiedName~RunRedactionThroughputTests` (a Debug build, so the numbers are indicative only) (A5), and quote its lines in the report without judging the numbers (this machine is not the owner's).
+FullyQualifiedName~RunRedactionThroughputTests --logger "console;verbosity=detailed"` (without the logger a passing test's output is not printed; `RunRedactionThroughputTests.cs:18` uses the same flag) (a Debug build, so the numbers are indicative only) (A5), and quote its lines in the report without judging the numbers (this machine is not the owner's).
 
 **Docs, `docs/security-model.md`** (nothing else in the file):
 - "Held output at a prompt": replace the sentence beginning "When `run` substitutes a value under 8 characters" (it
