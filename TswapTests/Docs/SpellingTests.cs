@@ -136,7 +136,7 @@ public partial class SpellingTests
             "priorit", "synchron", "optim", "serial", "deserial", "sanit", "material", "util", "real", "standard",
             "special", "general", "local", "visual", "emphas", "random", "canonical", "token", "stabil", "categor",
             "character", "modern", "item", "memor", "legitim", "penal", "apolog", "digit", "notar", "personal",
-            "unrecogn", "reinitial", "parallel",
+            "unrecogn", "reinitial", "parallel", "global",
         }.Select(stem => (stem, new[] { "ize", "izes", "ized", "izing", "ization", "izations", "izer", "izers" })),
     ];
 
@@ -195,6 +195,8 @@ public partial class SpellingTests
         Assert.DoesNotMatch(CasedUsForm, "AUTHORIZ" + "ATION");
         Assert.DoesNotMatch(CasedUsForm, "Serialises, Initialisation, INITIALISATION, Honoured");
         Assert.DoesNotMatch(CasedUsForm, "serial" + "izes");
+        Assert.DoesNotMatch(CasedUsForm, "using System." + "Global" + "ization;");
+        Assert.Matches(CasedUsForm, "### Global" + "ization settings");
     }
 
     [Fact]
@@ -213,6 +215,7 @@ public partial class SpellingTests
         Assert.Matches(OtherUsForm, "judg" + "ment");
         Assert.Matches(OtherUsForm, "col" + "oring");
         Assert.Matches(OtherUsForm, "cent" + "ering");
+        Assert.Matches(OtherUsForm, "global" + "ized");
         Assert.DoesNotMatch(OtherUsForm, "Json" + "Serial" + "izer");
         Assert.DoesNotMatch(OtherUsForm, "Operation" + "Cancel" + "edException");
         Assert.DoesNotMatch(OtherUsForm, "Console" + "Col" + "or");
