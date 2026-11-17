@@ -8,6 +8,16 @@ using TswapCore.Keyring;
 namespace TswapCli.Commands;
 
 /// <summary>
+/// Brief T34 test seam of <c>slot enrol</c>'s local file access: called with the path just before each local read of
+/// <c>request.json</c> and <c>receipt.json</c>, each write of <c>approve.json</c> and its delete at the Enter gate (review
+/// round 1 M5), and each enrolment-folder delete (the folder's path), so a test can make that access fail.
+/// </summary>
+public sealed class EnrolFileSeams
+{
+    public Action<string>? BeforeLocalAccess { get; init; }
+}
+
+/// <summary>
 /// Brief T27 (issue #191): <c>slot enrol --via &lt;destination&gt;</c>, run on the joining machine: the four hand-carried
 /// steps with approve and merge carried over SSH (<see cref="CommandContext.Ssh"/>). In order: the argument and machine
 /// state checks; a pre-flight <c>--version</c> on the host; <c>slot request</c> here, into the enrolment folder
@@ -47,6 +57,26 @@ public sealed partial class SlotCommand
     internal const string NeedsTerminalText =
         "slot enrol needs a terminal here, because the host's sudo and vault may ask for a password. In a script, add " +
         "--batch (the host then must need no password: docs/multi-machine.md#enrolling-over-ssh). Nothing was changed.";
+
+    /// <summary>
+    /// Brief T34 (#337.2): the interactive request's note under this machine's slot fingerprint (instead of the v0 lines:
+    /// here the check that counts is the approve file's fingerprint, confirmed at the Enter).
+    /// </summary>
+    internal static readonly string[] EnrolInteractiveFingerprintNote =
+    [
+        "(The host shows this fingerprint too when it approves. The check that guards",
+        " the enrolment is the approve file's fingerprint, before you press Enter here.)",
+    ];
+
+    /// <summary>Brief T34 (#337.2): the batch request's note; the host's approve prints the fingerprint on stderr, relayed labelled.</summary>
+    internal static string[] EnrolBatchFingerprintNote(string via) =>
+    [
+        "(The host shows this fingerprint too when it approves,",
+        $" on a line starting [{via}].)",
+    ];
+
+    /// <summary>Brief T34 (#337.5, the owner's words): what the Enter gate says to anything but an empty line.</summary>
+    internal const string EnterGateRetryText = "Nothing was typed in, just press Enter (what you typed was not shown or used).";
 
     private static int ExecuteEnrol(CommandContext ctx, string[] args)
     {
@@ -102,6 +132,11 @@ public sealed partial class SlotCommand
             folder = kept;
         }
 
+        // Brief T34 (T27 ruling 10): --password's refusals of the vault folder come before the pre-flight's SSH call. Request
+        // reads the folder again itself; only the checks are wanted here.
+        if (folder is null && passwordFlag == true)
+            CryptographicOperations.ZeroMemory(ReadRequestVaultPassword(ctx, vaultDir).Bytes);
+
         var run = new EnrolRun(ctx, via, remoteProgram, hostTswap, noRemoteSudo);
         try
         {
@@ -140,36 +175,46 @@ public sealed partial class SlotCommand
                 "(docs/multi-machine.md#enrolling-over-ssh); or carry the files by hand (slot request, approve, accept, merge).");
 
         // --- 2. request, here ---
-        if (RequestStep(ctx, folder, enrolRoot, backend, requirePresence, passwordFlag, vaultDir, fresh) is not { } kept)
+        if (RequestStep(ctx, folder, enrolRoot, backend, requirePresence, passwordFlag, vaultDir, fresh, EnrolBatchFingerprintNote(via))
+            is not { } kept)
             return 1;
         folder = kept;
         var (device, publicKey, requestFile, approveFile, receiptFile) = Paths(ctx, folder);
 
+        TswapException ApproveFailed(string reason) => new(
+            $"The host didn't approve the request ({reason}). This machine's pending request is kept; nothing was added on " +
+            $"{via}. Fix the cause above and run the same '{ctx.Prefix} slot enrol' again (it continues from the kept request), or " +
+            $"carry {requestFile} to the host and run '{hostTswap} slot approve - - < request.json > approve.json' there, then " +
+            $"'{ctx.Prefix} slot accept approve.json' here.");
+        TswapException MergeFailed(string reason) => new(
+            $"This machine has its copy of the vault, but {via} didn't add the slot ({reason}), so the host's own keyring " +
+            $"doesn't know it yet. Carry {receiptFile} to the host and run '{hostTswap} slot merge - < receipt.json' there. Running " +
+            "'slot enrol' again would start a new enrolment; the kept receipt is the way to finish this one.");
+
         // --- 3. approve, on the host: the request on its stdin, the approve file on its stdout ---
-        var approveFailure = RunApprove(ctx, via, [.. remotePrefix, "slot", "approve", "-", "-"], File.ReadAllBytes(requestFile), approveFile);
+        if (ReadLocal(ctx, requestFile, out var request) is { } requestUnreadable)
+            throw ApproveFailed(requestUnreadable);
+        var approveFailure = RunApprove(ctx, via, [.. remotePrefix, "slot", "approve", "-", "-"], request, approveFile, out var notSaved);
+        if (notSaved is not null)
+            throw new TswapException(ApproveNotSavedText(notSaved, via, ctx.Prefix));
         if (approveFailure is not null)
-            throw new TswapException(
-                $"The host didn't approve the request ({approveFailure}). This machine's pending request is kept; nothing was added on " +
-                $"{via}. Fix the cause above and run the same '{ctx.Prefix} slot enrol' again (it continues from the kept request), or " +
-                $"carry {requestFile} to the host and run '{hostTswap} slot approve - - < request.json > approve.json' there, then " +
-                $"'{ctx.Prefix} slot accept approve.json' here.");
+            throw ApproveFailed(approveFailure);
 
         // --- 4. accept, here ---
-        if (AcceptStep(run, fileStore, vaultDir, approveFile, receiptFile, approveText: null, cleanNote: null) is false)
+        if (AcceptStep(run, fileStore, vaultDir, approveFile, receiptFile, approveText: null, cleanNote: null, interactive: false) is false)
             return Enrolled(ctx, via, device, publicKey, folder);
 
         // --- 5. merge, on the host: the receipt on its stdin; never --yes ---
-        var mergeFailure = Remote(ctx, via, [.. remotePrefix, "slot", "merge", "-"], File.ReadAllBytes(receiptFile), out var merge) switch
+        if (ReadLocal(ctx, receiptFile, out var receipt) is { } receiptUnreadable)
+            throw MergeFailed(receiptUnreadable);
+        var mergeFailure = Remote(ctx, via, [.. remotePrefix, "slot", "merge", "-"], receipt, out var merge) switch
         {
             { } transport => transport,
             _ when merge!.ExitCode != 0 => $"exit code {merge.ExitCode}",
             _ => null,
         };
         if (mergeFailure is not null)
-            throw new TswapException(
-                $"This machine has its copy of the vault, but {via} didn't add the slot ({mergeFailure}), so the host's own keyring " +
-                $"doesn't know it yet. Carry {receiptFile} to the host and run '{hostTswap} slot merge - < receipt.json' there. Running " +
-                "'slot enrol' again would start a new enrolment; the kept receipt is the way to finish this one.");
+            throw MergeFailed(mergeFailure);
         // The host's merge output, labelled as the host's.
         c.Out.WriteLine();
         SshRelay.WriteLines(c.Out, via, Encoding.UTF8.GetString(merge!.Stdout));
@@ -202,7 +247,8 @@ public sealed partial class SlotCommand
         var versionNote = VersionNote(hostVersion);
 
         // --- 2. request, here ---
-        if (RequestStep(ctx, folder, enrolRoot, backend, requirePresence, passwordFlag, vaultDir, fresh) is not { } kept)
+        if (RequestStep(ctx, folder, enrolRoot, backend, requirePresence, passwordFlag, vaultDir, fresh, EnrolInteractiveFingerprintNote)
+            is not { } kept)
             return 1;
         folder = kept;
         var (device, publicKey, requestFile, approveFile, receiptFile) = Paths(ctx, folder);
@@ -217,7 +263,8 @@ public sealed partial class SlotCommand
             $"'{ctx.Prefix} slot accept approve.json' here." + cleanSentence);
 
         // --- 3. approve: put the request, approve it on the host's terminal, get the approve file ---
-        var request = File.ReadAllBytes(requestFile);
+        if (ReadLocal(ctx, requestFile, out var request) is { } requestUnreadable)
+            throw ApproveFailed(requestUnreadable);
         if (Batch(ctx, via, [.. plain, "slot", "stage", id, "put", "request"], request) is { } putFailure)
             throw ApproveFailed(putFailure);
         if (Interactive(ctx, via, [.. elevated, "slot", "approve", "--staged", id, "--expect", Sha256Hex(request)]) is { } approveFailure)
@@ -234,7 +281,8 @@ public sealed partial class SlotCommand
             if (getFailure is not null)
                 throw ApproveFailed(getFailure);
             // A3: the line, the local file and what accept parses all come from these very bytes.
-            ctx.WriteOutputFile(approveFile, got.Stdout);
+            if (WriteLocal(ctx, approveFile, got.Stdout) is { } notSaved)
+                throw new TswapException(ApproveNotSavedText(notSaved, via, ctx.Prefix) + cleanSentence);
             approveText = Encoding.UTF8.GetString(got.Stdout);
             c.Out.WriteLine(
                 $"Approve file received: {ApproveFileFingerprint(got.Stdout)}. It must match the approve file fingerprint the host printed " +
@@ -244,18 +292,38 @@ public sealed partial class SlotCommand
         {
             CryptographicOperations.ZeroMemory(got!.Stdout);
         }
-        c.Out.Write("Press Enter to accept it here. ");
-        if (c.ReadLine() is null)
+        // Brief T34 (#337.5): only an empty line is the Enter; what is typed is not shown (a PIN typed one prompt late, say).
+        // Ctrl-C is the end of input here: the approve file goes, and the message says what is left.
+        while (true)
         {
-            File.Delete(approveFile);
-            throw new TswapException(
-                $"The approve file's fingerprint wasn't confirmed, so it was not accepted. This machine's pending request is kept; nothing " +
-                $"was added on {via}. Run the same '{ctx.Prefix} slot enrol' again to have it approved again (it continues from the kept " +
-                $"request); the host's staging folder is left: remove it with '{clean}' there.");
+            c.Out.Write("Press Enter to accept it here. ");
+            string? typed;
+            try
+            {
+                typed = c.ReadLineWithoutEcho();
+            }
+            catch (OperationCanceledException)
+            {
+                typed = null;
+            }
+            if (typed is null)
+            {
+                // Review round 1 (M5): a failed delete still gives this message, which then names the file.
+                var notDeleted = TryDeleteLocal(ctx, approveFile, () => File.Delete(approveFile));
+                throw new TswapException(
+                    $"The approve file's fingerprint wasn't confirmed, so it was not accepted. This machine's pending request is kept; nothing " +
+                    $"was added on {via}. Run the same '{ctx.Prefix} slot enrol' again to have it approved again (it continues from the kept " +
+                    $"request); the host's staging folder is left: remove it with '{clean}' there." +
+                    (notDeleted is null ? "" : $" Delete {approveFile} by hand (it couldn't be deleted: {notDeleted})."));
+            }
+            c.Out.WriteLine();
+            if (typed.Length == 0)
+                break;
+            c.Out.WriteLine(EnterGateRetryText);
         }
 
         // --- 4. accept, here, from the received bytes ---
-        if (AcceptStep(run, fileStore, vaultDir, approveFile, receiptFile, approveText, cleanSentence) is false)
+        if (AcceptStep(run, fileStore, vaultDir, approveFile, receiptFile, approveText, cleanSentence, interactive: true) is false)
         {
             CleanStaged(ctx, via, plain, id, clean);
             return Enrolled(ctx, via, device, publicKey, folder);
@@ -266,7 +334,8 @@ public sealed partial class SlotCommand
             $"This machine has its copy of the vault, but {via} didn't add the slot ({reason}){versionNote}, so the host's own keyring " +
             $"doesn't know it yet. Carry {receiptFile} to the host and run '{hostTswap} slot merge receipt.json' there. Running " +
             "'slot enrol' again would start a new enrolment; the kept receipt is the way to finish this one." + cleanSentence);
-        var receipt = File.ReadAllBytes(receiptFile);
+        if (ReadLocal(ctx, receiptFile, out var receipt) is { } receiptUnreadable)
+            throw MergeFailed(receiptUnreadable);
         if (Batch(ctx, via, [.. plain, "slot", "stage", id, "put", "receipt"], receipt) is { } putReceiptFailure)
             throw MergeFailed(putReceiptFailure);
         if (Interactive(ctx, via, [.. elevated, "slot", "merge", "--staged", id, "--expect", Sha256Hex(receipt)]) is { } mergeFailure)
@@ -309,11 +378,12 @@ public sealed partial class SlotCommand
     }
 
     /// <summary>
-    /// Step 2: <c>slot request</c> here, exactly as by hand (its prompts and output), into the enrolment folder; or the
+    /// Step 2: <c>slot request</c> here, as by hand (its prompts and output, without the hand-carry steps and with
+    /// <paramref name="fingerprintNote"/> under the slot fingerprint: brief T34), into the enrolment folder; or the
     /// kept <paramref name="folder"/> when continuing. Null when the person declined the overwrite question.
     /// </summary>
     private static string? RequestStep(CommandContext ctx, string? folder, string enrolRoot, HardwareBackend? backend, bool? requirePresence,
-        bool? passwordFlag, string? vaultDir, bool fresh)
+        bool? passwordFlag, string? vaultDir, bool fresh, string[] fingerprintNote)
     {
         if (folder is not null)
             return folder;
@@ -327,7 +397,11 @@ public sealed partial class SlotCommand
         // slot request takes --vault-dir only with --password; accept takes it either way (step 4).
         if (passwordFlag == true && vaultDir is not null)
             requestArgs.AddRange(["--vault-dir", vaultDir]);
-        var hooks = new RequestHooks { PathFor = slotId => Path.Combine(CreateEnrolmentFolder(enrolRoot, slotId), RequestFileName) };
+        var hooks = new RequestHooks
+        {
+            PathFor = slotId => Path.Combine(CreateEnrolmentFolder(enrolRoot, slotId), RequestFileName),
+            FingerprintNote = fingerprintNote,
+        };
         try
         {
             ExecuteRequest(ctx, [.. requestArgs], hooks);
@@ -348,7 +422,8 @@ public sealed partial class SlotCommand
         // --fresh: only now that the new request file is written, the other enrolments' folders go.
         if (fresh)
             foreach (var other in Directory.GetDirectories(enrolRoot).Where(d => Path.GetFullPath(d) != Path.GetFullPath(folder)))
-                Directory.Delete(other, recursive: true);
+                if (TryDeleteEnrolmentFolder(ctx, other) is { } reason)
+                    ctx.Console.Error.WriteLine($"Note: couldn't delete the earlier enrolment folder {other} ({reason}); delete it by hand.");
         return folder;
     }
 
@@ -361,12 +436,14 @@ public sealed partial class SlotCommand
     }
 
     /// <summary>
-    /// Step 4: <c>slot accept</c> here, exactly as by hand; its receipt into the enrolment folder. True: go on to the merge;
+    /// Step 4: <c>slot accept</c> here, as by hand (its closing line says enrol has the host merge: brief T34); its receipt into the enrolment folder. True: go on to the merge;
     /// false: joined a shared folder whose receipt wasn't written (nothing more is needed). Every other failure throws,
     /// with <paramref name="cleanNote"/> (interactive mode: the staging folder is left) after T27's lines.
     /// </summary>
+    /// <param name="interactive">Brief T34: the interactive mode's hint names the file form of merge (the receipt carried by
+    /// hand); batch's names the <c>-</c> form, as its own flow runs it.</param>
     private static bool AcceptStep(EnrolRun run, IFileVaultStore fileStore, string? vaultDir, string approveFile, string receiptFile,
-        string? approveText, string? cleanNote)
+        string? approveText, string? cleanNote, bool interactive)
     {
         var (ctx, via, _, hostTswap, _) = run;
         List<string> acceptArgs = [approveFile, "--receipt", receiptFile];
@@ -374,22 +451,30 @@ public sealed partial class SlotCommand
             acceptArgs.AddRange(["--vault-dir", vaultDir]);
         try
         {
-            ExecuteAccept(ctx, [.. acceptArgs], approveText);
+            ExecuteAccept(ctx, [.. acceptArgs], approveText, fromEnrol: true);
             return true;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             var exitCode = (ex as TswapException)?.ExitCode ?? 1;
             if (ReadConfigFile(fileStore)?.PendingSlotId is not null)
+            {
+                // Brief T34: double quotes, which sh, cmd and PowerShell all take (a folder may have spaces).
+                // Review round 1 (M4): no trailing separator, which would escape the closing quote in sh and cmd.
+                var folderArg = vaultDir is null ? "" : $" --vault-dir \"{Path.TrimEndingDirectorySeparator(Path.GetFullPath(vaultDir))}\"";
+                var merge = interactive
+                    ? $"carry the receipt to {via} and run '{hostTswap} slot merge receipt.json' there."
+                    : $"'{hostTswap} slot merge - < receipt.json' on {via}.";
                 throw new TswapException(
                     $"{ex.Message}\nThe host approved this slot but its keyring is unchanged. After fixing that, run '{ctx.Prefix} slot accept " +
-                    $"{approveFile}' here, then '{hostTswap} slot merge - < receipt.json' on {via}." + cleanNote, exitCode);
+                    $"{approveFile}{folderArg}' here, then {merge}" + cleanNote, exitCode);
+            }
             // Accept saves the config before it writes the receipt: only a failed receipt write lands here (split as accept splits).
             if (vaultDir is null)
                 throw new TswapException(
                     $"{ex.Message}\nThis machine has joined the vault but no receipt was written, so {via} doesn't know the slot. Run " +
                     $"'{ctx.Prefix} slot enrol ... --fresh' for a new enrolment (the simplest way), or have the host merge this machine's " +
-                    $"vault folder with 'sudo {ctx.Prefix} vault merge <folder>' (that needs sudo beyond the three-command rule)." + cleanNote, exitCode);
+                    $"vault folder with '{hostTswap} vault merge <folder>' (that needs sudo beyond the three-command rule)." + cleanNote, exitCode);
             ctx.Console.Error.WriteLine($"Note: slot accept: {ex.Message}");
             ctx.Console.Out.WriteLine($"This machine has joined the shared vault folder {Path.GetFullPath(vaultDir)}; its keyring already has the new " +
                                       "slot, so nothing more is needed (a receipt is only for a machine with its own copy).");
@@ -459,16 +544,82 @@ public sealed partial class SlotCommand
         var c = ctx.Console;
         c.Out.WriteLine($"\nThis machine's slot: {SlotFingerprint.Compute(publicKey)}");
         c.Out.WriteLine($"✓ Enrolled: {via}'s vault now opens with {device}, and this machine has its copy.");
-        Directory.Delete(folder, recursive: true);
+        if (TryDeleteEnrolmentFolder(ctx, folder) is { } reason)
+            c.Error.WriteLine($"Note: the enrolment folder is kept: {folder} ({reason}). Delete it by hand.");
         return 0;
     }
 
+    /// <summary>Brief T34: deletes an enrolment folder; null when it went, otherwise the one-line reason it didn't.</summary>
+    private static string? TryDeleteEnrolmentFolder(CommandContext ctx, string folder) =>
+        TryDeleteLocal(ctx, folder, () => Directory.Delete(folder, recursive: true));
+
+    /// <summary>
+    /// Brief T34: one local delete (<paramref name="delete"/> of <paramref name="path"/>, after the seam); null when it went,
+    /// otherwise the one-line reason it didn't (only <see cref="IOException"/> and <see cref="UnauthorizedAccessException"/>).
+    /// </summary>
+    private static string? TryDeleteLocal(CommandContext ctx, string path, Action delete)
+    {
+        try
+        {
+            ctx.EnrolSeams?.BeforeLocalAccess?.Invoke(path);
+            delete();
+            return null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return OneLine(ex.Message);
+        }
+    }
+
+    /// <summary>Brief T34: reads a local enrolment file; null when it was read, otherwise <c>couldn't read {path}: {reason}</c>.</summary>
+    private static string? ReadLocal(CommandContext ctx, string path, out byte[] bytes)
+    {
+        try
+        {
+            ctx.EnrolSeams?.BeforeLocalAccess?.Invoke(path);
+            bytes = File.ReadAllBytes(path);
+            return null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            bytes = [];
+            return $"couldn't read {path}: {OneLine(ex.Message)}";
+        }
+    }
+
+    /// <summary>Brief T34: writes a local enrolment file; null when it was written, otherwise <c>couldn't write {path}: {reason}</c>.</summary>
+    private static string? WriteLocal(CommandContext ctx, string path, ReadOnlySpan<byte> bytes)
+    {
+        try
+        {
+            ctx.EnrolSeams?.BeforeLocalAccess?.Invoke(path);
+            ctx.WriteOutputFile(path, bytes);
+            return null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return $"couldn't write {path}: {OneLine(ex.Message)}";
+        }
+    }
+
+    /// <summary>
+    /// Brief T34: the host approved, but this machine couldn't save the approve file. Not the approve failure: the host
+    /// did its part, and the retry has the kept request approved again.
+    /// </summary>
+    internal static string ApproveNotSavedText(string reason, string via, string prefix) =>
+        $"The host approved the request, but this machine couldn't save the approve file ({reason}). This machine's pending " +
+        $"request is kept; nothing was added on {via}. Fix the cause and run the same '{prefix} slot enrol' again (it continues " +
+        "from the kept request and has it approved again).";
+
     /// <summary>
     /// Step 3's call: the approve file the host printed is written to <paramref name="approveFile"/>; otherwise a reason that
-    /// never quotes the output is returned. The captured bytes are zeroed either way.
+    /// never quotes the output is returned. The captured bytes are zeroed either way. Brief T34: when the host approved but
+    /// the local write failed, <paramref name="notSaved"/> is that write's reason and null is returned.
     /// </summary>
-    private static string? RunApprove(CommandContext ctx, string via, string[] remoteArgs, byte[] request, string approveFile)
+    private static string? RunApprove(CommandContext ctx, string via, string[] remoteArgs, byte[] request, string approveFile,
+        out string? notSaved)
     {
+        notSaved = null;
         if (Remote(ctx, via, remoteArgs, request, out var result) is { } transport)
             return transport;
         try
@@ -486,7 +637,15 @@ public sealed partial class SlotCommand
             {
                 return "its output is not an approve file";
             }
-            ctx.WriteOutputFile(approveFile, text);
+            var bytes = Encoding.UTF8.GetBytes(text);
+            try
+            {
+                notSaved = WriteLocal(ctx, approveFile, bytes);
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(bytes);
+            }
             return null;
         }
         finally

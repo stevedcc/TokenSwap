@@ -222,10 +222,17 @@ public class SlotStdioTests : IDisposable
     [Fact]
     public void DashInput_ExactlyOneMiB_IsReadAndParsed()
     {
-        // The limit is inclusive: 1 MiB of whitespace is read and refused by the parser, not by the size check.
-        var (exit, _, stderr) = _host.Run(new string(' ', SlotStdioLimit), "slot", "approve", "-", "-");
+        // The limit is inclusive: a valid request padded with trailing spaces to exactly 1 MiB is read and approved
+        // (brief T34: a real oracle, the sanctioned input and exit change).
+        var request = File.ReadAllText(Request());
+        var padded = request + new string(' ', SlotStdioLimit - System.Text.Encoding.UTF8.GetByteCount(request));
+        Assert.Equal(SlotStdioLimit, System.Text.Encoding.UTF8.GetByteCount(padded));
 
-        Assert.NotEqual(0, exit);
+        var (exit, stdout, stderr) = _host.Run(padded, "slot", "approve", "-", "-");
+
+        Assert.True(exit == 0, stderr);
+        var approve = SlotEnrolmentFileCodec.DeserializeApprove(stdout);
+        Assert.Equal(SlotEnrolmentFileCodec.DeserializeRequest(request).SlotId, approve.NewSlotId);
         Assert.DoesNotContain("larger than 1 MiB", stderr);
     }
 
@@ -297,6 +304,7 @@ public class SlotStdioTests : IDisposable
 
         public string? ReadLine() => _in.ReadLine();
         public string ReadPassword(TextWriter? echo = null) => _in.ReadLine() ?? "";
+        public string? ReadLineWithoutEcho() => _in.ReadLine();
         public void SetForeground(ConsoleColor colour) { }
         public void ResetColor() { }
 

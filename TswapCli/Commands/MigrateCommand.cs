@@ -21,7 +21,7 @@ public sealed class MigrateCommand : ICliCommand
         var c = ctx.Console;
 
         c.Out.WriteLine("\n╔════════════════════════════════════════════════════════════════╗");
-        c.Out.WriteLine("║  tswap - Security Configuration Migration                    ║");
+        c.Out.WriteLine("║  tswap - Security Configuration Migration                      ║");
         c.Out.WriteLine("╚════════════════════════════════════════════════════════════════╝\n");
 
         var config = ctx.Storage.LoadConfig();

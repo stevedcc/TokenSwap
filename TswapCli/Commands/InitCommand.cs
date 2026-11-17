@@ -323,7 +323,7 @@ public sealed class InitCommand : ICliCommand
         var c = ctx.Console;
 
         c.Out.WriteLine("\n╔════════════════════════════════════════╗");
-        c.Out.WriteLine("║  tswap - Keyring Initialization        ║");
+        c.Out.WriteLine("║  tswap - Keyring Initialisation        ║");
         c.Out.WriteLine("╚════════════════════════════════════════╝\n");
         c.Out.WriteLine("This vault's master key (K_v) is random and wrapped by one YubiKey's slot");
         c.Out.WriteLine("(k = 1) — see docs/multi-machine.md. Add more keys later, each as its own");
@@ -370,7 +370,7 @@ public sealed class InitCommand : ICliCommand
             }
 
             c.Out.WriteLine("\n╔════════════════════════════════════════╗");
-            c.Out.WriteLine("║  ✓ INITIALIZATION COMPLETE            ║");
+            c.Out.WriteLine("║  ✓ INITIALISATION COMPLETE             ║");
             c.Out.WriteLine("╚════════════════════════════════════════╝\n");
             c.Out.WriteLine($"YubiKey Serial: {blob.Serial}");
             c.Out.WriteLine(includeRecovery
@@ -406,7 +406,7 @@ public sealed class InitCommand : ICliCommand
         var fido2 = Fido2SlotEnrolment.Require(ctx, serial);
 
         c.Out.WriteLine("\n╔════════════════════════════════════════╗");
-        c.Out.WriteLine("║  tswap - FIDO2 Keyring Initialization  ║");
+        c.Out.WriteLine("║  tswap - FIDO2 Keyring Initialisation  ║");
         c.Out.WriteLine("╚════════════════════════════════════════╝\n");
         c.Out.WriteLine("This vault's master key (K_v) is random and wrapped by one security key's FIDO2 slot");
         c.Out.WriteLine("(k = 1): every unlock asks for the key's FIDO2 PIN and a touch. Add more keys later,");
@@ -438,7 +438,7 @@ public sealed class InitCommand : ICliCommand
 
             var name = Fido2SlotEnrolment.EnrolledName(fido2, key, blob);
             c.Out.WriteLine("\n╔════════════════════════════════════════╗");
-            c.Out.WriteLine("║  ✓ INITIALIZATION COMPLETE            ║");
+            c.Out.WriteLine("║  ✓ INITIALISATION COMPLETE             ║");
             c.Out.WriteLine("╚════════════════════════════════════════╝\n");
             c.Out.WriteLine($"FIDO2 key:      {name}");
             c.Out.WriteLine(includeRecovery
@@ -714,7 +714,7 @@ public sealed class InitCommand : ICliCommand
 
         c.Out.WriteLine("\n╔════════════════════════════════════════╗");
         c.Out.WriteLine(backend == HardwareBackend.Tpm
-            ? "║  tswap - TPM Keyring Initialization    ║"
+            ? "║  tswap - TPM Keyring Initialisation    ║"
             : "║  tswap - Secure Enclave Keyring Init   ║");
         c.Out.WriteLine("╚════════════════════════════════════════╝\n");
         c.Out.WriteLine($"This vault's master key (K_v) is random and wrapped by this machine's {hardware}");
@@ -756,7 +756,7 @@ public sealed class InitCommand : ICliCommand
         }
 
         c.Out.WriteLine("\n╔════════════════════════════════════════╗");
-        c.Out.WriteLine("║  ✓ INITIALIZATION COMPLETE            ║");
+        c.Out.WriteLine("║  ✓ INITIALISATION COMPLETE             ║");
         c.Out.WriteLine("╚════════════════════════════════════════╝\n");
         c.Out.WriteLine(includeRecovery
             ? $"Backend: {hardware} keyring (k = 1, 2 slots: machine + recovery)"

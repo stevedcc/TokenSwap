@@ -121,6 +121,22 @@ public sealed class GuidedInitTests : IDisposable
 
     // ------------------------------------------------------------------ the flow
 
+    /// <summary>Brief T34 (#337.6): the guided init's banners line up, in British spelling.</summary>
+    [Fact]
+    public void Guided_TheBannersLineUp()
+    {
+        var m = Machine(11, 12);
+        m.SecureEnclave = RandomNumberGenerator.GetBytes(32);
+
+        var (exit, stdout, stderr) = m.RunOnTerminal("\n1 2 3\ny\n\nn\n", "init", "--no-password");
+
+        Assert.True(exit == 0, stderr + stdout);
+        BannerAssert.LinesUp(stdout);
+        Assert.Contains("INITIALISATION COMPLETE", stdout);
+        Assert.DoesNotContain("Initialization", stdout);
+        Assert.DoesNotContain("INITIALIZATION", stdout);
+    }
+
     [Fact]
     public void Guided_TwoKeysAndSecureEnclave_EachOpensTheVault()
     {

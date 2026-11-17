@@ -209,6 +209,7 @@ internal static class CliHost
         public bool IsOutputRedirected => false;
         public string? ReadLine() => inner.ReadLine();
         public string ReadPassword(TextWriter? echo = null) => inner.ReadPassword(echo);
+        public string? ReadLineWithoutEcho() => inner.ReadLineWithoutEcho();
         public void SetForeground(ConsoleColor colour) => inner.SetForeground(colour);
         public void ResetColor() => inner.ResetColor();
     }

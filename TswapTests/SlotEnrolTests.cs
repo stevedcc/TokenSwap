@@ -397,8 +397,8 @@ public class SlotEnrolTests : IDisposable
     // ------------------------------------------------------------------ accept's receipt write fails
 
     /// <summary>Makes the receipt path a folder once the enrolment folder exists (at the approve call).</summary>
-    private void ReceiptPathIsAFolder() =>
-        _ssh.BeforeCall = rest =>
+    private void ReceiptPathIsAFolder(LoopbackSshTransport? ssh = null) =>
+        (ssh ?? _ssh).BeforeCall = rest =>
         {
             if (rest is ["slot", "approve", ..])
                 Directory.CreateDirectory(Path.Combine(Assert.Single(EnrolFolders), "receipt.json"));
@@ -683,6 +683,148 @@ public class SlotEnrolTests : IDisposable
         Assert.Contains(
             $"Approve file received: {fingerprint}. It must match the approve file fingerprint the host printed above; if it doesn't, " +
             $"press Ctrl-C now (the host's staging folder is then left; remove it with 'tswap slot stage {id} clean').", stdout);
+    }
+
+    // ------------------------------------------------------------------ brief T34 task 1: enrol's own wording
+
+    /// <summary>Every line of <paramref name="note"/> is in <paramref name="text"/>.</summary>
+    private static void AssertContainsEveryLine(string[] note, string text)
+    {
+        Assert.NotEmpty(note);
+        foreach (var line in note)
+            Assert.Contains(line, text);
+    }
+
+    [Fact]
+    public void Interactive_RequestAndAccept_PrintEnrolsOwnSteps_NotTheHandCarriedOnes()
+    {
+        _joiner.Ssh = InteractiveSsh();
+
+        var (exit, stdout, stderr) = EnrolOnTerminal(TerminalAnswers);
+
+        Assert.True(exit == 0, stderr + stdout);
+        var text = stdout.ReplaceLineEndings("\n");
+        AssertContainsEveryLine(TswapCli.Commands.SlotCommand.EnrolInteractiveFingerprintNote, text);
+        Assert.Contains("X25519 keypair. Nothing is shared or usable as a vault yet: 'slot enrol' has\nthe host approve the request next.\n", text);
+        Assert.Contains("('slot enrol' has the host merge it next).", text);
+        foreach (var handCarried in (string[])["Move this file", "Carry it back", "Not load-bearing", "slot approve <this-file>", "slot merge <receipt-file>"])
+            Assert.DoesNotContain(handCarried, text);
+    }
+
+    [Fact]
+    public void Interactive_TheHostsApprove_SaysItDoesntWait()
+    {
+        var ssh = InteractiveSsh();
+        _joiner.Ssh = ssh;
+
+        var (exit, stdout, stderr) = EnrolOnTerminal(TerminalAnswers);
+
+        Assert.True(exit == 0, stderr + stdout);
+        var host = ssh.InteractiveOutput.ToString();
+        AssertContainsEveryLine(TswapCli.Commands.SlotCommand.StagedApproveFingerprintNote, host);
+        Assert.DoesNotContain("Compare this against", host);
+        Assert.DoesNotContain("Not load-bearing", host);
+    }
+
+    [Fact]
+    public void Batch_Request_NotesTheHostsLabelledLine()
+    {
+        var (exit, stdout, stderr) = Enrol("");
+
+        Assert.True(exit == 0, stderr + stdout);
+        AssertContainsEveryLine(TswapCli.Commands.SlotCommand.EnrolBatchFingerprintNote(Via), stdout);
+        Assert.DoesNotContain("Move this file", stdout);
+        Assert.DoesNotContain("Carry it back", stdout);
+        const string Mine = "This machine's slot fingerprint: ";
+        var mine = Assert.Single(stdout.Split('\n'), l => l.StartsWith(Mine)).TrimEnd('\r')[Mine.Length..];
+        var hostLabel = $"[{Via}] Requesting machine's slot fingerprint: ";
+        var hosts = Assert.Single(stderr.Split('\n'), l => l.StartsWith(hostLabel)).TrimEnd('\r')[hostLabel.Length..];
+        Assert.Equal(mine, hosts);
+    }
+
+    [Fact]
+    public void SlotRequest_ByHand_StillPrintsTheHandCarriedSteps()
+    {
+        var stdout = _joiner.Ok("", "slot", "request", _joiner.PathOf("request.json"));
+
+        Assert.Contains("Move this file to an already-enrolled machine yourself (scp/USB/paste) —", stdout);
+        Assert.Contains("(Not load-bearing in v0", stdout);
+    }
+
+    // ------------------------------------------------------------------ brief T34 task 2: the Enter gate
+
+    private const string EnterPrompt = "Press Enter to accept it here. ";
+
+    [Fact]
+    public void EnterGate_TypedText_IsNeitherShownNorAccepted()
+    {
+        _joiner.Ssh = InteractiveSsh();
+
+        var (exit, stdout, stderr) = _joiner.RunOnEchoingTerminal("\n\n\n" + "PIN-MARKER-4711\n" + "\n", ["slot", "enrol", "--via", Via]);
+
+        Assert.True(exit == 0, stderr + stdout);
+        AssertEnrolled(stdout, $"YubiKey {SerialB}");
+        Assert.Equal(1, CountOf(stdout, TswapCli.Commands.SlotCommand.EnterGateRetryText));
+        Assert.Equal(2, CountOf(stdout, EnterPrompt));
+        Assert.DoesNotContain("PIN-MARKER-4711", stdout);
+        Assert.DoesNotContain("PIN-MARKER-4711", stderr);
+    }
+
+    [Fact]
+    public void EnterGate_ASpace_IsNotAnEnter()
+    {
+        _joiner.Ssh = InteractiveSsh();
+
+        var (exit, stdout, stderr) = EnrolOnTerminal("\n\n\n" + " \n" + "\n");
+
+        Assert.True(exit == 0, stderr + stdout);
+        Assert.Equal(1, CountOf(stdout, TswapCli.Commands.SlotCommand.EnterGateRetryText));
+    }
+
+    [Fact]
+    public void EnterGate_TextThenEof_KeepsTheRequest()
+    {
+        var ssh = InteractiveSsh();
+        _joiner.Ssh = ssh;
+        var hostKeyring = HostKeyringBytes();
+
+        var (exit, stdout, stderr) = EnrolOnTerminal("\n\n\n" + "x\n");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("The approve file's fingerprint wasn't confirmed, so it was not accepted. This machine's pending request is kept; " +
+                        $"nothing was added on {Via}.", stderr);
+        var folder = Assert.Single(EnrolFolders);
+        Assert.True(File.Exists(Path.Combine(folder, "request.json")));
+        Assert.False(File.Exists(Path.Combine(folder, "approve.json")));
+        Assert.NotNull(_joiner.Config.PendingSlotId);
+        Assert.Equal(hostKeyring, HostKeyringBytes());
+        Assert.Equal(1, CountOf(stdout, TswapCli.Commands.SlotCommand.EnterGateRetryText));
+        Assert.DoesNotContain(ssh.Log, l => l.Contains("merge"));
+    }
+
+    /// <summary>
+    /// Review round 1 (M5): at end of input at the gate, an approve file that can't be deleted (the seam fails its second
+    /// access, the delete; the first is the write) still gives the "wasn't confirmed" message, which names the file.
+    /// </summary>
+    [Fact]
+    public void EnterGate_ApproveFileNotDeletable_StillSaysWhatIsLeft()
+    {
+        var ssh = InteractiveSsh();
+        _joiner.Ssh = ssh;
+        var approveAccesses = 0;
+        LocalAccessFails(path => IsFile(path, "approve.json") && ++approveAccesses == 2);
+
+        var (exit, _, stderr) = EnrolOnTerminal("\n\n\n"); // request's answers; then EOF at the Enter
+
+        Assert.NotEqual(0, exit);
+        var approve = Path.Combine(Assert.Single(EnrolFolders), "approve.json");
+        Assert.Contains("The approve file's fingerprint wasn't confirmed, so it was not accepted. This machine's pending request is kept; " +
+                        $"nothing was added on {Via}.", stderr);
+        Assert.Contains($"Delete {approve} by hand (it couldn't be deleted: locked).", stderr);
+        Assert.Equal(2, approveAccesses);
+        Assert.True(File.Exists(approve));
+        Assert.NotNull(_joiner.Config.PendingSlotId);
+        Assert.DoesNotContain(ssh.Log, l => l.Contains("merge"));
     }
 
     [Fact]
@@ -971,6 +1113,238 @@ public class SlotEnrolTests : IDisposable
         Assert.Equal([Via], _ssh.Ended);
     }
 
+    // ------------------------------------------------------------------ brief T34 task 3: local failures and exact hints
+
+    /// <summary>The joiner's enrol seam throws <c>IOException("locked")</c> for every path <paramref name="fails"/> picks.</summary>
+    private void LocalAccessFails(Func<string, bool> fails) =>
+        _joiner.EnrolSeams = new TswapCli.Commands.EnrolFileSeams
+        {
+            BeforeLocalAccess = path =>
+            {
+                if (fails(path))
+                    throw new IOException("locked");
+            },
+        };
+
+    private bool IsAnEnrolmentFolder(string path) =>
+        Path.GetFullPath(Path.GetDirectoryName(path)!) == Path.GetFullPath(EnrolRoot);
+
+    /// <summary>Enrolled, asserted without <see cref="AssertEnrolled"/> (which asserts the folders are gone).</summary>
+    private void AssertEnrolledKeepingFolders(string stdout)
+    {
+        var config = _joiner.Config;
+        Assert.Null(config.PendingSlotId);
+        Assert.True(HasSlot(_host.Keyring, config.KeyringSlotId!), "the host's keyring doesn't have the new slot");
+        var publicKey = _joiner.Keyring.Slots.Single(s => Convert.ToBase64String(s.SlotId) == config.KeyringSlotId).PublicKey;
+        Assert.Contains($"This machine's slot: {SlotFingerprint.Compute(publicKey)}", stdout);
+        Assert.Contains($"✓ Enrolled: {Via}'s vault now opens with YubiKey {SerialB}, and this machine has its copy.", stdout);
+    }
+
+    [Fact]
+    public void FolderNotDeletable_StillEnrolled_SaysTheFolderIsKept()
+    {
+        LocalAccessFails(IsAnEnrolmentFolder);
+
+        var (exit, stdout, stderr) = Enrol("");
+
+        Assert.True(exit == 0, stderr + stdout);
+        AssertEnrolledKeepingFolders(stdout);
+        var folder = Assert.Single(EnrolFolders);
+        Assert.Contains($"Note: the enrolment folder is kept: {folder} (locked). Delete it by hand.", stderr);
+        Assert.True(Directory.Exists(folder));
+    }
+
+    [Fact]
+    public void Fresh_AnOldFolderNotDeletable_GoesOn()
+    {
+        var old = FailedApprove();
+        LocalAccessFails(path => Path.GetFullPath(path) == Path.GetFullPath(old));
+
+        var (exit, stdout, stderr) = Enrol("yes\n", "--fresh");
+
+        Assert.True(exit == 0, stderr + stdout);
+        AssertEnrolledKeepingFolders(stdout);
+        Assert.Contains($"Note: couldn't delete the earlier enrolment folder {old} (locked); delete it by hand.", stderr);
+        Assert.True(Directory.Exists(old));
+    }
+
+    private static bool IsFile(string path, string name) => Path.GetFileName(path) == name;
+
+    private static string ApproveNotSavedOpening(string folder) =>
+        "The host approved the request, but this machine couldn't save the approve file (couldn't write " +
+        $"{Path.Combine(folder, "approve.json")}: locked).";
+
+    [Fact]
+    public void ApproveFileNotSaved_Interactive_TheRequestIsKept()
+    {
+        var ssh = InteractiveSsh();
+        _joiner.Ssh = ssh;
+        LocalAccessFails(path => IsFile(path, "approve.json"));
+        var hostKeyring = HostKeyringBytes();
+
+        var (exit, stdout, stderr) = EnrolOnTerminal(TerminalAnswers);
+
+        Assert.NotEqual(0, exit);
+        var folder = Assert.Single(EnrolFolders);
+        Assert.Contains(ApproveNotSavedOpening(folder), stderr);
+        Assert.NotNull(_joiner.Config.PendingSlotId);
+        Assert.True(File.Exists(Path.Combine(folder, "request.json")));
+        Assert.Equal(hostKeyring, HostKeyringBytes());
+        Assert.DoesNotContain(ssh.Log, l => l.Contains("merge"));
+
+        _joiner.EnrolSeams = null;
+        var (again, againOut, againErr) = EnrolOnTerminal("\n");
+        Assert.True(again == 0, againErr + againOut);
+        AssertEnrolled(againOut, $"YubiKey {SerialB}");
+    }
+
+    [Fact]
+    public void ApproveFileNotSaved_Batch_TheRequestIsKept()
+    {
+        LocalAccessFails(path => IsFile(path, "approve.json"));
+        var hostKeyring = HostKeyringBytes();
+
+        var (exit, stdout, stderr) = Enrol("");
+
+        Assert.NotEqual(0, exit);
+        var folder = Assert.Single(EnrolFolders);
+        Assert.Contains(ApproveNotSavedOpening(folder), stderr);
+        Assert.NotNull(_joiner.Config.PendingSlotId);
+        Assert.Equal(hostKeyring, HostKeyringBytes());
+        Assert.DoesNotContain(CallLines, l => l.Contains("merge"));
+
+        _joiner.EnrolSeams = null;
+        var (again, againOut, againErr) = Enrol("");
+        Assert.True(again == 0, againErr + againOut);
+        AssertEnrolled(againOut, $"YubiKey {SerialB}");
+    }
+
+    [Fact]
+    public void ReceiptNotReadable_Interactive_SaysTheMergeIsLeft()
+    {
+        var ssh = InteractiveSsh();
+        _joiner.Ssh = ssh;
+        LocalAccessFails(path => IsFile(path, "receipt.json"));
+        var hostKeyring = HostKeyringBytes();
+
+        var (exit, _, stderr) = EnrolOnTerminal(TerminalAnswers);
+
+        Assert.NotEqual(0, exit);
+        var receipt = Path.Combine(Assert.Single(EnrolFolders), "receipt.json");
+        Assert.Contains($"This machine has its copy of the vault, but {Via} didn't add the slot (couldn't read {receipt}: locked), so the " +
+                        "host's own keyring doesn't know it yet.", stderr);
+        Assert.Null(_joiner.Config.PendingSlotId);
+        Assert.NotNull(_joiner.Config.KeyringSlotId);
+        Assert.Equal(hostKeyring, HostKeyringBytes());
+        AssertJoinerReadsTheHostsSecret();
+    }
+
+    [Fact]
+    public void RequestNotReadable_Batch_SaysTheApproveIsLeft()
+    {
+        LocalAccessFails(path => IsFile(path, "request.json"));
+
+        var (exit, _, stderr) = Enrol("");
+
+        Assert.NotEqual(0, exit);
+        var request = Path.Combine(Assert.Single(EnrolFolders), "request.json");
+        Assert.Contains($"The host didn't approve the request (couldn't read {request}: locked). This machine's pending request is kept; " +
+                        $"nothing was added on {Via}.", stderr);
+        Assert.Equal(["sudo -n tswap --version"], CallLines);
+    }
+
+    [Fact]
+    public void AcceptFails_WithVaultDir_TheHintNamesTheFolder()
+    {
+        var other = new FleetMachine("enrol-other", SimulatedYubiKeyService.WithKeys(SerialC));
+        _others.Add(other);
+        other.Ok("", "slot", "request", other.PathOf("request.json"));
+        var otherApprove = _host.Ok("", "slot", "approve", other.PathOf("request.json"), "-");
+        _ssh.Override = rest => rest is ["slot", "approve", ..] ? new SshResult(0, Encoding.UTF8.GetBytes(otherApprove)) : null;
+        var full = Path.GetFullPath(_host.VaultDir!);
+
+        var (exit, _, stderr) = Enrol("", "--vault-dir", _host.VaultDir!);
+
+        Assert.NotEqual(0, exit);
+        var approve = Path.Combine(Assert.Single(EnrolFolders), "approve.json");
+        Assert.Contains($"slot accept {approve} --vault-dir \"{full}\"' here", stderr);
+    }
+
+    /// <summary>Review round 1 (M4): a trailing separator is trimmed, so the quoted path doesn't end in <c>\"</c> on Windows.</summary>
+    [Fact]
+    public void AcceptFails_WithVaultDirAndATrailingSeparator_TheHintTrimsIt()
+    {
+        var other = new FleetMachine("enrol-other", SimulatedYubiKeyService.WithKeys(SerialC));
+        _others.Add(other);
+        other.Ok("", "slot", "request", other.PathOf("request.json"));
+        var otherApprove = _host.Ok("", "slot", "approve", other.PathOf("request.json"), "-");
+        _ssh.Override = rest => rest is ["slot", "approve", ..] ? new SshResult(0, Encoding.UTF8.GetBytes(otherApprove)) : null;
+        var full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(_host.VaultDir!));
+
+        var (exit, _, stderr) = Enrol("", "--vault-dir", full + Path.DirectorySeparatorChar);
+
+        Assert.NotEqual(0, exit);
+        var approve = Path.Combine(Assert.Single(EnrolFolders), "approve.json");
+        Assert.Contains($"slot accept {approve} --vault-dir \"{full}\"' here", stderr);
+    }
+
+    [Fact]
+    public void Interactive_AcceptFails_TheHintNamesTheFileFormOfMerge()
+    {
+        var other = new FleetMachine("enrol-other", SimulatedYubiKeyService.WithKeys(SerialC));
+        _others.Add(other);
+        other.Ok("", "slot", "request", other.PathOf("request.json"));
+        var crafted = _host.Ok("", "slot", "approve", other.PathOf("request.json"), "-");
+        _host.StagedSeams = new TswapCli.Commands.StagedFileSeams { AfterApproveWritten = path => File.WriteAllText(path, crafted) };
+        _joiner.Ssh = InteractiveSsh();
+
+        var (exit, _, stderr) = EnrolOnTerminal(TerminalAnswers);
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("This approve file targets a different slot id than this machine's pending request.", stderr);
+        Assert.Contains($"then carry the receipt to {Via} and run 'sudo tswap slot merge receipt.json' there.", stderr);
+        Assert.DoesNotContain("slot merge - <", stderr);
+    }
+
+    [Fact]
+    public void ReceiptNotWritten_TheHintUsesTheRemoteProgram()
+    {
+        var ssh = new LoopbackSshTransport(_host, "/opt/tswap/tswap");
+        _joiner.Ssh = ssh;
+        ReceiptPathIsAFolder(ssh);
+
+        var (exit, _, stderr) = Enrol("", "--no-remote-sudo", "--remote-tswap", "/opt/tswap/tswap");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("'/opt/tswap/tswap vault merge <folder>'", stderr);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Password_FolderRefusals_ComeBeforeAnySshCall(bool emptyFolder)
+    {
+        var folder = emptyFolder ? Directory.CreateTempSubdirectory("tswap-enrol-empty-").FullName : null;
+        try
+        {
+            string[] flags = folder is null ? ["--password"] : ["--password", "--vault-dir", folder];
+
+            var (exit, _, stderr) = Enrol("", flags);
+
+            Assert.NotEqual(0, exit);
+            Assert.Contains(folder is null
+                ? TswapCli.Commands.SlotCommand.RequestNeedsFolderText
+                : TswapCli.Commands.SlotCommand.RequestNotAVaultFolderText(Path.GetFullPath(folder)), stderr);
+            Assert.Empty(CallLines);
+            Assert.False(Directory.Exists(EnrolRoot));
+        }
+        finally
+        {
+            if (folder is not null)
+                Directory.Delete(folder, true);
+        }
+    }
+
     // ------------------------------------------------------------------ the process transport
 
     [Fact]
@@ -1035,6 +1409,107 @@ public class SlotEnrolTests : IDisposable
                 new ProcessSshTransport(stub).Run("me@host", ["tswap", "slot", "approve", "-", "-"], Encoding.UTF8.GetBytes("req"), new StringWriter()));
 
             Assert.Equal("its output was larger than 1 MiB, so ssh was stopped", ex.Message);
+        }
+        finally
+        {
+            Directory.Delete(dir, true);
+        }
+    }
+
+    // ------------------------------------------------------------------ brief T34 task 4: the stderr relay's caps
+
+    /// <summary>Runs <paramref name="script"/> as the ssh stub (stdin read and dropped first); the relayed stderr lines.</summary>
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
+    private static (Func<SshResult> Run, StringWriter Stderr, string Dir) StderrStub(string script)
+    {
+        var dir = Directory.CreateTempSubdirectory("tswap-ssh-stub-").FullName;
+        var stub = Path.Combine(dir, "ssh");
+        File.WriteAllText(stub, "#!/bin/sh\ncat > /dev/null\n" + script);
+        File.SetUnixFileMode(stub, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        var stderr = new StringWriter();
+        return (() => new ProcessSshTransport(stub).Run("me@host", ["tswap", "slot", "merge", "-"], Encoding.UTF8.GetBytes("in"), stderr),
+            stderr, dir);
+    }
+
+    private static string[] RelayedLines(StringWriter stderr) =>
+        [.. stderr.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => l.TrimEnd('\r'))];
+
+    [Fact]
+    public void ProcessSshTransport_CutsALongStderrLine()
+    {
+        if (OperatingSystem.IsWindows())
+            return; // the stub is a POSIX shell script
+        var (run, stderr, dir) = StderrStub(
+            "head -c 10000 /dev/zero | tr '\\0' y >&2\nprintf '\\nnext\\n' >&2\nprintf ok\nexit 0\n");
+        try
+        {
+            var result = run();
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Equal("ok", Encoding.UTF8.GetString(result.Stdout));
+            Assert.Equal(["[me@host] " + new string('y', 4096) + " [line cut]", "[me@host] next"], RelayedLines(stderr));
+        }
+        finally
+        {
+            Directory.Delete(dir, true);
+        }
+    }
+
+    [Fact]
+    public void ProcessSshTransport_RefusesPastOneMiBOfStderr()
+    {
+        if (OperatingSystem.IsWindows())
+            return; // the stub is a POSIX shell script
+        // 32768 lines of 64 characters (63 and the newline): 2 MiB, and then the stub ends by itself.
+        var (run, _, dir) = StderrStub($"yes '{new string('x', 63)}' | head -n 32768 >&2\nprintf ok\nexit 0\n");
+        try
+        {
+            var ex = Assert.Throws<SshTransportException>(() => run());
+
+            Assert.Equal("its error output was larger than 1 MiB, so ssh was stopped", ex.Message);
+        }
+        finally
+        {
+            Directory.Delete(dir, true);
+        }
+    }
+
+    /// <summary>
+    /// Review round 1 (M3): the total cap is 1 MiB of UTF-8 bytes, as the message says, not 1 Mi characters. 12000 lines
+    /// of 63 'é' and a newline are 768000 characters but 1524000 bytes.
+    /// </summary>
+    [Fact]
+    public void ProcessSshTransport_RefusesPastOneMiBOfStderr_CountedInBytes()
+    {
+        if (OperatingSystem.IsWindows())
+            return; // the stub is a POSIX shell script
+        var (run, _, dir) = StderrStub($"yes '{new string('é', 63)}' | head -n 12000 >&2\nprintf ok\nexit 0\n");
+        try
+        {
+            var ex = Assert.Throws<SshTransportException>(() => run());
+
+            Assert.Equal("its error output was larger than 1 MiB, so ssh was stopped", ex.Message);
+        }
+        finally
+        {
+            Directory.Delete(dir, true);
+        }
+    }
+
+    [Fact]
+    public void ProcessSshTransport_RefusesPastOneMiBOfStderr_OnOneLine()
+    {
+        if (OperatingSystem.IsWindows())
+            return; // the stub is a POSIX shell script
+        var (run, stderr, dir) = StderrStub("head -c 2097152 /dev/zero | tr '\\0' y >&2\nprintf ok\nexit 0\n");
+        try
+        {
+            var ex = Assert.Throws<SshTransportException>(() => run());
+
+            Assert.Equal("its error output was larger than 1 MiB, so ssh was stopped", ex.Message);
+            // Review round 1 (M1): exactly the one cut line, written when the line passed 4096 characters.
+            var line = Assert.Single(RelayedLines(stderr));
+            Assert.EndsWith(" [line cut]", line);
         }
         finally
         {
