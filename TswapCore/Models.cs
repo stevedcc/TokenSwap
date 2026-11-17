@@ -4,7 +4,7 @@ using TswapCore.Keyring;
 namespace TswapCore;
 
 /// <summary>
-/// Entropy source for generated secrets. Serialized as lowercase strings
+/// Entropy source for generated secrets. Serialised as lowercase strings
 /// ("system"/"yubikey") for compatibility with existing config.json files;
 /// a null <see cref="Config.RngMode"/> means not yet configured (pre-migration).
 /// </summary>
@@ -27,7 +27,7 @@ public static class RngModeExtensions
 }
 
 /// <summary>
-/// The hardware root of trust that protects a vault. Serialized as lowercase strings
+/// The hardware root of trust that protects a vault. Serialised as lowercase strings
 /// ("yubikey"/"tpm"/"secure-enclave"). A null <see cref="Config.Backend"/> means YubiKey
 /// — the only backend that existed before this field — so pre-existing vaults keep
 /// working and their <c>config.json</c> is left unchanged (the field is omitted when null).
@@ -334,7 +334,7 @@ public record SecretsDb(Dictionary<string, Secret> Secrets) : ISecretLookup
 }
 
 /// <summary>
-/// KDF algorithm identifiers for an export file's passphrase-derived key (#30). Serialized as
+/// KDF algorithm identifiers for an export file's passphrase-derived key (#30). Serialised as
 /// lowercase hyphenated strings so the raw JSON is self-describing without a lookup table.
 /// </summary>
 [JsonConverter(typeof(JsonStringEnumConverter<KdfAlgorithm>))]

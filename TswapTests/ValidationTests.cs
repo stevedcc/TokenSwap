@@ -280,7 +280,7 @@ public class ValidationTests
         Assert.Contains("tok", ex.Message);
     }
 
-    // --- Sanitize ---
+    // --- Sanitise ---
 
     [Fact]
     public void SanitizeCommand_MasksTokens()

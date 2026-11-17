@@ -41,3 +41,18 @@ docs/design/hardware-backends.md	seek`, then `Invalid key authorization`), for `
 docs/design/hardware-backends.md	- **Errors:** `0x98E` (`TPM_RC_AUTH_FAIL` for the object's session, "the authorization HMAC check	quoted tool error: tpm2-tools' message on swtpm
 docs/install.md	`ykpers` or `yubikey-personalization` package; installing it needs an administrator). Without	external name: the yubikey-personalization package
 docs/portable.md	device. It is often installed by the `ykpers` or `yubikey-personalization` package; installing	external name: the yubikey-personalization package
+
+# Capitalised and ALL-CAPS forms (T40, #352)
+TswapTests/BannerAlignmentTests.cs	Assert.DoesNotContain("Initialization", stdout);	asserts the US form is gone
+TswapTests/BannerAlignmentTests.cs	Assert.DoesNotContain("INITIALIZATION", stdout);	asserts the US form is gone
+TswapTests/CommandTests.cs	Assert.DoesNotContain("Reinitialize?", stdout);	asserts the US form is gone
+TswapTests/GuidedInitTests.cs	Assert.DoesNotContain("Initialization", stdout);	asserts the US form is gone
+TswapTests/GuidedInitTests.cs	Assert.DoesNotContain("INITIALIZATION", stdout);	asserts the US form is gone
+TswapTests/GuidedInitTests.cs	Assert.DoesNotContain("Reinitialize?", stdout);	asserts the US form is gone
+TswapTests/InitRecordVaultTests.cs	Assert.DoesNotContain("Reinitialize?", stdout);	asserts the US form is gone
+TswapTests/MacFakeTools.cs	else printf '%s: accepted\nsource=Notarized Developer ID\norigin=Developer ID Installer: Test Person (TEAMID1234)\n' "${@: -1}" >&2; fi	Apple's tool output, quoted verbatim
+TswapTests/MacPkgScriptTests.cs	printf '%s\n' "Package "$(basename "$2")":"                     '   Status: signed by a developer certificate issued by Apple for distribution'                     '   Notarization: trusted by the Apple notary service'                     '   Signed with a trusted timestamp on: 2026-11-07 12:00:00 +0000'                     '   Certificate Chain:'                     '    1. Developer ID Installer: Test Person (TEAMID1234)'                     '       Expires: 2031-11-07 12:00:00 +0000'                     '    2. Developer ID Certification Authority'                     '    3. Apple Root CA'	Apple's tool output, quoted verbatim
+TswapTests/MacPkgScriptTests.cs	Assert.Contains("spctl -a -t install did not say accepted with source=Notarized Developer ID", output);	Apple's tool output, quoted verbatim
+contrib/packaging/package-pkg.sh	if ! printf '%s\n' "$spctl_out" | grep -q ': accepted' || ! printf '%s\n' "$spctl_out" | grep -qx 'source=Notarized Developer ID'; then	Apple's tool output, quoted verbatim
+contrib/packaging/package-pkg.sh	die "spctl -a -t install did not say accepted with source=Notarized Developer ID"	Apple's tool output, quoted verbatim
+AGENTS.md	<a id="code-organization-tswapcli"></a>	released anchor

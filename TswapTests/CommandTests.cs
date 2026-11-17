@@ -1086,7 +1086,7 @@ public class CommandTests : IDisposable
     [Fact]
     public void Apply_OutputsSubstitutedContent()
     {
-        // Initialize and create a secret
+        // Initialise and create a secret
         RunTswap("init", "--yubikey");
         RunTswap("create", "test-secret", "16");
 
