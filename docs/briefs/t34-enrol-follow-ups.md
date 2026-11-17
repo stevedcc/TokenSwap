@@ -41,6 +41,12 @@ readonly`, one paragraph (A9). M1, "six literals" in Task 6: eight, and which ch
 note" for an array: "every line of" in each test (A11). M3, A-labels clashing with T28's A1 in Task 5: the controller
 amendment is C1, fold labels live only here, Task 5 says "T28's A1" (A12). M4, the `--vault-dir` hint's path unquoted:
 double-quoted (A13).
+Round 3 (both "yes"), folded A14-A17: GLM I1, the "Parallel briefs" bullet still said four literals and missed
+`MigrateCommand.cs`; T35 has since merged (94255bb) and changed no banner literal: bullet rewritten (A14). MiMo M1, the
+mid-line Ctrl-D rule had no test: `ReadLineWithoutEcho_CtrlD_MidLine_IsIgnored` added, with a break-it (A15). MiMo M2,
+"at most 80 characters" can't hold for the batch note's `[{via}]` line: that line excepted (A16). MiMo M3, two gate tests
+gave only the gate's tail: full stdin spelt out (A17). GLM M2, git commit `1dc818a` says "amendment A1" for what this
+brief calls C1: record the mapping in the report, nothing else.
 
 **Parallel briefs.** T35 (Windows output: console encoding and glyphs, `run`'s ConPTY, `InitCommand`'s `--yubikey`
 header and closing line, `docs/install.md`), T36 (slot-kind labels in `slots`, tightening loose vault files,
@@ -51,10 +57,10 @@ are expected:
 - `TswapCli/IConsole.cs`, `TswapCli/SystemConsole.cs`, `TswapCli/CliHost.cs`: T34 adds one member,
   `ReadLineWithoutEcho` (Task 2), to the interface, `SystemConsole`, and `CliHost.TestTerminalConsole`. It changes no
   existing member and no encoding. T35 may set the console's output encoding in the same files: different members.
-- `TswapCli/Commands/InitCommand.cs` and `GuidedInit.cs`: T34 changes one string literal in each of four places, the
-  `"║  ✓ INITIALIZATION COMPLETE            ║"` line (Task 6). T35 changes `InitCommand`'s `--yubikey` header and closing
-  line (about 10 lines from one of them) and may change how banners are drawn on Windows. If T35 merges first and has
-  replaced these literals, keep T35's form and make its closing banner line up (the Task 6 tests still apply).
+- `TswapCli/Commands/InitCommand.cs`, `GuidedInit.cs` and `MigrateCommand.cs`: Task 6 changes eight literals (six in
+  `InitCommand.cs`, one in `GuidedInit.cs`, one in `MigrateCommand.cs`). T35 has merged (94255bb, in this branch since
+  the merge of main): it changed only the two `slot add --yubikey` hint lines in `InitCommand.cs` (`:330`, `:383`), no
+  banner literal, so nothing overlaps (A14).
 - `docs/multi-machine.md`: T34 edits only "Enrolling over SSH" and its subsections; T36 edits "Sync transports".
 - `TswapTests/FakeConsole.cs`, `FleetMachine.cs`, `TswapCli/CommandContext.cs`: one new member each (Tasks 2 and 3).
 
@@ -123,7 +129,7 @@ passes no hooks and prints exactly what it prints today):
 - The fingerprint note: `RequestHooks` gets `public string[]? FingerprintNote { get; init; }`, and both request paths call
   `PrintFingerprint(c, "This machine's slot", slotKeyPair.PublicKey, hooks?.FingerprintNote)`.
 - `PrintFingerprint` gets a fourth parameter, `string[]? note = null`: null prints today's two lines; otherwise the
-  fingerprint line, then each element of `note` on its own line (lines of at most 80 characters, as today's note). Update its doc comment (the note is the caller's; by hand the v0
+  fingerprint line, then each element of `note` on its own line (lines of at most 80 characters, as today's note; the batch note's `[{via}]` line excepted, since `--via` has no length cap (A16)). Update its doc comment (the note is the caller's; by hand the v0
   lines stay true, since there the hand-carried file is the trust boundary). `NewSlotWrite.cs:92` and `SlotCommand.cs:1377`
   are unchanged.
 - `RequestStep` gets a `string[] fingerprintNote` parameter, set into the hooks. The notes (these two and the staged
@@ -206,6 +212,7 @@ Tests:
 - `SystemConsoleTests` (its `ScriptedInput`): `ReadLineWithoutEcho_OnATerminal_DiscardsTypeaheadFirst` (keys `1`, `2`,
   Backspace, `3`, Enter: returns `"13"`, and the `Log` has `discard` before the first key);
   `ReadLineWithoutEcho_CtrlD_OnAnEmptyLine_IsEndOfInput` (returns null);
+  `ReadLineWithoutEcho_CtrlD_MidLine_IsIgnored` (keys `1`, Ctrl-D, `2`, Enter: returns `"12"`) (A15);
   `ReadLineWithoutEcho_CtrlC_Cancels_AndPutsTheSettingBack` (as the `ReadPassword` one);
   `ReadLineWithoutEcho_Piped_ReadsTheLine` (no `discard` in the log). Nothing is shown because the terminal path reads
   with `ReadKey(intercept: true)` (`ConsoleInput.ReadKey`) and the method writes nothing; `SystemConsole` writes only to
@@ -215,11 +222,14 @@ Tests:
   "PIN-MARKER-4711\n" + "\n", ["slot", "enrol", "--via", Via])` with `InteractiveSsh()`: exit 0, enrolled; stdout contains
   `EnterGateRetryText` exactly once and `Press Enter to accept it here. ` exactly twice; `PIN-MARKER-4711` appears in
   neither stdout nor stderr.
-- `SlotEnrolTests.EnterGate_ASpace_IsNotAnEnter`: gate input `" \n\n"`: exit 0, `EnterGateRetryText` once.
-- `SlotEnrolTests.EnterGate_TextThenEof_KeepsTheRequest`: gate input `"x\n"` then end of input: exit non-zero, the
+- `SlotEnrolTests.EnterGate_ASpace_IsNotAnEnter`: stdin `"\n\n\n" + " \n" + "\n"` (the three request answers, then the
+  gate's input) (A17): exit 0, `EnterGateRetryText` once.
+- `SlotEnrolTests.EnterGate_TextThenEof_KeepsTheRequest`: stdin `"\n\n\n" + "x\n"` then end of input (A17): exit non-zero, the
   existing "wasn't confirmed" text on stderr, no `approve.json`, the pending request kept, the host's keyring unchanged.
 - The existing `Interactive_AnApproveFileSwappedOnTheHost_ShowsAnotherFingerprint_AndEofAtTheEnterKeepsTheRequest` must
   pass unchanged (EOF at the gate).
+- Break-it-once: in `SystemConsole.ReadLineWithoutEcho`, let Ctrl-D with something collected return what was collected;
+  `ReadLineWithoutEcho_CtrlD_MidLine_IsIgnored` fails (A15).
 - Break-it-once: use `c.ReadLine()` at the gate again; `EnterGate_TypedText_IsNeitherShownNorAccepted` fails (the marker is
   echoed, and accepted: no retry text). Accept any non-null line; it fails on the retry count.
 
@@ -456,7 +466,7 @@ Files: `docs/multi-machine.md` (the enrolling-over-SSH section only).
 Write `t34-report.md` at the worktree's parent folder (`../t34-report.md`). It contains: the commits; each break-it-once
 (line reverted, test that failed); the two sanctioned test changes (`Stage_UnderSudo_IsRefused`'s guard,
 `DashInput_ExactlyOneMiB_IsReadAndParsed`'s input and oracle); the #331 table above with each row's outcome; the full
-`./runtests.sh` summary lines; anything left undone; and for the owner to check by hand: the Enter gate on a real
+`./runtests.sh` summary lines; the label mapping (git commit `1dc818a`'s "amendment A1" is this brief's C1); anything left undone; and for the owner to check by hand: the Enter gate on a real
 terminal (type a few characters then Enter: nothing shown, asked again; Ctrl-C: the "wasn't confirmed" message and no
 `approve.json`), on Linux, macOS and Windows (Windows' `Console.ReadKey` path is only exercised there).
 
