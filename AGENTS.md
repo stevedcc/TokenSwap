@@ -53,7 +53,7 @@ prompt"). Run such commands with the sudo bypass off (`SudoBypass: false`, or `F
 **The skill eval** (`evals/skill/run.sh`, Linux + bubblewrap) runs agents against scenarios with
 tswap and sudo shimmed; its fake agent is exercised by `SkillEvalTests` in the unit suite.
 Without a usable bwrap those tests skip with a message, unless `CI_REQUIRE_BWRAP=1` (set by the
-Linux CI job, which installs bubblewrap and allows unprivileged user namespaces): then they fail. Never
+Linux CI jobs, which install bubblewrap and allow unprivileged user namespaces): then they fail. Never
 point it at real secrets: every value in it is an inert marker.
 
 ## Versions and releases
