@@ -190,7 +190,7 @@ public sealed class BrokerContainerGateEndToEndTests : IClassFixture<TswapBinary
             return;
         await StartAsync(Elsewhere);
         using var agent = new SshAgentTestClient(await client.ConnectAsync());
-        await agent.SendFrameAsync(SshAgentMessages.RequestIdentities);
+        _ = await agent.SendFrameUnlessClosedAsync(SshAgentMessages.RequestIdentities);
         Assert.True(await agent.ClosedWithoutReplyAsync());
         await _h.WaitForLogAsync("reason=cgroup-mismatch");
         Assert.Contains($"refused-connection socket=lane1.ssh uid={BrokerHarness.MyUid} ", Log);

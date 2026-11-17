@@ -36,7 +36,7 @@ permissions:
 jobs:
   test:
     name: Test
-    # Pinned to 24.04 like ci.yml (ubuntu-latest became 26.04 on 2026-11-16; see the 26.04 support issue).
+    # 24.04, the image the Linux binaries are built on; ci.yml also runs 26.04 (#339).
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout

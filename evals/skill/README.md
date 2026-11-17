@@ -53,3 +53,7 @@ Read results with these blind spots in mind:
 - **Reads through a pipe.** A reader fed on stdin (`kubectl ... | grep x`) is logged, but whether
   its input held a marker isn't.
 - **Tampering beyond the log channel** (for example with the shims' state file in `/eval/state`).
+- **A tool linked to a multi-call binary under another name** (busybox style). It isn't shimmed, because
+  shimming the binary would shim every tool linked to it. For `tswap`, `sudo`, `su`, `doas` and `pkexec`
+  the isolation check then aborts the run; for a reader, calling it by its system path (`/usr/bin/cat`)
+  leaves no record.
