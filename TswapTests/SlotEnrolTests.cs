@@ -1373,6 +1373,85 @@ public class SlotEnrolTests : IDisposable
         }
     }
 
+    // ------------------------------------------------------------------ brief T34 task 4: the stderr relay's caps
+
+    /// <summary>Runs <paramref name="script"/> as the ssh stub (stdin read and dropped first); the relayed stderr lines.</summary>
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
+    private static (Func<SshResult> Run, StringWriter Stderr, string Dir) StderrStub(string script)
+    {
+        var dir = Directory.CreateTempSubdirectory("tswap-ssh-stub-").FullName;
+        var stub = Path.Combine(dir, "ssh");
+        File.WriteAllText(stub, "#!/bin/sh\ncat > /dev/null\n" + script);
+        File.SetUnixFileMode(stub, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        var stderr = new StringWriter();
+        return (() => new ProcessSshTransport(stub).Run("me@host", ["tswap", "slot", "merge", "-"], Encoding.UTF8.GetBytes("in"), stderr),
+            stderr, dir);
+    }
+
+    private static string[] RelayedLines(StringWriter stderr) =>
+        [.. stderr.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => l.TrimEnd('\r'))];
+
+    [Fact]
+    public void ProcessSshTransport_CutsALongStderrLine()
+    {
+        if (OperatingSystem.IsWindows())
+            return; // the stub is a POSIX shell script
+        var (run, stderr, dir) = StderrStub(
+            "head -c 10000 /dev/zero | tr '\\0' y >&2\nprintf '\\nnext\\n' >&2\nprintf ok\nexit 0\n");
+        try
+        {
+            var result = run();
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Equal("ok", Encoding.UTF8.GetString(result.Stdout));
+            Assert.Equal(["[me@host] " + new string('y', 4096) + " [line cut]", "[me@host] next"], RelayedLines(stderr));
+        }
+        finally
+        {
+            Directory.Delete(dir, true);
+        }
+    }
+
+    [Fact]
+    public void ProcessSshTransport_RefusesPastOneMiBOfStderr()
+    {
+        if (OperatingSystem.IsWindows())
+            return; // the stub is a POSIX shell script
+        // 32768 lines of 64 characters (63 and the newline): 2 MiB, and then the stub ends by itself.
+        var (run, _, dir) = StderrStub($"yes '{new string('x', 63)}' | head -n 32768 >&2\nprintf ok\nexit 0\n");
+        try
+        {
+            var ex = Assert.Throws<SshTransportException>(() => run());
+
+            Assert.Equal("its error output was larger than 1 MiB, so ssh was stopped", ex.Message);
+        }
+        finally
+        {
+            Directory.Delete(dir, true);
+        }
+    }
+
+    [Fact]
+    public void ProcessSshTransport_RefusesPastOneMiBOfStderr_OnOneLine()
+    {
+        if (OperatingSystem.IsWindows())
+            return; // the stub is a POSIX shell script
+        var (run, stderr, dir) = StderrStub("head -c 2097152 /dev/zero | tr '\\0' y >&2\nprintf ok\nexit 0\n");
+        try
+        {
+            var ex = Assert.Throws<SshTransportException>(() => run());
+
+            Assert.Equal("its error output was larger than 1 MiB, so ssh was stopped", ex.Message);
+            var lines = RelayedLines(stderr);
+            Assert.True(lines.Length <= 1, $"{lines.Length} lines relayed");
+            Assert.All(lines, l => Assert.EndsWith(" [line cut]", l));
+        }
+        finally
+        {
+            Directory.Delete(dir, true);
+        }
+    }
+
     // ------------------------------------------------------------------ brief T28: the transport's interactive form and sharing
 
     private static string[] SharingOptions(string controlPath) =>

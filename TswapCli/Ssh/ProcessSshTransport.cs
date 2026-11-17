@@ -10,7 +10,9 @@ namespace TswapCli.Ssh;
 /// (<c>ssh -T -- &lt;destination&gt; &lt;remote command&gt;</c>). No <c>BatchMode</c>: ssh asks for a key passphrase or
 /// a new host key at <c>/dev/tty</c> itself, which works with stdin piped. Stdin is written and then closed (approve
 /// and merge read all of it before they write), stdout is read to the end (past <see cref="SshRelay.MaxStdout"/> the
-/// ssh process tree is killed and the call refused), and stderr is relayed line by line as it arrives.
+/// ssh process tree is killed and the call refused), and stderr is relayed line by line as it arrives (brief T34: in
+/// chunks, each line cut at <see cref="SshRelay.MaxStderrLine"/> characters, and past <see cref="SshRelay.MaxStderr"/>
+/// characters in all the process tree is killed and the call refused, as for stdout).
 /// <para>Brief T28: <see cref="RunInteractive"/> runs <c>ssh -t</c> on the local terminal; with
 /// <paramref name="shareConnection"/> (Linux and macOS clients only) every call passes OpenSSH's connection-sharing
 /// options with one socket per destination (<see cref="SocketDirectory"/>), so one enrolment logs in once, and
@@ -128,12 +130,13 @@ public sealed class ProcessSshTransport(string program = "ssh", bool shareConnec
             start.ArgumentList.Add(arg);
 
         using var process = Start(start);
+        var stderrTooLarge = false;
         var relay = Task.Run(() =>
         {
-            while (process.StandardError.ReadLine() is { } line)
+            if (!RelayStderr(process.StandardError, destination, stderr))
             {
-                lock (stderr)
-                    stderr.WriteLine(SshRelay.Line(destination, line));
+                stderrTooLarge = true;
+                Stop(process);
             }
         });
         var tooLarge = false;
@@ -148,14 +151,7 @@ public sealed class ProcessSshTransport(string program = "ssh", bool shareConnec
                 if (buffer.Length > SshRelay.MaxStdout)
                 {
                     tooLarge = true;
-                    try
-                    {
-                        process.Kill(entireProcessTree: true);
-                    }
-                    catch (InvalidOperationException)
-                    {
-                        // already exited
-                    }
+                    Stop(process);
                     break;
                 }
             }
@@ -181,7 +177,76 @@ public sealed class ProcessSshTransport(string program = "ssh", bool shareConnec
             Array.Clear(stdout);
             throw new SshTransportException("its output was larger than 1 MiB, so ssh was stopped");
         }
+        if (stderrTooLarge)
+        {
+            Array.Clear(stdout);
+            throw new SshTransportException("its error output was larger than 1 MiB, so ssh was stopped");
+        }
         return new SshResult(process.ExitCode, stdout);
+    }
+
+    /// <summary>Kills the ssh process tree (a cap was passed); one that has already exited is left.</summary>
+    private static void Stop(Process process)
+    {
+        try
+        {
+            process.Kill(entireProcessTree: true);
+        }
+        catch (InvalidOperationException)
+        {
+            // already exited
+        }
+    }
+
+    /// <summary>
+    /// Brief T34: relays <paramref name="reader"/> to <paramref name="stderr"/> line by line through
+    /// <see cref="SshRelay.Line"/>, reading in chunks (a chunk boundary is not a line break). A line longer than
+    /// <see cref="SshRelay.MaxStderrLine"/> characters is written cut, marked <c> [line cut]</c>, and the rest of it is
+    /// dropped up to its <c>\n</c>; a final line without one is written as a line. False, without reading on, once more
+    /// than <see cref="SshRelay.MaxStderr"/> characters were read (every character counts).
+    /// </summary>
+    internal static bool RelayStderr(TextReader reader, string destination, TextWriter stderr)
+    {
+        var chunk = new char[8192];
+        var line = new StringBuilder();
+        var cut = false; // the current line was written cut: drop the rest of it
+        long total = 0;
+        int read;
+        while ((read = reader.Read(chunk, 0, chunk.Length)) > 0)
+        {
+            total += read;
+            foreach (var ch in chunk.AsSpan(0, read))
+            {
+                if (ch == '\n')
+                {
+                    if (!cut)
+                        Write(line.ToString());
+                    line.Clear();
+                    cut = false;
+                }
+                else if (!cut)
+                {
+                    line.Append(ch);
+                    if (line.Length > SshRelay.MaxStderrLine)
+                    {
+                        Write(line.ToString(0, SshRelay.MaxStderrLine), " [line cut]");
+                        line.Clear();
+                        cut = true;
+                    }
+                }
+            }
+            if (total > SshRelay.MaxStderr)
+                return false;
+        }
+        if (line.Length > 0)
+            Write(line.ToString());
+        return true;
+
+        void Write(string text, string suffix = "")
+        {
+            lock (stderr)
+                stderr.WriteLine(SshRelay.Line(destination, text) + suffix);
+        }
     }
 
     /// <summary>Brief T28: <c>ssh -t</c> with this process's stdin, stdout and stderr (the local terminal); its exit code.</summary>

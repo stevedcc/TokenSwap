@@ -13,8 +13,9 @@ public interface ISshTransport
     /// Runs <paramref name="remoteArgs"/> (fixed words joined with spaces: the caller checks every word needs no
     /// quoting) on <paramref name="destination"/>, with <paramref name="stdin"/> as its stdin. The remote stderr is
     /// relayed to <paramref name="stderr"/> line by line, as it arrives, each line prefixed <c>[&lt;destination&gt;] </c>
-    /// (<see cref="SshRelay"/>); the remote stdout is returned. Throws <see cref="SshTransportException"/> when the call
-    /// can't be made or its stdout is larger than <see cref="SshRelay.MaxStdout"/>.
+    /// (<see cref="SshRelay"/>) and cut at <see cref="SshRelay.MaxStderrLine"/> characters (brief T34); the remote stdout is
+    /// returned. Throws <see cref="SshTransportException"/> when the call can't be made, its stdout is larger than
+    /// <see cref="SshRelay.MaxStdout"/> or its stderr than <see cref="SshRelay.MaxStderr"/> characters.
     /// </summary>
     SshResult Run(string destination, IReadOnlyList<string> remoteArgs, ReadOnlyMemory<byte> stdin, TextWriter stderr);
 
@@ -43,6 +44,12 @@ public static class SshRelay
 {
     /// <summary>The most stdout a remote call may return (1 MiB); past it the call is stopped and refused.</summary>
     public const int MaxStdout = 1024 * 1024;
+
+    /// <summary>Brief T34: the longest relayed stderr line, in characters; a longer one is cut and marked <c> [line cut]</c>.</summary>
+    public const int MaxStderrLine = 4096;
+
+    /// <summary>Brief T34: the most stderr a remote call may write, in characters (1 Mi); past it the call is stopped and refused.</summary>
+    public const int MaxStderr = 1024 * 1024;
 
     /// <summary>
     /// One remote line as it is shown locally: <c>[&lt;destination&gt;] </c> and the line, its control characters (other
