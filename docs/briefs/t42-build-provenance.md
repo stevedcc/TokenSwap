@@ -176,3 +176,16 @@ Everywhere Task 1 and its tests name `actions/attest-build-provenance@4d101475d8
 (the step and test 2's exact `uses:` string), use the new `uses:` line; test 5's "after the attest step" means after this
 step. The verify command is unchanged: `gh attestation verify` checks any SLSA provenance attestation, whichever action
 made it.
+
+## Amendments (round 3: GLM and MiMo ready)
+
+**A11 (Minors).**
+- Task 2's placement: the parenthetical wins. `### Check a download` goes directly after the "**macOS: two files.**"
+  bullets, before `### macOS installer package`.
+- The subjects step has `id: subjects`, so the attest step reads `subject-path: ${{ steps.subjects.outputs.subjects }}`.
+- Test 2 lists the jobs as `AssertPullRequestsStayUnsigned` and `BumpJobProblems` do: every `^  [A-Za-z0-9_-]+:\s*$`
+  line after `jobs:`. It reads the permissions as the six-space-indented lines below `    permissions:` in the job's
+  `Job()` text.
+- `actions/attest` given several subjects makes one attestation that lists all of them, and `gh attestation verify`
+  matches each file by its SHA-256. The first dry run must show all five verifies green. If one ever fails, the fix is
+  one `actions/attest` step per file; tests 2 and 5 hold as written.
