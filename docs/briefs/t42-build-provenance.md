@@ -10,7 +10,14 @@ One commit per task, test first, a break-it-once check per key test (name in the
 changed and which test failed), `./runtests.sh --unit` after each task, the full `./runtests.sh` at the end. No
 hardware suites, `ykman`, `sudo`, real YubiKeys or `~/.config/tswap`. Commits end with
 `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`, explicit-path commits, no push, merge or rebase; stop and
-report when the brief can't be built as written. No existing test's assertions change.
+report when the brief can't be built as written. No existing test's assertions change, with one exception the owner
+sanctioned (A1).
+
+**Review history.** Round 1 (GLM, a88a36e): changes needed, one Critical: adding `attest` to release's `needs:` breaks
+an existing assertion. All other claims verified (the SHA is v4.2.2, `subject-path` takes a list, the `gh attestation
+verify` flag formats, the `if:`/`needs:` semantics, the attested bytes are the published bytes, fork behaviour, no other
+release-workflow test breaks). Folded in as amendments A1-A5 at the end; where a task and an amendment differ, the
+amendment wins.
 
 ## Why
 
@@ -109,3 +116,28 @@ and record the summary line.
 - Pinning the other actions by SHA.
 - `installscript` or the install script checking attestations (the issue's "optional" item; a separate decision).
 - Any change to `ci.yml`.
+
+## Amendments (round 1)
+
+**A1 (Critical, owner-sanctioned 2026-11-18).** `Workflows_ReleaseOnlyOnATagPush_AndOnlyUpstreamListsThePkg` asserts
+`Assert.Contains("    needs: [build, build-macos]\n", job)` on the release job. Change that one expected string to
+`"    needs: [build, build-macos, attest]\n"` in Task 1's commit, and nothing else in that test. The owner sanctioned this
+change: the brief changes the rule the assertion pins (release waits for provenance), it does not weaken it. The
+commit message says so. The break-it-once "remove `attest` from release's `needs:`" then fails both `Release_NeedsAttest`
+and this test; name both.
+
+**A2 (Minor).** Use the existing `Job(string workflow, string job)` helper in `ReleasePackagingTests.cs` (same semantics
+as the `JobText` the tests section describes); add no second helper.
+
+**A3 (Minor).** Test 1's attest-side list: the subjects step holds the fixed list once, as a bash array literal
+`files=( ... )` with one quoted `artifacts/...` path per line, used both for the upstream existence check and for the
+`subjects` output. The test reads the `artifacts/...` paths of that array (between `files=(` and the next line that is
+only `)` after optional spaces) and compares them as a set with the union of the two `files:` blocks. Dropping the pkg
+from the array then fails test 1.
+
+**A4 (Minor).** Break-it-once for the other two tests: drop `github.event_name != 'pull_request' && ` from attest's `if:`
+→ test 3 fails; drop `--signer-workflow ...` from the verify line → test 5 fails. Name each in the commit message.
+
+**A5 (Minor).** The docs tests: `dotnet test TswapTests --filter "FullyQualifiedName~Docs"` (`runtests.sh` takes no
+extra filter). And extend release.yml's header comment ("Every job reads only, unless it says otherwise: ...") with
+attest's job-scoped `id-token: write` and `attestations: write`.
