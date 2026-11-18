@@ -1,5 +1,7 @@
 # tswap - hardware-backed secret manager
 
+Maintained by Steven (Steve) Crawford ([stevedcc](https://github.com/stevedcc), [crawford.dev](https://crawford.dev)).
+
 tswap protects a secret **while it is in use**: an AI agent (or any process you invited, running
 as you) can use a password without ever seeing, and so without remembering, its value. The threat
 is retention in a model's context, not disclosure of your repository. That is a different axis
