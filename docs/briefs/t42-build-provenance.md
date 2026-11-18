@@ -17,7 +17,8 @@ sanctioned (A1).
 an existing assertion. All other claims verified (the SHA is v4.2.2, `subject-path` takes a list, the `gh attestation
 verify` flag formats, the `if:`/`needs:` semantics, the attested bytes are the published bytes, fork behaviour, no other
 release-workflow test breaks). Folded in as amendments A1-A5 at the end; where a task and an amendment differ, the
-amendment wins.
+amendment wins. Round 2 (GLM, fc3fbcf): ready, two Minors. Round 1 (MiMo, fc3fbcf): changes needed, one Important
+(comment text colliding with string-scanning tests) and Minors. Folded in as A6-A10; A10 replaces the action.
 
 ## Why
 
@@ -141,3 +142,37 @@ from the array then fails test 1.
 **A5 (Minor).** The docs tests: `dotnet test TswapTests --filter "FullyQualifiedName~Docs"` (`runtests.sh` takes no
 extra filter). And extend release.yml's header comment ("Every job reads only, unless it says otherwise: ...") with
 attest's job-scoped `id-token: write` and `attestations: write`.
+
+## Amendments (round 2)
+
+**A6 (Important, MiMo I1; GLM Minor 1).** Comments and the "no other job" check:
+- The attest job's comment goes **inside** the job, as `#` lines indented four spaces directly below `  attest:`, not
+  above it. `Job()` ends `build-macos` at the next top-level job line, so a comment above `  attest:` would count as
+  `build-macos`'s text and could trip `Workflows_SigningSecretsAndEnvironmentOnlyInBuildMacos`.
+- New text anywhere in release.yml (comments included) must not contain `secrets.`, `vars.MACOS_` or `environment:`.
+  Say "no secret is needed", never "no secrets.".
+- Test 2's "no other job has `id-token:` or `attestations:`" check iterates every job name in release.yml and asserts
+  on each job's own `Job()` text. It never uses `release.Replace(...)`, so the header comment A5 adds (which is outside
+  every job) cannot trip it.
+
+**A7 (Minor, MiMo M1).** The verify step loops over the files in the `subjects` output (the files that exist), not the
+raw five-entry array, so a fork without a pkg verifies its four files.
+
+**A8 (Minor, MiMo M2; ruling).** Attestations need a public repository, or a private one on GitHub Enterprise Cloud. A
+private fork's `attest` job therefore fails, and its release is skipped. Accepted: provenance comes before a release,
+including on forks. The job comment says so in one line: "a private fork needs Enterprise Cloud for attestations;
+without them it publishes no release". No `continue-on-error`.
+
+**A9 (Minor, MiMo M3).** Test 2's break-it-once: change the attest job's `contents: read` to `contents: write` (not a
+second `contents:` key).
+
+**A10 (MiMo M4; ruling: switch).** The pinned action's README says that from v4 it "is simply a wrapper on top of
+`actions/attest`" and that "new implementations should use `actions/attest` instead". So use
+`actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2` (the commit `refs/tags/v4.2.2` of actions/attest
+points at). With only `subject-path` and no predicate or `sbom-path` inputs, it creates SLSA build provenance, as the
+wrapper did. Its README lists `artifact-metadata: write` too, but that permission is only for the storage record, which
+needs `push-to-registry` (OCI images). We push no image, so the job's permissions stay exactly the three of Task 1.
+Everywhere Task 1 and its tests name `actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8`
+(the step and test 2's exact `uses:` string), use the new `uses:` line; test 5's "after the attest step" means after this
+step. The verify command is unchanged: `gh attestation verify` checks any SLSA provenance attestation, whichever action
+made it.
