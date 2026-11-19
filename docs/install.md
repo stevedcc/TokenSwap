@@ -125,6 +125,20 @@ support). Both need macOS 14 (Sonoma) or later: from the .NET 11 build on, tswap
 - A symlink to `tswap` (say from `~/bin`) works, since the folder is the real file's.
 - tswap runs code from that folder, so keep it writable only by you.
 
+### Check a download
+
+From v0.3.1, every release file has a build provenance attestation: a signed statement, kept by GitHub,
+that the file was built by this repository's release workflow, and from which commit and tag.
+
+```bash
+gh attestation verify tswap-linux-x64.tar.gz --repo stevedcc/TokenSwap
+```
+
+The command works the same for each release file. It needs the GitHub CLI (`gh`, logged in), and it
+checks the file's SHA-256, so a changed or substituted file fails. On macOS and (once signed, #368)
+Windows it comes on top of the platform signature: the signature says who published the file, the
+attestation says which build made it.
+
 ### macOS installer package
 
 From v0.3.0 each release also has `tswap-osx-arm64.pkg`, a signed, notarised and stapled installer. It
