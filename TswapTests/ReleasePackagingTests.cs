@@ -985,7 +985,7 @@ public class ReleasePackagingTests : IDisposable
         var release = Workflow("release.yml");
         var job = Job(release, "release");
 
-        Assert.Contains("    needs: [build, build-macos]\n", job);
+        Assert.Contains("    needs: [build, build-macos, attest]\n", job);
         Assert.Contains("    if: github.event_name == 'push'\n", job);
         // The only push trigger is a version tag.
         Assert.Contains("on:\n  push:\n    tags:\n      - 'v*.*.*'\n", release);
@@ -1614,5 +1614,113 @@ public class ReleasePackagingTests : IDisposable
             var own = end < 0 ? step : step[..end];
             Assert.Contains("\n          prerelease: ${{ contains(github.ref_name, '-') }}\n", own);
         }
+    }
+
+    // ---- Issue #371: build provenance attestations for every release file. ----
+
+    private static List<string> ReleaseJobNames(string release) => release.Split('\n')
+        .SkipWhile(line => line != "jobs:").Skip(1)
+        .Where(line => System.Text.RegularExpressions.Regex.IsMatch(line, @"^  [A-Za-z0-9_-]+:\s*$"))
+        .Select(line => line.Trim().TrimEnd(':'))
+        .ToList();
+
+    /// <summary>The <c>artifacts/...</c> paths of every <c>softprops/action-gh-release</c> step's <c>files:</c> block.</summary>
+    private static List<List<string>> ReleasedFiles(string release) => release.Split("uses: softprops/action-gh-release@").Skip(1)
+        .Select(step =>
+        {
+            var end = step.IndexOf("\n      - ", StringComparison.Ordinal);
+            var lines = (end < 0 ? step : step[..end]).Split('\n');
+            var at = Array.FindIndex(lines, line => line.Trim() == "files: |");
+            Assert.True(at >= 0, "a release step has no files: block");
+            var indent = lines[at].Length - lines[at].TrimStart().Length;
+            return lines[(at + 1)..]
+                .TakeWhile(line => line.Trim().Length > 0 && line.Length - line.TrimStart().Length > indent)
+                .Select(line => line.Trim())
+                .ToList();
+        })
+        .ToList();
+
+    /// <summary>The paths of the attest job's <c>files=( ... )</c> array, one quoted <c>artifacts/...</c> path per line.</summary>
+    private static List<string> AttestSubjects(string attest)
+    {
+        var lines = attest.Split('\n');
+        var start = Array.FindIndex(lines, line => line.Trim() == "files=(");
+        Assert.True(start >= 0, "the attest job has no files=( array");
+        var end = Array.FindIndex(lines, start + 1, line => System.Text.RegularExpressions.Regex.IsMatch(line, @"^\s*\)\s*$"));
+        Assert.True(end > start, "the attest job's files=( array is not closed");
+        return lines[(start + 1)..end]
+            .Select(line => System.Text.RegularExpressions.Regex.Match(line, @"^\s*""(artifacts/[^""]+)""\s*$"))
+            .Select(match => { Assert.True(match.Success, "a files=( entry is not one quoted artifacts/ path"); return match.Groups[1].Value; })
+            .ToList();
+    }
+
+    [Fact]
+    public void Attest_CoversEveryReleasedFile()
+    {
+        var release = Workflow("release.yml");
+        var released = ReleasedFiles(release);
+        Assert.Equal(2, released.Count);
+        Assert.Equal(5, released.Max(files => files.Count));
+        var subjects = AttestSubjects(Job(release, "attest"));
+
+        Assert.Equal(released.SelectMany(files => files).Distinct().Order(StringComparer.Ordinal), subjects.Order(StringComparer.Ordinal));
+        Assert.Equal(subjects.Count, subjects.Distinct().Count());
+    }
+
+    [Fact]
+    public void Attest_PinnedBySha_WithMinimalPermissions()
+    {
+        var release = Workflow("release.yml");
+        var attest = Job(release, "attest");
+
+        Assert.Contains("uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2\n", attest);
+        var lines = attest.Split('\n');
+        var at = Array.IndexOf(lines, "    permissions:");
+        Assert.True(at >= 0, "the attest job has no permissions: block");
+        var permissions = lines[(at + 1)..].TakeWhile(line => line.StartsWith("      ", StringComparison.Ordinal) && !line.StartsWith("       ", StringComparison.Ordinal))
+            .Select(line => line.Trim())
+            .Order(StringComparer.Ordinal);
+        Assert.Equal(["attestations: write", "contents: read", "id-token: write"], permissions);
+        foreach (var name in ReleaseJobNames(release).Where(name => name != "attest"))
+        {
+            var job = Job(release, name);
+            Assert.False(job.Contains("id-token:", StringComparison.Ordinal), $"job {name} has id-token:");
+            Assert.False(job.Contains("attestations:", StringComparison.Ordinal), $"job {name} has attestations:");
+        }
+    }
+
+    [Fact]
+    public void Attest_RunsOnTagsAndDispatches_NotPullRequests()
+    {
+        var attest = Job(Workflow("release.yml"), "attest");
+        var condition = attest.Split('\n').Single(line => line.StartsWith("    if: ", StringComparison.Ordinal));
+
+        Assert.Contains("github.event_name != 'pull_request'", condition);
+        Assert.Contains("needs.build.result == 'success'", condition);
+        Assert.Contains("needs.build-macos.result == 'success'", condition);
+        Assert.Contains("    needs: [build, build-macos]\n", attest);
+    }
+
+    [Fact]
+    public void Release_NeedsAttest()
+    {
+        var job = Job(Workflow("release.yml"), "release");
+        var needs = job.Split('\n').Single(line => line.StartsWith("    needs: ", StringComparison.Ordinal));
+
+        Assert.Contains("attest", needs["    needs: ".Length..].Trim('[', ']', ' ').Split(',').Select(need => need.Trim()));
+    }
+
+    [Fact]
+    public void Attest_VerifiesEachSubject()
+    {
+        var attest = Job(Workflow("release.yml"), "attest");
+        // The command run, not a comment that names it.
+        var verify = attest.Split('\n').Single(line => line.Contains("gh attestation verify", StringComparison.Ordinal) && !line.TrimStart().StartsWith('#'));
+
+        Assert.Contains("--repo \"$GITHUB_REPOSITORY\"", verify);
+        Assert.Contains("--signer-workflow \"$GITHUB_REPOSITORY/.github/workflows/release.yml\"", verify);
+        var attestStep = attest.IndexOf("uses: actions/attest@", StringComparison.Ordinal);
+        Assert.True(attestStep >= 0, "the attest job has no actions/attest step");
+        Assert.True(attest.IndexOf(verify, StringComparison.Ordinal) > attestStep, "gh attestation verify runs before the attest step");
     }
 }

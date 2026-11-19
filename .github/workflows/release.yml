@@ -29,7 +29,8 @@ on:
       - '*.slnx'
       - .github/workflows/release.yml
 
-# Every job reads only, unless it says otherwise: Create Release writes the release, bump-version opens its PR.
+# Every job reads only, unless it says otherwise: Create Release writes the release, bump-version opens its PR, and
+# attest gets id-token: write and attestations: write (job-scoped) to sign and store the build provenance.
 permissions:
   contents: read
 
@@ -424,9 +425,94 @@ jobs:
         shell: bash
         run: bash contrib/packaging/sign-macos.sh keychain-cleanup
 
+  attest:
+    # Build provenance (issue #371): one signed SLSA attestation, kept by GitHub, that each release file (its SHA-256)
+    # was built by this workflow from this commit at this ref; users check it with `gh attestation verify`. It signs
+    # with the job's own OIDC identity, so no secret is needed. build and build-macos upload only finished files (the
+    # macOS ones after signing and notarisation; Windows signing, #368, goes into build before its upload), so the
+    # bytes attested here are the bytes Create Release publishes: keep it that way. A dispatch dry run attests its
+    # -pre build too (harmless: the provenance is true for those bytes). A private fork needs Enterprise Cloud for
+    # attestations; without them it publishes no release.
+    name: Attest build provenance
+    needs: [build, build-macos]
+    if: always() && github.event_name != 'pull_request' && needs.build.result == 'success' && needs.build-macos.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+
+    steps:
+      - name: Download the archives
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+          merge-multiple: true
+
+      # The files the release publishes, as Create Release lists them: upstream all five, a fork has no pkg.
+      - name: List the subjects
+        id: subjects
+        shell: bash
+        env:
+          UPSTREAM: ${{ github.repository == 'stevedcc/TokenSwap' }}
+        run: |
+          set -euo pipefail
+          files=(
+            "artifacts/tswap-linux-x64.tar.gz"
+            "artifacts/tswap-linux-arm64.tar.gz"
+            "artifacts/tswap-osx-arm64.tar.gz"
+            "artifacts/tswap-osx-arm64.pkg"
+            "artifacts/tswap-win-x64.zip"
+          )
+          present=()
+          missing=
+          for file in "${files[@]}"; do
+            if [ -f "$file" ]; then
+              present+=("$file")
+            elif [ "$UPSTREAM" = true ] || [ "$file" != artifacts/tswap-osx-arm64.pkg ]; then
+              missing="$missing $file"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::no release file to attest:$missing" >&2
+            exit 1
+          fi
+          {
+            echo "subjects<<EOF"
+            printf '%s\n' "${present[@]}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          printf 'subject: %s\n' "${present[@]}"
+
+      - name: Attest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ steps.subjects.outputs.subjects }}
+
+      # The command docs/install.md gives users, on each file attested: the attestation is there and checkable.
+      - name: Verify each subject
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SUBJECTS: ${{ steps.subjects.outputs.subjects }}
+        run: |
+          set -euo pipefail
+          verified=0
+          while IFS= read -r file; do
+            [ -n "$file" ] || continue
+            echo "verifying $file"
+            gh attestation verify "$file" --repo "$GITHUB_REPOSITORY" --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml"
+            verified=$((verified + 1))
+          done <<< "$SUBJECTS"
+          if [ "$verified" -eq 0 ]; then
+            echo "::error::no subject to verify" >&2
+            exit 1
+          fi
+          echo "verified $verified files"
+
   release:
     name: Create Release
-    needs: [build, build-macos]
+    needs: [build, build-macos, attest]
     # Tag pushes only: a dispatch (the dry run) never publishes.
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
