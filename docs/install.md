@@ -270,8 +270,9 @@ pwsh installTswap.ps1
 
 - **PowerShell and `{{tokens}}`.** In PowerShell (Windows PowerShell 5.1 and PowerShell 7) quote every
   argument that holds a token: `tswap run psql -h db -U app '--password={{db-pw}}'`, `-f '{{@values.yaml}}'`.
-  Unquoted, PowerShell reads `{...}` as a script block and passes `{{db-pw}}` on as `{db-pw}`; `run` then
-  finds no token and shows the quoted form. cmd needs no quotes.
+  Unquoted, PowerShell reads `{...}` as a script block: Windows PowerShell 5.1 and PowerShell 7 pass it on as
+  `-encodedCommand <Base64>` (and an unquoted `{{@file}}` doesn't parse at all); `run` then finds no token and
+  shows the quoted form. cmd needs no quotes.
 - **Privileged commands** (`add`, `get`, `list`, `delete`, `export`, `import`, and the others that
   need sudo, listed in [commands.md](commands.md#which-commands-need-sudo)) run from an **elevated
   command prompt** (right-click → "Run as administrator") instead of `sudo`.

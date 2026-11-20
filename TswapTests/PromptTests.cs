@@ -46,6 +46,29 @@ public class PromptTests
         Assert.Matches("^[0-9a-f]{64}$", hash);
     }
 
+    /// <summary>
+    /// Brief T43 (#375): redirected on Windows, the prompt is written in the console code page, where an em dash or
+    /// an ellipsis doesn't survive. The text is ASCII only.
+    /// </summary>
+    [Fact]
+    public void Prompt_IsAsciiOnly()
+    {
+        var text = Prompt.GetText("tswap");
+        var index = text.AsSpan().IndexOfAnyExceptInRange((char)0, (char)0x7F);
+
+        Assert.True(index < 0, index < 0 ? "" : $"Character at index {index} is U+{(int)text[index]:X4}, not ASCII.");
+    }
+
+    /// <summary>Brief T43 (A5): the run bullet says what PowerShell does to an unquoted token, as agent-integration.md.</summary>
+    [Fact]
+    public void Prompt_RunBullet_SaysScriptBlock()
+    {
+        var text = Prompt.GetText("tswap");
+
+        Assert.Contains("or PowerShell turns it into a script block and run finds no token\n", text.ReplaceLineEndings("\n"));
+        Assert.DoesNotContain("drops a pair of braces", text);
+    }
+
     [Fact]
     public void Template_ContainsKeyRules()
     {
@@ -73,7 +96,7 @@ public class PromptTests
         var text = Prompt.GetText("tswap");
         var never = text[text.IndexOf("## Commands you must NEVER use", StringComparison.Ordinal)..text.IndexOf("## Key rules", StringComparison.Ordinal)];
         Assert.Contains(
-            "- `tswap slot enrol --via <user@host>` — Adds this machine's key or chip to the vault on another machine over SSH (human use only)",
+            "- `tswap slot enrol --via <user@host>` - Adds this machine's key or chip to the vault on another machine over SSH (human use only)",
             never);
     }
 
@@ -146,7 +169,7 @@ public class PromptTests
         Assert.Contains("sudo tswap apply <file>", never);
         Assert.DoesNotContain("tswap apply", should);
         Assert.Contains("tswap run helm upgrade --install app ./chart -f {{@values.yaml}}", text);
-        Assert.Contains("run … {{@file}}", text);
+        Assert.Contains("run ... {{@file}}", text);
         Assert.DoesNotContain("<(", text);
         Assert.DoesNotMatch(@"<\(\s*(sudo\s+)?\S*tswap apply", text);
         foreach (var line in text.Split('\n').Where(l => l.Contains("tswap apply")))
