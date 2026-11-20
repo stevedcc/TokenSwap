@@ -153,3 +153,17 @@ and the tail `string[] Tail = ["-inputFormat", "xml", "-outputFormat", "text"]`.
 - **A7 (count).** `Prompt.cs` has 37 `—` and **5** `…` (lines 50, 53, 95, 139, 143); 42 characters in all.
 - **A8 (out of scope, named).** `--env NAME={{x}}` unquoted splits the same way, but `--env` parsing refuses before
   `EncodedTokens` runs (T35 has the same gap for `{name}`). Not in this brief.
+
+## Amendments (round 2: both reviewers ready, Minors folded in)
+
+- **A9 (tail in every negative case).** Every `NotOurs_NoHint` case except "no tail" and "tail incomplete" carries the
+  full `Tail`, so it reaches rule 2; that includes A2's lone-surrogate case (`ewBAAGEAANhiAH0A`).
+- **A10 (A3's test).** Add `Enc("{name}\n")` (with the tail) to `NotOurs_NoHint`. Break-it-once: drop A3's check →
+  this case fails.
+- **A11 (control characters, literally).** `ControlCharacters_ArePrintedSafely` asserts the hint contains `{@a?b}`
+  and `DoesNotContain("\u001b", StringComparison.Ordinal)`.
+- **A12 (more break-it-once).** Also: remove the `Distinct` in rule 4 → `SamePairTwice_OneLine`'s first case fails;
+  delete the `EncodedWarning` write in the warning loop → `WithRealToken_WarnsAndRuns` fails. Optionally extend
+  `WithRealToken_WarnsAndRuns` with a T35 `{a}` argument and assert `BracesWarning` comes before `EncodedWarning`.
+- **A13 (docs markup).** The `agent-integration.md` sentence keeps `run` in backticks: "unquoted, PowerShell turns it
+  into a script block and `run` finds no token". Ignore the Why section's "the owner's PowerShell 7 run follows" (A6).
