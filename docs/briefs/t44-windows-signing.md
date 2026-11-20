@@ -238,3 +238,33 @@ Tests in `ReleasePackagingTests.cs` (new section `// ---- Issue #368: Windows si
   (two overlapping runs can take each other's code).
 - **B14 (setup is real).** The environment, both secrets and the private repo exist (checked by the controller with
   `gh secret list --env windows-signing` and `gh repo view stevedcc/tswap-signing`, 2026-11-20).
+
+## Amendments (round 2: GLM ready; MiMo two Importants, folded in)
+
+- **C1 (MiMo I-1: `env`'s argv, statically).** A new test `Script_RunsSsignWithTheCodeOnlyInItsEnvironment` reads the
+  script text: it must contain `CERTUM_TOKEN="$code" env -u GH_TOKEN` and must not match
+  `env [^|;&\n]*CERTUM_TOKEN=` nor `env [^|;&\n]*CERTUM_EMAIL=` (the fakes can't see `env`'s own argv). Break-it-once:
+  rewrite the call as `env -u GH_TOKEN CERTUM_TOKEN="$code" ...` → this test fails.
+- **C2 (MiMo I-2: verify-windows, pinned).** Don't reuse `VersionCheckProblems`/`BuildJobs` (they require a
+  `package.sh` smoke and break `Workflows_EveryBuildLegChecksTheShippedVersion`). Instead:
+  `VerifyWindows_StepsInOrder` (modelled on `Workflows_BuildMacos_StepsInOrder`): the job's steps appear in the order
+  checkout → the `ExpectedVersionStep` lines (each `Assert.Contains`) → download `tswap-win-x64` → expand → the
+  signature checks → the version check; and each `WindowsVersionCheck` part is asserted with `Assert.Contains` on the
+  job. Break-it-once: delete the checkout step → this test fails.
+- **C3 (thumbprint and sanctions, cited).** The thumbprint's source and both sanction quotes are now on #368:
+  https://github.com/stevedcc/TokenSwap/issues/368#issuecomment-7043611776 . `release.yml`'s comment cites it.
+- **C4 (install.md placement).** Insert the Windows section **above** the `<a id="unsigned-binaries"></a>` line, so
+  `#unsigned-binaries` keeps landing on "Older releases (unsigned)". Its `####` nesting under the new heading is
+  accepted as is.
+- **C5 (B11's home).** The already-signed check lives in `sign-windows.sh sign`, before the request/poll. If you skip
+  it (B11 allows that), say so in the commit.
+- **C6 (pagination).** `gh api --paginate` yields one JSON array per page; take the first counting comment in stream
+  order (`jq '.[] | select(...)'`, first match), which is the oldest because GitHub lists comments oldest first. No
+  `min_by` across the stream.
+- **C7 (break-it-once per key test).** The per-task lists are examples: do and record one break per new key test,
+  including thumbprint removed → `VerifyWindows_...`, `overwrite` dropped → `SignWindows_ReplacesTheArtifact`, a secret
+  moved into a `run:` line → `SignWindows_SecretsOnlyInTheirSteps`, the attest clause dropped →
+  `Attest_WaitsForTheVerifiedSignature`, and a broken doc link → the docs link guard.
+- **C8 (notes).** The new class needs its own runner that keeps stdout and stderr apart. Any `mktemp -d` follows
+  `Scripts_TempFoldersFollowTmpdir`'s form. In tests, point `XDG_RUNTIME_DIR` at the test's temp folder so the
+  session-file removal never touches a real ssign session.
