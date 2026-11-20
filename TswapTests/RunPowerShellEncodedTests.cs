@@ -182,6 +182,16 @@ public sealed class RunPowerShellEncodedTests : IDisposable
         Assert.DoesNotContain("\u001b", stderr, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void ControlCharactersInThePrefix_ArePrintedSafely()
+    {
+        var (exit, _, stderr) = Run(["tool", "x\u001b=", "-encodedCommand", Enc("{db-pw}"), .. Tail]);
+
+        Assert.Equal(1, exit);
+        Assert.Contains("Quote it: 'x?={{db-pw}}'.", stderr);
+        Assert.DoesNotContain("\u001b", stderr, StringComparison.Ordinal);
+    }
+
     // ── tokens found: a warning, and the pair goes to the child as it is ─────────────────
 
     [Fact]

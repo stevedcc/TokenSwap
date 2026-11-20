@@ -512,8 +512,9 @@ public sealed partial class RunCommand : ICliCommand
     }
 
     /// <summary>
-    /// The argument before the pair at <paramref name="index"/> when it ends with '=', unless it is the Base64 of
-    /// another pair (Base64 can end with '=' too): then there is no prefix.
+    /// The argument before the pair at <paramref name="index"/> is its prefix only when it ends with '=' and the
+    /// argument two before the pair is not <c>-encodedCommand</c> (ignoring case); otherwise there is no prefix.
+    /// (Base64 can end with '=' too: the argument before a pair may be another pair's Base64.)
     /// </summary>
     private static string? EncodedPrefix(IReadOnlyList<string> commandArgs, int index) =>
         index > 0 && commandArgs[index - 1].EndsWith('=') &&
