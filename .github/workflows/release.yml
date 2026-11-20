@@ -486,6 +486,8 @@ jobs:
           fi
           mkdir -p "$RUNNER_TEMP/win"
           unzip -q dist/tswap-win-x64.zip -d "$RUNNER_TEMP/win"
+          # The hash the request comment names, for the owner to compare (docs/windows-signing.md).
+          echo "tswap.exe SHA-256: $(sha256sum "$RUNNER_TEMP/win/tswap.exe" | cut -d ' ' -f 1)"
 
       - name: Ask for a signing code
         id: request
