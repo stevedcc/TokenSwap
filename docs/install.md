@@ -135,7 +135,7 @@ gh attestation verify tswap-linux-x64.tar.gz --repo stevedcc/TokenSwap
 ```
 
 The command works the same for each release file. It needs the GitHub CLI (`gh`, logged in), and it
-checks the file's SHA-256, so a changed or substituted file fails. On macOS and (once signed, #368)
+checks the file's SHA-256, so a changed or substituted file fails. On macOS and (from 0.3.1)
 Windows it comes on top of the platform signature: the signature says who published the file, the
 attestation says which build made it.
 
@@ -191,6 +191,20 @@ release: a `libtswapse.dylib` from another signed v0.3+ release still loads, so 
 archive. A build of your own (`dotnet publish`) stays ad-hoc signed, without the hardened runtime and so
 without library validation, as before.
 
+### Signed binaries (Windows)
+
+From v0.3.1 the Windows `tswap.exe` is Authenticode-signed by "Open Source Developer Steven Crawford" (a
+certificate from Certum Code Signing 2021 CA), with a Certum timestamp, which Smart App Control accepts. To
+check a download, in PowerShell:
+
+```powershell
+Get-AuthenticodeSignature .\tswap.exe
+```
+
+`Status` is `Valid` and the signer certificate is "Open Source Developer Steven Crawford"; or open the
+file's Properties → Digital Signatures in Explorer. v0.3.0 and the v0.3.1 release candidates are not
+signed. How a release is signed: [windows-signing.md](windows-signing.md).
+
 <a id="unsigned-binaries"></a>
 
 #### Older releases (unsigned)
@@ -202,7 +216,7 @@ the quarantine mark on the unpacked folder, as yourself (no admin needed):
 xattr -dr com.apple.quarantine <folder>
 ```
 
-`curl -LO <archive URL>` downloads carry no quarantine mark. The Windows binaries are not signed either.
+`curl -LO <archive URL>` downloads carry no quarantine mark. The Windows binaries before 0.3.1 are not signed either.
 
 ## Building from source
 
