@@ -10,7 +10,12 @@ One commit per task, test first, a break-it-once check per key test (name in the
 changed and which test failed), `./runtests.sh --unit` after each task, the full `./runtests.sh` at the end. No
 hardware suites, `ykman`, `sudo`, real YubiKeys or `~/.config/tswap`. Commits end with
 `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`, explicit-path commits, no push, merge or rebase; stop and
-report when the brief can't be built as written. No existing test's assertions change.
+report when the brief can't be built as written. No existing test's assertions change, with one exception the owner
+sanctioned (A1).
+
+**Review history.** Round 1 (GLM and MiMo, 7593c92): both "no", one shared Critical (two `PromptTests`
+assertions pin the characters Task 2 removes) → A1, owner-sanctioned 2026-11-20. MiMo I1 (`Encoding.Unicode` never
+throws) → A2. Minors → A3-A8. Where a task and an amendment differ, the amendment wins.
 
 ## Why (evidence from the rc.1 owner checks, #367, 2026-11-20)
 
@@ -39,7 +44,7 @@ cannot be used ...". Nothing to do there.) The T35 `{name}` detection stays: ano
 that form; the owner's PowerShell 7 run follows.
 
 The same run showed (#375): `tswap prompt`, redirected on Windows, is written in the console code page (850 there),
-and the prompt's 37 em dashes and 3 ellipses don't survive; the install script writes the agent instructions exactly
+and the prompt's 37 em dashes and 5 ellipses don't survive; the install script writes the agent instructions exactly
 that way.
 
 ## Task 1: detect the `-encodedCommand` form
@@ -118,3 +123,33 @@ and the tail `string[] Tail = ["-inputFormat", "xml", "-outputFormat", "text"]`.
 - Changing how redirected output is encoded (T35's rule stays).
 - PowerShell 7's form: if the owner's PowerShell 7 run shows a third form, that is a follow-up.
 - Any change to `BracedTokens`, `BracesHint` or `BracesWarning`.
+
+## Amendments (round 1)
+
+- **A1 (owner sanction, 2026-11-20: "Yes, the implementer may modify the assertions, it's necessary since we're going
+  to ASCII").** Task 2 updates exactly two existing assertions in `TswapTests/PromptTests.cs`, and only their
+  characters: `Template_ListsSlotEnrolUnderNever` (line 76: the `—` in the expected slot-enrol line becomes `-`) and
+  `Prompt_NeverSuggestsApplyForAgents` (line 149: `"run … {{@file}}"` becomes `"run ... {{@file}}"`). What they check
+  is unchanged. Name both in the commit message. No other existing assertion changes.
+- **A2 (strict decoding).** Rule 2 rejects an odd byte count before decoding, then decodes with
+  `new UnicodeEncoding(bigEndian: false, byteOrderMark: false, throwOnInvalidBytes: true)`, catching
+  `DecoderFallbackException` as "not ours". The test case that pins it (in `NotOurs_NoHint`): the UTF-16LE bytes of
+  `{@a`, then a lone high surrogate `0x00 0xD8`, then the bytes of `b}`, Base64-encoded. A lax decoder turns the
+  surrogate into U+FFFD, and `{@a\uFFFDb}` matches `BracedFileRegex`, so the case fails if strictness is lost.
+  Break-it-once: swap in `Encoding.Unicode` → this case fails. (The plain "odd byte count" case stays, for the
+  pre-check.)
+- **A3 (whole text).** A decoded text counts only if, besides matching the regex, it contains no `\n` (the regexes'
+  `$` matches before a final newline).
+- **A4 (de-duplication test).** `SamePairTwice_OneLine`: the same `{name}` pair twice, one tail → one hint line; the
+  same `Braced` once with prefix `--password=` and once without → two lines.
+- **A5 (one wording).** The prompt's run bullet ends `or PowerShell turns it into a script block and run finds no
+  token` (not "mangles it"), the same words as the `agent-integration.md` change. Task 2's "no other wording changes"
+  means: apart from the character swaps and this one clause.
+- **A6 (PowerShell 7).** Confirmed on the owner's laptop (PowerShell 7.7.0, #348 comment): the same encoded form, and
+  `{{@file}}` doesn't parse in 7 either. In the Why section, drop "the owner's PowerShell 7 run follows"; the T35
+  `{name}` detection stays for other shells. Task 3's install.md sentence reads "Windows PowerShell 5.1 and
+  PowerShell 7 pass it on as `-encodedCommand <Base64>`" (rest unchanged); note the original sentence wraps across
+  lines 273-274.
+- **A7 (count).** `Prompt.cs` has 37 `—` and **5** `…` (lines 50, 53, 95, 139, 143); 42 characters in all.
+- **A8 (out of scope, named).** `--env NAME={{x}}` unquoted splits the same way, but `--env` parsing refuses before
+  `EncodedTokens` runs (T35 has the same gap for `{name}`). Not in this brief.
