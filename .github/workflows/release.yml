@@ -425,17 +425,232 @@ jobs:
         shell: bash
         run: bash contrib/packaging/sign-macos.sh keychain-cleanup
 
+  # The Windows exe, signed with the owner's Certum code-signing key (issue #368; maintainer's side:
+  # docs/windows-signing.md). The key lives in Certum's cloud HSM and a login needs a 6-digit TOTP code, whose seed never
+  # reaches GitHub: this job asks for one code on the private issue stevedcc/tswap-signing#1, accepts only the owner's
+  # reply, deletes and masks it, signs at once (contrib/packaging/sign-windows.sh) and replaces the win-x64 artifact.
+  # Bound to the windows-signing environment (the owner's approval on every run); upstream only, never on a pull
+  # request. A fork's release ships the unsigned exe (attest accepts this job and verify-windows as skipped there).
+  sign-windows:
+    name: Sign win-x64
+    needs: [build]
+    if: always() && github.event_name != 'pull_request' && github.repository == 'stevedcc/TokenSwap' && needs.build.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    environment: windows-signing
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Whether each input is there (true/false only: no value reaches this step).
+      - name: Signing inputs
+        shell: bash
+        env:
+          HAVE_CERTUM_EMAIL: ${{ secrets.CERTUM_EMAIL != '' }}
+          HAVE_SIGNING_ISSUES_TOKEN: ${{ secrets.SIGNING_ISSUES_TOKEN != '' }}
+        run: |
+          set -euo pipefail
+          missing=
+          for name in CERTUM_EMAIL SIGNING_ISSUES_TOKEN; do
+            have="HAVE_$name"
+            [ "${!have}" = true ] || missing="$missing $name"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::the windows-signing environment lacks:$missing; the release is not built unsigned"
+            exit 1
+          fi
+
+      # Built before the code is asked for, so compiling doesn't eat its 30 s window. ssign (MIT, Rust) at the commit
+      # that signed the v0.3.1-rc.1 exe on 2026-11-20 (v0.1.11); it talks only to Certum's signing and timestamp servers.
+      - name: Build ssign
+        shell: bash
+        run: cargo install --locked --git https://github.com/Le-Syl21/ssign --rev 367bf7d3da14d5041d5e47f855ae2397b8028e33 ssign --root "$RUNNER_TEMP/ssign"
+
+      - name: Download the unsigned archive
+        uses: actions/download-artifact@v4
+        with:
+          name: tswap-win-x64
+          path: dist
+
+      - name: Unpack tswap.exe
+        shell: bash
+        run: |
+          set -euo pipefail
+          entries=$(unzip -Z1 dist/tswap-win-x64.zip)
+          if [ "$entries" != tswap.exe ]; then
+            echo "::error::dist/tswap-win-x64.zip holds more than tswap.exe: $entries"
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/win"
+          unzip -q dist/tswap-win-x64.zip -d "$RUNNER_TEMP/win"
+
+      - name: Ask for a signing code
+        id: request
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.SIGNING_ISSUES_TOKEN }}
+        run: |
+          set -euo pipefail
+          id=$(bash contrib/packaging/sign-windows.sh request "$RUNNER_TEMP/win/tswap.exe")
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
+      - name: Sign tswap.exe with the owner's code
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.SIGNING_ISSUES_TOKEN }}
+          CERTUM_EMAIL: ${{ secrets.CERTUM_EMAIL }}
+          SSIGN: ${{ runner.temp }}/ssign/bin/ssign
+          REQUEST_ID: ${{ steps.request.outputs.id }}
+        run: bash contrib/packaging/sign-windows.sh sign "$RUNNER_TEMP/win/tswap.exe" "$REQUEST_ID"
+
+      # The same layout as build's Compress-Archive: tswap.exe alone, at the root of a fresh zip.
+      - name: Repack the signed exe
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f dist/tswap-win-x64.zip
+          zip -j -X dist/tswap-win-x64.zip "$RUNNER_TEMP/win/tswap.exe"
+          entries=$(unzip -Z1 dist/tswap-win-x64.zip)
+          if [ "$entries" != tswap.exe ]; then
+            echo "::error::the repacked zip holds more than tswap.exe: $entries"
+            exit 1
+          fi
+
+      # Replaces build's unsigned artifact for verify-windows, attest and Create Release.
+      - name: Upload the signed archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: tswap-win-x64
+          path: dist/
+          overwrite: true
+          if-no-files-found: error
+
+  # Checks the signed exe on Windows itself, with no environment and no secret: a valid Authenticode signature by the
+  # expected certificate, a timestamp, signtool's own verdict, and the version the release must report.
+  verify-windows:
+    name: Verify win-x64 signature
+    needs: [sign-windows]
+    if: always() && github.event_name != 'pull_request' && github.repository == 'stevedcc/TokenSwap' && needs.sign-windows.result == 'success'
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    env:
+      # Certum Open Source Developer Steven Crawford, valid to 2027-11-20: renew with the certificate
+      # The SHA-1 of the leaf certificate, as `certutil -user -store My` and `signtool verify /pa /v` showed it on the
+      # owner's laptop on 2026-11-20: https://github.com/stevedcc/TokenSwap/issues/368#issuecomment-7043611776
+      EXPECTED_THUMBPRINT: 0117383ED6ABD3650EEA4365C9565D19AD147877
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # The same step as build's: what the signed tswap.exe's `tswap --version` must report.
+      - name: Expected version (for the smoke tests' tswap --version)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF_TYPE" = tag ]; then
+            version=${GITHUB_REF_NAME#v}
+            expect=$version
+          else
+            version=$(sed -n 's:.*<Version>\([^<]*\)</Version>.*:\1:p' TswapCli/TswapCli.csproj | head -n 1)
+            commit=$(git rev-parse HEAD)
+            echo "commit built: $commit (GITHUB_SHA: $GITHUB_SHA)"
+            expect=$version-pre-${commit:0:7}
+          fi
+          if [ -z "$version" ]; then
+            echo "::error::no version: neither a tag nor a <Version> in TswapCli/TswapCli.csproj" >&2
+            exit 1
+          fi
+          echo "TSWAP_VERSION=$version" >> "$GITHUB_ENV"
+          echo "TSWAP_EXPECT_VERSION=$expect" >> "$GITHUB_ENV"
+          echo "version: $version; tswap --version must print: tswap $expect"
+
+      - name: Download the signed archive
+        uses: actions/download-artifact@v4
+        with:
+          name: tswap-win-x64
+          path: dist
+
+      - name: Expand the archive
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $check = Join-Path $env:RUNNER_TEMP 'tswap-signed'
+          Expand-Archive dist/tswap-win-x64.zip -DestinationPath $check
+          $files = @(Get-ChildItem -Recurse -Force $check)
+          if ($files.Count -ne 1 -or $files[0].Name -cne 'tswap.exe') {
+            Write-Output "::error::tswap-win-x64.zip holds $($files.Count) entries ($(($files | ForEach-Object Name) -join ', ')), not tswap.exe alone"
+            exit 1
+          }
+
+      - name: Check the Authenticode signature
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = Join-Path $env:RUNNER_TEMP 'tswap-signed\tswap.exe'
+          $sig = Get-AuthenticodeSignature $exe
+          if ($sig.Status -ne 'Valid') {
+            Write-Output "::error::the signature's status is $($sig.Status) ($($sig.StatusMessage)), not Valid"
+            exit 1
+          }
+          if ($sig.SignerCertificate.Thumbprint -cne $env:EXPECTED_THUMBPRINT) {
+            Write-Output "::error::signed by $($sig.SignerCertificate.Subject), thumbprint $($sig.SignerCertificate.Thumbprint), not $env:EXPECTED_THUMBPRINT"
+            exit 1
+          }
+          if ($null -eq $sig.TimeStamperCertificate) {
+            Write-Output "::error::the signature has no timestamp"
+            exit 1
+          }
+          Write-Output "signed by $($sig.SignerCertificate.Subject), timestamped by $($sig.TimeStamperCertificate.Subject)"
+
+      - name: signtool verify
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = Join-Path $env:RUNNER_TEMP 'tswap-signed\tswap.exe'
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" -ErrorAction SilentlyContinue |
+            Sort-Object { $v = $null; if ([version]::TryParse($_.Directory.Parent.Name, [ref]$v)) { $v } else { [version]'0.0' } } -Descending |
+            Select-Object -First 1
+          if ($null -eq $signtool) {
+            Write-Output "::error::no signtool.exe under ${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64"
+            exit 1
+          }
+          & $signtool.FullName verify /pa /v $exe
+          if ($LASTEXITCODE -ne 0) {
+            Write-Output "::error::signtool verify /pa /v failed (exit $LASTEXITCODE)"
+            exit 1
+          }
+
+      # build's Windows check, verbatim (brief T18): the signed bytes still run and report the expected version.
+      - name: Run the signed tswap.exe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $check = Join-Path $env:RUNNER_TEMP 'tswap-signed'
+          $out = @(& (Join-Path $check 'tswap.exe') --version)
+          $code = $LASTEXITCODE
+          $line = ($out -join "`n").TrimEnd("`r", "`n")
+          if ($code -ne 0 -or $out.Count -ne 1 -or $line -cne "tswap $env:TSWAP_EXPECT_VERSION") {
+            Write-Output "::error::tswap --version printed '$line' (exit $code), expected 'tswap $env:TSWAP_EXPECT_VERSION'"
+            exit 1
+          }
+          Write-Output "tswap --version: $line"
+
   attest:
     # Build provenance (issue #371): one signed SLSA attestation, kept by GitHub, that each release file (its SHA-256)
     # was built by this workflow from this commit at this ref; users check it with `gh attestation verify`. It signs
     # with the job's own OIDC identity, so no secret is needed. build and build-macos upload only finished files (the
-    # macOS ones after signing and notarisation; Windows signing, #368, goes into build before its upload), so the
-    # bytes attested here are the bytes Create Release publishes: keep it that way. A dispatch dry run attests its
+    # macOS ones after signing and notarisation; Windows signing, #368, replaces the win-x64 artifact in sign-windows,
+    # before verify-windows and this job), so the bytes attested here are the bytes Create Release publishes: keep it that way. A dispatch dry run attests its
     # -pre build too (harmless: the provenance is true for those bytes). A private fork needs Enterprise Cloud for
     # attestations; without them it publishes no release.
     name: Attest build provenance
-    needs: [build, build-macos]
-    if: always() && github.event_name != 'pull_request' && needs.build.result == 'success' && needs.build-macos.result == 'success'
+    needs: [build, build-macos, verify-windows]
+    if: always() && github.event_name != 'pull_request' && needs.build.result == 'success' && needs.build-macos.result == 'success' && (needs.verify-windows.result == 'success' || (github.repository != 'stevedcc/TokenSwap' && needs.verify-windows.result == 'skipped'))
     runs-on: ubuntu-latest
     permissions:
       contents: read

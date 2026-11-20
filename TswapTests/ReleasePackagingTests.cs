@@ -913,7 +913,7 @@ public class ReleasePackagingTests : IDisposable
         Assert.Contains("secrets.MACOS_", buildMacos);
         Assert.DoesNotContain("secrets.MACOS_", outside);
         Assert.DoesNotContain("vars.MACOS_", outside);
-        Assert.DoesNotContain("environment:", outside);
+        Assert.DoesNotContain("environment:", outside.Replace(Job(release, "sign-windows"), ""));
         Assert.Contains("    environment: macos-signing\n", buildMacos);
         // Secrets reach the repo's own scripts through a step's env:, never a run: line (the command echo) or an
         // action's with: inputs: every secrets. line is a NAME: ${{ secrets.MACOS_… }} entry whose parent key is env:.
@@ -1698,7 +1698,7 @@ public class ReleasePackagingTests : IDisposable
         Assert.Contains("github.event_name != 'pull_request'", condition);
         Assert.Contains("needs.build.result == 'success'", condition);
         Assert.Contains("needs.build-macos.result == 'success'", condition);
-        Assert.Contains("    needs: [build, build-macos]\n", attest);
+        Assert.Contains("    needs: [build, build-macos, verify-windows]\n", attest);
     }
 
     [Fact]
@@ -1722,5 +1722,175 @@ public class ReleasePackagingTests : IDisposable
         var attestStep = attest.IndexOf("uses: actions/attest@", StringComparison.Ordinal);
         Assert.True(attestStep >= 0, "the attest job has no actions/attest step");
         Assert.True(attest.IndexOf(verify, StringComparison.Ordinal) > attestStep, "gh attestation verify runs before the attest step");
+    }
+
+    // ---- Issue #368: Windows signing. ----
+
+    private const string SignWindowsCondition =
+        "    if: always() && github.event_name != 'pull_request' && github.repository == 'stevedcc/TokenSwap' && needs.build.result == 'success'\n";
+    private const string VerifyWindowsCondition =
+        "    if: always() && github.event_name != 'pull_request' && github.repository == 'stevedcc/TokenSwap' && needs.sign-windows.result == 'success'\n";
+    private const string AttestWaitsForVerifyWindows =
+        " && (needs.verify-windows.result == 'success' || (github.repository != 'stevedcc/TokenSwap' && needs.verify-windows.result == 'skipped'))";
+
+    /// <summary>The steps of a job, each from its <c>- name:</c> line to the next step.</summary>
+    private static List<string> Steps(string job) => [.. job.Split("\n      - name: ").Skip(1).Select(step => "      - name: " + step)];
+
+    /// <summary>A job's <c>permissions:</c> entries, sorted.</summary>
+    private static List<string> Permissions(string job)
+    {
+        var lines = job.Split('\n');
+        var at = Array.IndexOf(lines, "    permissions:");
+        Assert.True(at >= 0, "the job has no permissions: block");
+        return [.. lines[(at + 1)..].TakeWhile(line => line.StartsWith("      ", StringComparison.Ordinal) && !line.StartsWith("       ", StringComparison.Ordinal))
+            .Select(line => line.Trim())
+            .Order(StringComparer.Ordinal)];
+    }
+
+    [Fact]
+    public void SignWindows_Guarded()
+    {
+        var job = Job(Workflow("release.yml"), "sign-windows");
+
+        Assert.Contains("    name: Sign win-x64\n", job);
+        Assert.Contains("    needs: [build]\n", job);
+        Assert.Contains(SignWindowsCondition, job);
+        Assert.Contains("    runs-on: ubuntu-latest\n", job);
+        Assert.Contains("    environment: windows-signing\n", job);
+        Assert.Contains("    timeout-minutes: 30\n", job);
+        Assert.Equal(["contents: read"], Permissions(job));
+    }
+
+    [Fact]
+    public void SignWindows_PinsSsignBySha()
+    {
+        var job = Job(Workflow("release.yml"), "sign-windows");
+        var cargo = Assert.Single(job.Split('\n'), line => line.Contains("cargo install", StringComparison.Ordinal) && !line.TrimStart().StartsWith('#'));
+
+        Assert.Contains(" --locked ", cargo);
+        Assert.Contains(" --git https://github.com/Le-Syl21/ssign ", cargo);
+        Assert.Contains(" --rev 367bf7d3da14d5041d5e47f855ae2397b8028e33 ", cargo);
+        var request = job.IndexOf("sign-windows.sh request ", StringComparison.Ordinal);
+        Assert.True(request >= 0, "sign-windows never runs sign-windows.sh request");
+        Assert.True(job.IndexOf(cargo, StringComparison.Ordinal) < request, "ssign is built after the code is asked for");
+    }
+
+    [Fact]
+    public void SignWindows_SecretsOnlyInTheirSteps()
+    {
+        var release = Workflow("release.yml");
+        var job = Job(release, "sign-windows");
+        var steps = Steps(job);
+        var inputs = Assert.Single(steps, step => step.StartsWith("      - name: Signing inputs\n", StringComparison.Ordinal));
+        var request = Assert.Single(steps, step => step.Contains("sign-windows.sh request ", StringComparison.Ordinal));
+        var sign = Assert.Single(steps, step => step.Contains("sign-windows.sh sign ", StringComparison.Ordinal));
+
+        // The presence check sees booleans only.
+        Assert.Contains("          HAVE_SIGNING_ISSUES_TOKEN: ${{ secrets.SIGNING_ISSUES_TOKEN != '' }}\n", inputs);
+        Assert.Contains("          HAVE_CERTUM_EMAIL: ${{ secrets.CERTUM_EMAIL != '' }}\n", inputs);
+        Assert.Contains("::error::the windows-signing environment lacks:$missing; the release is not built unsigned", inputs);
+        Assert.Contains("          GH_TOKEN: ${{ secrets.SIGNING_ISSUES_TOKEN }}\n", request);
+        Assert.Contains("          GH_TOKEN: ${{ secrets.SIGNING_ISSUES_TOKEN }}\n", sign);
+        Assert.Contains("          CERTUM_EMAIL: ${{ secrets.CERTUM_EMAIL }}\n", sign);
+        foreach (var step in steps.Where(step => step != inputs && step != request && step != sign))
+            Assert.DoesNotContain("secrets.", step);
+        Assert.DoesNotContain("secrets.CERTUM_EMAIL", request);
+        // Every secret is a step env: entry, never a run: line (the command echo) or an action's with: input.
+        var lines = job.Split('\n');
+        for (var i = 0; i < lines.Length; i++)
+        {
+            if (!lines[i].Contains("secrets."))
+                continue;
+            Assert.Matches(@"^          [A-Z0-9_]+: \$\{\{ secrets\.(SIGNING_ISSUES_TOKEN|CERTUM_EMAIL)( != '')? \}\}$", lines[i]);
+            var indent = lines[i].Length - lines[i].TrimStart().Length;
+            var parent = lines[..i].Last(line => line.Trim().Length > 0 && line.Length - line.TrimStart().Length < indent);
+            Assert.True(parent.Trim() == "env:", $"{lines[i].Trim()} is under '{parent.Trim()}', not env:");
+        }
+        foreach (var name in ReleaseJobNames(release).Where(name => name != "sign-windows"))
+        {
+            var other = Job(release, name);
+            Assert.False(other.Contains("SIGNING_ISSUES_TOKEN", StringComparison.Ordinal), $"job {name} mentions SIGNING_ISSUES_TOKEN");
+            Assert.False(other.Contains("CERTUM_EMAIL", StringComparison.Ordinal), $"job {name} mentions CERTUM_EMAIL");
+        }
+    }
+
+    [Fact]
+    public void SignWindows_ReplacesTheArtifact()
+    {
+        var steps = Steps(Job(Workflow("release.yml"), "sign-windows"));
+        var download = Assert.Single(steps, step => step.Contains("uses: actions/download-artifact@v4\n", StringComparison.Ordinal));
+        var upload = Assert.Single(steps, step => step.Contains("uses: actions/upload-artifact@v4\n", StringComparison.Ordinal));
+        var repack = Assert.Single(steps, step => step.Contains("zip -j -X ", StringComparison.Ordinal));
+
+        Assert.Contains("          name: tswap-win-x64\n", download);
+        Assert.Contains("          name: tswap-win-x64\n", upload);
+        Assert.Contains("          path: dist/\n", upload);
+        Assert.Contains("          overwrite: true\n", upload);
+        Assert.Contains("          if-no-files-found: error\n", upload);
+        // B10: a fresh zip of the signed exe alone, checked after packing.
+        Assert.Contains("rm -f dist/tswap-win-x64.zip\n", repack);
+        Assert.Contains("zip -j -X dist/tswap-win-x64.zip \"$RUNNER_TEMP/win/tswap.exe\"\n", repack);
+        Assert.Contains("unzip -Z1 dist/tswap-win-x64.zip", repack);
+        Assert.True(steps.IndexOf(repack) < steps.IndexOf(upload), "the upload comes before the repack");
+    }
+
+    [Fact]
+    public void VerifyWindows_ChecksThumbprintTimestampAndRuns()
+    {
+        var job = Job(Workflow("release.yml"), "verify-windows");
+
+        Assert.Contains("    name: Verify win-x64 signature\n", job);
+        Assert.Contains("    needs: [sign-windows]\n", job);
+        Assert.Contains(VerifyWindowsCondition, job);
+        Assert.Contains("    runs-on: windows-latest\n", job);
+        Assert.Equal(["contents: read"], Permissions(job));
+        Assert.DoesNotContain("environment:", job);
+        Assert.DoesNotContain("secrets.", job);
+        Assert.Contains("      EXPECTED_THUMBPRINT: 0117383ED6ABD3650EEA4365C9565D19AD147877\n", job);
+        Assert.Contains("      # Certum Open Source Developer Steven Crawford, valid to 2027-11-20: renew with the certificate\n", job);
+        Assert.Contains("https://github.com/stevedcc/TokenSwap/issues/368#issuecomment-7043611776", job);
+        Assert.Contains("Get-AuthenticodeSignature", job);
+        Assert.Contains("$sig.Status -ne 'Valid'", job);
+        Assert.Contains("$sig.SignerCertificate.Thumbprint -cne $env:EXPECTED_THUMBPRINT", job);
+        Assert.Contains("TimeStamperCertificate", job);
+        Assert.Contains("verify /pa /v", job);
+        Assert.Contains("--version", job);
+    }
+
+    /// <summary>C2: verify-windows checks out, works out the expected version as build does, then checks what it downloaded.</summary>
+    [Fact]
+    public void VerifyWindows_StepsInOrder()
+    {
+        var job = Job(Workflow("release.yml"), "verify-windows");
+        string[] order =
+        [
+            "uses: actions/checkout@v4",
+            ExpectedVersionStep[0],
+            "uses: actions/download-artifact@v4",
+            "Expand-Archive",
+            "Get-AuthenticodeSignature",
+            "verify /pa /v",
+            "$out = @(& ",
+        ];
+        // In the steps (the job's env: comment names signtool's verify too).
+        var stepsAt = job.IndexOf("\n    steps:\n", StringComparison.Ordinal);
+        Assert.True(stepsAt >= 0, "verify-windows has no steps:");
+        var steps = job[stepsAt..];
+        var positions = order.Select(text => (text, at: steps.IndexOf(text, StringComparison.Ordinal))).ToList();
+        Assert.All(positions, p => Assert.True(p.at >= 0, $"verify-windows lacks {p.text}"));
+        Assert.Equal(positions.Select(p => p.text), positions.OrderBy(p => p.at).Select(p => p.text));
+        foreach (var line in ExpectedVersionStep)
+            Assert.Contains(line, job);
+        foreach (var part in WindowsVersionCheck)
+            Assert.Contains(part, job);
+    }
+
+    [Fact]
+    public void Attest_WaitsForTheVerifiedSignature()
+    {
+        var attest = Job(Workflow("release.yml"), "attest");
+        var condition = attest.Split('\n').Single(line => line.StartsWith("    if: ", StringComparison.Ordinal));
+
+        Assert.Contains(AttestWaitsForVerifyWindows, condition);
     }
 }
