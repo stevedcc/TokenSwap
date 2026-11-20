@@ -507,10 +507,19 @@ public sealed partial class RunCommand : ICliCommand
             .Where(i => string.Equals(commandArgs[i], "-encodedCommand", StringComparison.OrdinalIgnoreCase))
             .Select(i => (Index: i, Braced: DecodeScriptBlock(commandArgs[i + 1])))
             .Where(p => p.Braced is not null)
-            .Select(p => new EncodedToken(p.Braced!,
-                p.Index > 0 && commandArgs[p.Index - 1].EndsWith('=') ? commandArgs[p.Index - 1] : null))
+            .Select(p => new EncodedToken(p.Braced!, EncodedPrefix(commandArgs, p.Index)))
             .Distinct().ToList();
     }
+
+    /// <summary>
+    /// The argument before the pair at <paramref name="index"/> when it ends with '=', unless it is the Base64 of
+    /// another pair (Base64 can end with '=' too): then there is no prefix.
+    /// </summary>
+    private static string? EncodedPrefix(IReadOnlyList<string> commandArgs, int index) =>
+        index > 0 && commandArgs[index - 1].EndsWith('=') &&
+        !(index >= 2 && string.Equals(commandArgs[index - 2], "-encodedCommand", StringComparison.OrdinalIgnoreCase))
+            ? commandArgs[index - 1]
+            : null;
 
     /// <summary>The script block's body when it is a braced token (T35's shapes, the whole text), else null.</summary>
     private static string? DecodeScriptBlock(string base64)

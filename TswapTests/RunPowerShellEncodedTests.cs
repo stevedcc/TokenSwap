@@ -111,6 +111,22 @@ public sealed class RunPowerShellEncodedTests : IDisposable
             stderr2);
     }
 
+    [Fact]
+    public void TwoTokens_NoBogusPrefix()
+    {
+        // The first pair's Base64 ends with '=': it is that pair's body, never the second pair's prefix.
+        var first = Enc("{db-pw}");
+        Assert.Equal("ewBkAGIALQBwAHcAfQA=", first);
+
+        var (exit, _, stderr) = Run(["tool", "-encodedCommand", first, "-encodedCommand", Enc("{b}"), .. Tail]);
+
+        Assert.Equal(1, exit);
+        Assert.Equal(ErrorLine(RunCommand.NoTokensText + "\n" + RunCommand.EncodedHint(new("{db-pw}", null)) + "\n" +
+            RunCommand.EncodedHint(new("{b}", null))), stderr);
+        Assert.Contains("PowerShell passed an unquoted token {{b}} on as a script block (-encodedCommand ...). " +
+                        "Quote it: '{{b}}'.", stderr);
+    }
+
     public static TheoryData<string> NotOursCases =>
     [
         "no tail", "tail incomplete", "switch last before the tail", "invalid Base64", "odd byte count",
