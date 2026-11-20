@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.RegularExpressions;
 using RedactingPty;
 using TswapCore;
@@ -75,8 +76,11 @@ public sealed partial class RunCommand : ICliCommand
 
         // Brief T35 (#348.1): arguments PowerShell stripped a pair of braces from (shape only, nothing opened).
         var braced = BracedTokens(commandArgs);
+        // Brief T43 (#348): tokens PowerShell passed on as a script block (-encodedCommand <Base64>), shape only too.
+        var encoded = EncodedTokens(commandArgs);
         if (allTokens.Count == 0 && fileTokens.Count == 0)
-            throw new TswapException(NoTokensText + string.Concat(braced.Select(arg => "\n" + BracesHint(arg))));
+            throw new TswapException(NoTokensText + string.Concat(braced.Select(arg => "\n" + BracesHint(arg))) +
+                                     string.Concat(encoded.Select(t => "\n" + EncodedHint(t))));
 
         // Block obvious attempts to exfiltrate secrets via run: the blocklist, and shells or
         // interpreters given inline code (#105). Pre-substitution check catches them in the template.
@@ -108,6 +112,8 @@ public sealed partial class RunCommand : ICliCommand
         // the argument may be meant literally.
         foreach (var arg in braced)
             ctx.Console.Error.WriteLine(BracesWarning(arg));
+        foreach (var t in encoded)
+            ctx.Console.Error.WriteLine(EncodedWarning(t));
 
         if (ctx.Verbose)
         {
@@ -473,6 +479,79 @@ public sealed partial class RunCommand : ICliCommand
     internal static IReadOnlyList<string> BracedTokens(IReadOnlyList<string> commandArgs) =>
         commandArgs.Where(arg => BracedNameRegex.IsMatch(arg) || BracedFileRegex.IsMatch(arg))
             .Distinct(StringComparer.Ordinal).ToList();
+
+    /// <summary>
+    /// Brief T43 (#348): a token PowerShell passed on as a script block, <c>-encodedCommand &lt;Base64&gt;</c>: the
+    /// decoded body (<c>{name}</c>, <c>{name:previous}</c> or <c>{@path}</c>) and the argument before the pair when it
+    /// ends with <c>=</c> (PowerShell splits <c>--password={{db-pw}}</c> there), else null.
+    /// </summary>
+    internal readonly record struct EncodedToken(string Braced, string? Prefix);
+
+    /// <summary>The last four arguments PowerShell appends when it passes a script block to a native program.</summary>
+    private static readonly string[] EncodedTail = ["-inputFormat", "xml", "-outputFormat", "text"];
+
+    /// <summary>Strict UTF-16LE: invalid bytes (a lone surrogate) throw instead of becoming U+FFFD (A2).</summary>
+    private static readonly UnicodeEncoding StrictUtf16 = new(bigEndian: false, byteOrderMark: false, throwOnInvalidBytes: true);
+
+    /// <summary>
+    /// Brief T43: the distinct encoded tokens, in argument order, when the command ends with PowerShell's
+    /// <c>-inputFormat xml -outputFormat text</c>. By shape only: no vault is opened to check the name.
+    /// </summary>
+    internal static IReadOnlyList<EncodedToken> EncodedTokens(IReadOnlyList<string> commandArgs)
+    {
+        var tailStart = commandArgs.Count - EncodedTail.Length;
+        if (tailStart < 0 || !commandArgs.Skip(tailStart).SequenceEqual(EncodedTail, StringComparer.OrdinalIgnoreCase))
+            return [];
+
+        return Enumerable.Range(0, Math.Max(tailStart - 1, 0))
+            .Where(i => string.Equals(commandArgs[i], "-encodedCommand", StringComparison.OrdinalIgnoreCase))
+            .Select(i => (Index: i, Braced: DecodeScriptBlock(commandArgs[i + 1])))
+            .Where(p => p.Braced is not null)
+            .Select(p => new EncodedToken(p.Braced!,
+                p.Index > 0 && commandArgs[p.Index - 1].EndsWith('=') ? commandArgs[p.Index - 1] : null))
+            .Distinct().ToList();
+    }
+
+    /// <summary>The script block's body when it is a braced token (T35's shapes, the whole text), else null.</summary>
+    private static string? DecodeScriptBlock(string base64)
+    {
+        var bytes = new byte[base64.Length];
+        if (!Convert.TryFromBase64String(base64, bytes, out var length) || length % 2 != 0)
+            return null;
+        string text;
+        try
+        {
+            text = StrictUtf16.GetString(bytes, 0, length);
+        }
+        catch (DecoderFallbackException)
+        {
+            return null;
+        }
+        // A3: the regexes' '$' also matches before a final newline.
+        return !text.Contains('\n') && (BracedNameRegex.IsMatch(text) || BracedFileRegex.IsMatch(text)) ? text : null;
+    }
+
+    /// <summary>Brief T43: the line added to <see cref="NoTokensText"/> for each encoded token.</summary>
+    internal static string EncodedHint(EncodedToken t)
+    {
+        var (shown, quoted) = EncodedShown(t);
+        return $"PowerShell passed an unquoted token {{{shown}}} on as a script block (-encodedCommand ...). Quote it: {quoted}.";
+    }
+
+    /// <summary>Brief T43: the stderr warning for an encoded token next to real tokens (run goes on).</summary>
+    internal static string EncodedWarning(EncodedToken t)
+    {
+        var (shown, quoted) = EncodedShown(t);
+        return $"Warning: PowerShell passed an unquoted token {{{shown}}} on as a script block (-encodedCommand ...); " +
+               $"it is passed on as it is. Quote it: {quoted}.";
+    }
+
+    /// <summary>The printable body and the quoted form, prefix included (echoed text is printable ASCII only).</summary>
+    private static (string Shown, string Quoted) EncodedShown(EncodedToken t)
+    {
+        var shown = Validation.Printable(t.Braced);
+        return (shown, $"'{Validation.Printable(t.Prefix ?? "")}{{{shown}}}'");
+    }
 
     /// <summary>Brief T35: the line added to <see cref="NoTokensText"/> for each braced argument.</summary>
     internal static string BracesHint(string argument)
