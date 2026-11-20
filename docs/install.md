@@ -202,8 +202,8 @@ Get-AuthenticodeSignature .\tswap.exe
 ```
 
 `Status` is `Valid` and the signer certificate is "Open Source Developer Steven Crawford"; or open the
-file's Properties → Digital Signatures in Explorer. v0.3.0 and the v0.3.1 release candidates are not
-signed. How a release is signed: [windows-signing.md](windows-signing.md).
+file's Properties → Digital Signatures in Explorer. v0.3.1-rc.2 is the first signed release; v0.3.0
+and v0.3.1-rc.1 are not signed. How a release is signed: [windows-signing.md](windows-signing.md).
 
 <a id="unsigned-binaries"></a>
 
