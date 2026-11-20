@@ -13,8 +13,13 @@ changed and which test failed), `./runtests.sh --unit` after each task, the full
 hardware suites, `ykman`, `sudo`, real YubiKeys, Certum, `cargo` or network in tests; tests never sleep and never use
 the real clock (time limits are parameters, see Task 1). Commits end with
 `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`, explicit-path commits, no push, merge or rebase; stop and
-report when the brief can't be built as written. No existing test's assertions change, with one exception the owner
-sanctioned (S1 below).
+report when the brief can't be built as written. No existing test's assertions change, except S1 and S2, both
+owner-sanctioned (S2 in the amendments).
+
+**Review history.** Round 1 (GLM and MiMo, 8fbd8b7): both "no". Shared Critical: a second existing assertion breaks
+(`environment:` outside `build-macos`) → S2/B1. Important: the mask-order test can't fail (B2), `env`'s argv carries
+the code (B3), JSON parser and `sha256sum` unspecified / not on macOS (B4, B5), `verify-windows` lacks a checkout (B6).
+Minors → B7-B14. Where a task and an amendment differ, the amendment wins.
 
 ## Why and what is decided
 
@@ -181,3 +186,55 @@ Tests in `ReleasePackagingTests.cs` (new section `// ---- Issue #368: Windows si
 - Caching the ssign build.
 - Any change to the macOS signing, `build`, or `release`.
 - Creating the environment, secrets or the private repo (done).
+
+## Amendments (round 1)
+
+- **B1 / S2 (owner sanction, 2026-11-20: "Yes, the implementer may change that line").** `Workflows_SigningSecretsAndEnvironmentOnlyInBuildMacos` asserts
+  `Assert.DoesNotContain("environment:", outside)` with `outside` = release.yml minus `build-macos`. Exactly that one
+  line becomes `Assert.DoesNotContain("environment:", outside.Replace(Job(release, "sign-windows"), ""));` (the test
+  name and every other line unchanged); the new `SignWindows_Guarded` pins `sign-windows`'s own environment.
+- **B2 (mask order, for real).** The fake `ssign` prints `fake-ssign token=<CERTUM_TOKEN>` on stdout. The test then
+  asserts the first stdout line containing the code is exactly `::add-mask::<code>` and that it comes before the
+  fake's line. Break-it-once as stated (move the mask print after ssign → fails). Also assert the DELETE call is in
+  the fake `gh` log before the fake ssign ran (a shared, ordered log file written by both fakes).
+- **B3 (no code in any argv).** Run ssign as
+  `CERTUM_EMAIL="$CERTUM_EMAIL" CERTUM_TOKEN="$code" env -u GH_TOKEN "$SSIGN" --timestamp-url ... "$exe"` (bash
+  prefix assignments go into the environment, never into `env`'s argv). The fake `gh` and fake `ssign` also record
+  their argv; the test asserts neither ever contains the code or the e-mail. `Script_NeverTracesOrEchoesSecrets`:
+  the code's variable is named `code`; no line but the `::add-mask::` one may `echo`/`printf` `$code`, `$GH_TOKEN`
+  or `$CERTUM_EMAIL`, and no `set -x`/`xtrace`.
+- **B4 (JSON).** Parse with `jq` (preinstalled on ubuntu-latest): the script fetches the raw JSON with `gh api` (no
+  `--jq`) and filters it with `jq`. The script checks `command -v jq` at start (`::error::jq is needed`, exit 1). Tests
+  that need `jq` skip with a reason when it's missing (as other tool-dependent tests here do); the owner's Mac has no
+  jq by default, so they skip there unless installed.
+- **B5 (hash).** One helper: `sha256sum` when present, else `shasum -a 256`; first field, lower-case. Tests run on
+  Linux and macOS (`UnixFact`/`UnixTheory`).
+- **B6 (`verify-windows` steps, in order).** Checkout (as `build`) → "Expected version" (the same step as `build`'s,
+  `shell: bash`, verbatim) → download `tswap-win-x64` → expand (exactly one file, `tswap.exe`) → the three checks.
+  The `--version` check is `build`'s Windows check lines verbatim (one line, `-cne`, `exit 1`); the test asserts the
+  job contains the `WindowsVersionCheck` lines exactly as the `build` test does.
+- **B7 (thumbprint provenance).** `0117383ED6ABD3650EEA4365C9565D19AD147877` is the SHA-1 of the leaf certificate as
+  shown by `certutil -user -store My` and by `signtool verify /pa /v` on the owner's laptop on 2026-11-20 (#368
+  comments). The comment in `release.yml` says so.
+- **B8 (DELETE failures).** A failed DELETE (404: another run took it; or any error) is not fatal: print
+  `::warning::could not delete the code comment <id>`, post `Could not delete comment <id>; delete it by hand.`, and
+  go on to sign (the code is single-use and short-lived anyway). Test: the fake `gh` fails the DELETE → exit 0, the
+  warning and the comment are there, ssign ran.
+- **B9 (`Sign_MaxAttempts_Fails`, floor).** Assert the three ssign runs used the three distinct codes in id order and
+  all three comments were deleted. Rename `Sign_UsesTheOwnersNewestRequestReply` → `Sign_UsesTheOwnersReplyOnly`, and
+  add `Sign_TwoCodes_TakesTheOldest`: owner codes at ids 11 and 12 in one poll, ssign succeeds → only 11's code used,
+  12 left alone.
+- **B10 (fresh zip).** Repack to a new file (`rm -f dist/tswap-win-x64.zip` then `zip -j -X`), and check after
+  packing that the zip holds exactly `tswap.exe`.
+- **B11 (re-runs).** The sign step refuses an exe that already has a certificate table (PE data directory 4 non-zero):
+  `::error::tswap.exe is already signed (a re-run of a finished sign job?)`, exit 1. Test with a minimal PE fixture
+  built in the test (or skip this check and just document it; implementer's choice, say which in the commit).
+- **B12 (stale text).** `release.yml`'s attest comment "Windows signing, #368, goes into build before its upload"
+  becomes "Windows signing, #368, replaces the win-x64 artifact in sign-windows, before verify-windows and this job".
+  `docs/install.md`: "(once signed, #368)" → "(from 0.3.1)"; "The Windows binaries are not signed either." → "The
+  Windows binaries before 0.3.1 are not signed either."
+- **B13 (session).** ssign has no logout; deleting `session.json` ends local reuse, and the token expires at Certum
+  after about 30 minutes. Say so in `docs/windows-signing.md`, plus "one outstanding signing request at a time"
+  (two overlapping runs can take each other's code).
+- **B14 (setup is real).** The environment, both secrets and the private repo exist (checked by the controller with
+  `gh secret list --env windows-signing` and `gh repo view stevedcc/tswap-signing`, 2026-11-20).
