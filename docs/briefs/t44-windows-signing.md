@@ -13,8 +13,8 @@ changed and which test failed), `./runtests.sh --unit` after each task, the full
 hardware suites, `ykman`, `sudo`, real YubiKeys, Certum, `cargo` or network in tests; tests never sleep and never use
 the real clock (time limits are parameters, see Task 1). Commits end with
 `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`, explicit-path commits, no push, merge or rebase; stop and
-report when the brief can't be built as written. No existing test's assertions change, with one exception that needs
-the owner's sanction (S1 below).
+report when the brief can't be built as written. No existing test's assertions change, with one exception the owner
+sanctioned (S1 below).
 
 ## Why and what is decided
 
@@ -141,7 +141,7 @@ In `release.yml`, two new jobs between `build-macos` and `attest`.
 `release` is unchanged (it needs `attest`, so it gets the signed zip). The attested and released `tswap-win-x64.zip`
 is then the signed one.
 
-**S1 (needs the owner's sanction before implementation).** `Attest_RunsOnTagsAndDispatches_NotPullRequests` asserts
+**S1 (owner sanction, 2026-11-20: "Yes, I sanction that change to the assertion.").** `Attest_RunsOnTagsAndDispatches_NotPullRequests` asserts
 `"    needs: [build, build-macos]\n"` for `attest`; it becomes `"    needs: [build, build-macos, verify-windows]\n"`.
 Nothing else in that test changes.
 
