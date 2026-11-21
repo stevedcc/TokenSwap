@@ -100,6 +100,35 @@ warning. Each time the new command test must fail.
 - The command reference block (`### redact`) and `RedactCommand.Description` stay as they are.
 - `TswapCore/Prompt.cs` stays as it is (its `redact` line remains true).
 
+## Amendments (round 1)
+
+- **A1 (both reviewers; controller ruling).** The mask covers the **whole run** that starts at the value group: from the
+  group's first character up to, not including, the next whitespace, `"`, `'`, `,`, `;`, `)`, `]`, `}` or the end of the
+  line. Matching itself does not change (keywords, the 12-character minimum, the character class): only how much of the
+  line is replaced. Add these rows to Task 1's table:
+
+  | Input | `Masked` | `Hits` |
+  |---|---|---|
+  | `password: CorrectHorse!Battery` | `password: [POSSIBLE SECRET]` | `(1, "password")` |
+  | `token: eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJl` | `token: [POSSIBLE SECRET]` | `(1, "token")` |
+  | `token="abcdefghijkl!x" next` | `token="[POSSIBLE SECRET]" next` | `(1, "token")` |
+  | `password=aaaaaaaaaaaaaa,user=bob` | `password=[POSSIBLE SECRET],user=bob` | `(1, "password")` |
+  | `password=aaaaaaaaaaaaaatoken=bbbbbbbbbbbbbbbb` | `password=[POSSIBLE SECRET]` | one hit, `(1, "password")` |
+
+  The existing rows keep their expected results. The Task 2 warning text stays.
+- **A2 (both).** Replace "asserts that no `Hits` keyword contains a value character from its input" with: for every
+  row, the masked run's original text (the characters replaced, as the test computes from its input) appears nowhere
+  in `Masked` and in no `Hits` keyword (`Assert.DoesNotContain(run, masked)`, and the same for each keyword).
+- **A3 (GLM).** Task 1 adds `MaskUnknownSecrets` and moves the four tests, but keeps `FindUnknownSecrets` so the build
+  stays green; Task 2 switches `RedactCommand` over and removes `FindUnknownSecrets`.
+- **A4 (MiMo).** Capture the keyword in its own named group in `CredentialHeuristic` (matching unchanged) and report
+  that group's text. A keyword inside a longer word (`monkey:` gives `key`) is reported as matched; that's accepted.
+- **A5 (MiMo).** Task 3 also updates `docs/security-model.md` (the bullet near line 259 that says a deleted secret's
+  stored value is printed unmasked by `redact`): add "unless it matches the unknown-secret heuristic, which masks it
+  as `[POSSIBLE SECRET]`".
+- **A6 (MiMo).** Task 2's commit message says the warning's format changed on purpose. `TswapCore/Prompt.cs` stays as
+  it is (no prompt-hash change for this).
+
 ## Out of scope
 
 - The guessing-oracle rate limit for redaction (#252).
