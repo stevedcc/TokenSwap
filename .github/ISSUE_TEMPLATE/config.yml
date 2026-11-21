@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/stevedcc/TokenSwap/security/advisories/new
+    about: Privately, through GitHub's security advisories. Please don't open a public issue.
+  - name: Questions and ideas
+    url: https://github.com/stevedcc/TokenSwap/discussions
+    about: Ask in Discussions.

@@ -1,0 +1,43 @@
+name: I tried tswap
+description: What worked, what didn't, and what was confusing. No bug needed.
+labels: [feedback]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for trying tswap. Short notes are fine: unclear messages and awkward steps are exactly what helps.
+        **Never paste a secret value.** For output, use `tswap redact output.txt > redacted.txt` and paste redacted.txt,
+        not the terminal (its warnings quote flagged lines unmasked); it masks only values your vault knows. Questions and ideas are welcome in [Discussions](https://github.com/stevedcc/TokenSwap/discussions) too.
+  - type: input
+    id: version
+    attributes:
+      label: tswap version
+      description: The output of `tswap --version`.
+      placeholder: tswap 0.3.1
+  - type: input
+    id: setup
+    attributes:
+      label: Your setup
+      description: OS, and what opens your vault (YubiKey, FIDO2 key and its brand, TPM, Secure Enclave, vault password).
+  - type: textarea
+    id: worked
+    attributes:
+      label: What worked
+  - type: textarea
+    id: confusing
+    attributes:
+      label: What was confusing, missing or broken
+    validations:
+      required: true
+  - type: textarea
+    id: agent
+    attributes:
+      label: The AI agent side
+      description: If you used tswap with an agent (Claude Code, OpenCode, others), how did it go?
+  - type: checkboxes
+    id: no-secrets
+    attributes:
+      label: Before you submit
+      options:
+        - label: This report contains no secret values.
+          required: true
