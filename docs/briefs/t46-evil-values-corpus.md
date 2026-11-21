@@ -12,6 +12,11 @@ the full `./runtests.sh` at the end. No hardware suites, `ykman`, `sudo`, real Y
 end with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`, explicit-path commits, no push, merge or rebase. No
 existing test changes.
 
+**Review history.** Round 1 (GLM ready, MiMo not ready; brief 1st commit): the per-row skip can't be built in xunit 2
+(both), the BatBadBut batch file was itself injectable (both), and scope gaps (`run --env`, `ingest --rotate`, trailing
+whitespace, NUL, surrogates across chunks, the ConPTY path, docs anchors). Amendments A1-A8; where a task and an
+amendment differ, the amendment wins.
+
 **Findings protocol.** The tests state what tswap **should** do (the invariants below). Where tswap doesn't, that's a
 finding, not a test to bend: mark exactly that case `Skip = "T46 finding N: <one line>"` (one finding number per
 distinct cause), list every finding in the report with the input class, the command and what happened (never a
@@ -103,6 +108,49 @@ message names the case and whether `marker.txt` appeared.
 `docs/commands.md`, at the `{{@file}}` section: two sentences. A filled file is written literally; if a shell sources
 it, a value containing `$(...)`, a backtick or a `"` runs or breaks there, so a shell-sourced file needs single-quoted
 values, and a value containing `'` breaks even that. Task 2's fill tests already prove the literal write; no new test.
+
+## Amendments (round 1)
+
+- **A1 (findings mechanism; both).** xunit 2.9.3 has no per-row skip, and an early `return` that reports Passed is
+  forbidden (#181, `PlatformFacts.cs`). So: `EvilValues.KnownFindings` maps `(caseName, invariant)` to a finding
+  number and one line; each theory's data **leaves those pairs out**, and for each one there is a separate
+  `[Fact(Skip = "T46 finding N: <line>")]` named for the case and invariant, containing the full assertion (so
+  un-skipping later is deleting `Skip`). Never an early return.
+- **A2 (scope; both).** Add to Task 1: **invariant 2b**, `run --env X={{name}} tool` (see `RunEnvTests`): the recorded
+  environment holds exactly the stored value in `X` and in no other variable, no argv element contains it, and the
+  output is masked as in invariant 4; and **`ingest --rotate`** for every case: `get` returns the new value,
+  `{{name:previous}}` substitutes the old one exactly. `create` and `rotate` generate their values, so they take no
+  corpus values. `tocomment`'s real write is out of scope here (#394 changes its matching). The question whether `run`
+  should warn when the command is `sh`, `bash` or `.` with a `{{@file}}` argument goes in the report as an owner
+  decision.
+- **A3 (trailing whitespace, NUL; both).** Add cases ending in a space, a tab and a newline, and with a trailing
+  U+2028: `get` returns them with `TrimEnd()` applied (the documented `ingest` rule; note it also trims U+2028/2029/0085).
+  A whitespace-only input and a NUL inside a value: `ingest` refuses with the documented messages. Invariant 1 reads
+  "stored exactly as read, after the documented trailing-whitespace trim"; the issue's "byte for byte" versus the
+  trim goes in the report as an owner decision.
+- **A4 (short values; MiMo).** Task 2.3 gets the same qualifier as 2.2 (8 or more characters), and 2.2 and 2.3 get the
+  T30 whole-word pair as in 1.4. Secret names and file names used for a case must not contain any character of that
+  case's value.
+- **A5 (surrogates; MiMo).** The emoji case states its invariant: **no unpaired surrogate** appears in any output, and
+  "8-character substring" means 8 **code points** (no window, and no half of a pair, appears). Run it a second time
+  with `RecordingPty`'s `ChunkSize` set so the pair is split across two chunks.
+- **A6 (BatBadBut; both).** Replace Task 3's batch design:
+  - **Attribution batch** `inert.cmd`: `@exit /b 0`. It never expands an argument, so any `marker.txt` comes from how
+    the batch was **launched** (the BatBadBut case), not from the batch. All four values, plus a `.bat` twin.
+    Invariant: `marker.txt` never exists.
+  - **Round-trip batch** `capture.cmd`, only for values without `"`: `@echo off`, `setlocal DisableDelayedExpansion`,
+    `set "arg=%~1"`, `setlocal EnableDelayedExpansion`, `>"%~dp0out.txt" echo(!arg!`. Invariant: `out.txt` holds the
+    value. A value with `"` can't be captured safely by any batch, so it's in `inert.cmd` only.
+  - Set the child's working directory to the test folder explicitly.
+  - **Two legs:** through the redirected harness (FallbackPty, .NET's process start) and through
+    `RunTswapInConPty` (WindowsPty's own command line). Name the leg in each failure message.
+  - **Break-it-once** is the controller's, on Windows CI: ship, as a comment in the test, a variant that starts the
+    batch with `Process.Start("cmd.exe", "/c inert.cmd " + value)` (unquoted, outside tswap), which must create
+    `marker.txt` and so proves the detector works on the runner.
+- **A7 (docs anchors; GLM).** The `{{@file}}` section and its quoting rule are in `docs/security-model.md` ("Files with
+  secrets: `run` with `{{@file}}`"), not commands.md: Task 2.1 reads the rule there, and Task 4's two sentences go
+  beside that section's `KEY=` paragraph.
+- **A8.** The broker stays out of scope; say so in the report for the owner.
 
 ## Out of scope
 
