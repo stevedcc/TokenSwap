@@ -129,8 +129,9 @@ public static class Redact
             lineNumber++;
             var newline = content.IndexOf('\n', lineStart);
             var next = newline < 0 ? content.Length : newline;
-            // The line without its ending ('\n' or "\r\n"); the ending is copied as it is.
-            var end = next > lineStart && content[next - 1] == '\r' ? next - 1 : next;
+            // The line without its ending ('\n' or "\r\n"); the ending is copied as it is. A '\r' with no
+            // '\n' after it (the end of the text) is part of the line.
+            var end = newline >= 0 && next > lineStart && content[next - 1] == '\r' ? next - 1 : next;
             var line = content[lineStart..end];
 
             var copied = 0;

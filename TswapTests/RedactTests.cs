@@ -486,6 +486,10 @@ label: myapp-prod";
         { "TOKEN=\"abcdefghijklmnop\"", "TOKEN=\"[POSSIBLE SECRET]\"", "1:TOKEN" },
         { "a: 1\r\napi_key=ABCDEFGHIJKLMNOP==\r\n", "a: 1\r\napi_key=[POSSIBLE SECRET]\r\n", "2:api_key" },
         { "a: 1\napi_key=ABCDEFGHIJKLMNOP==\nb: 2", "a: 1\napi_key=[POSSIBLE SECRET]\nb: 2", "2:api_key" },
+        // Code review round 1 (I1): a bare '\r' at the end of the text is kept.
+        { "token: abcdefghijklmnop\r", "token: [POSSIBLE SECRET]\r", "1:token" },
+        { "x\r", "x\r", "" },
+        { "a\n\r", "a\n\r", "" },
         { "password=aaaaaaaaaaaaaa token=bbbbbbbbbbbbbbbb", "password=[POSSIBLE SECRET] token=[POSSIBLE SECRET]", "1:password|1:token" },
         { "password: short", "password: short", "" },
         { "hostname: abcdefghijklmno", "hostname: abcdefghijklmno", "" },
