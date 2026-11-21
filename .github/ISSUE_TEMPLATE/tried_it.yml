@@ -1,12 +1,13 @@
 name: I tried tswap
 description: What worked, what didn't, and what was confusing. No bug needed.
-labels: [testing]
+labels: [feedback]
 body:
   - type: markdown
     attributes:
       value: |
         Thanks for trying tswap. Short notes are fine: unclear messages and awkward steps are exactly what helps.
-        **Never paste a secret value.** Questions and ideas are welcome in [Discussions](https://github.com/stevedcc/TokenSwap/discussions) too.
+        **Never paste a secret value.** For output, use `tswap redact <file>` and paste what it prints (it masks only
+        values your vault knows). Questions and ideas are welcome in [Discussions](https://github.com/stevedcc/TokenSwap/discussions) too.
   - type: input
     id: version
     attributes:
@@ -33,3 +34,10 @@ body:
     attributes:
       label: The AI agent side
       description: If you used tswap with an agent (Claude Code, OpenCode, others), how did it go?
+  - type: checkboxes
+    id: no-secrets
+    attributes:
+      label: Before you submit
+      options:
+        - label: This report contains no secret values.
+          required: true
