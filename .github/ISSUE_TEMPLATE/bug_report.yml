@@ -1,0 +1,85 @@
+name: Bug report
+description: Something tswap does wrong, crashes on, or says in a confusing way.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. **Never paste a secret value**, not even a burned one. For command output that may
+        contain secrets, run it through `tswap redact <file>` first, or replace values by hand.
+
+        A security vulnerability goes to a [private report](https://github.com/stevedcc/TokenSwap/security/advisories/new), not here.
+  - type: input
+    id: version
+    attributes:
+      label: tswap version
+      description: The output of `tswap --version`.
+      placeholder: tswap 0.3.1
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Linux
+        - macOS
+        - Windows
+    validations:
+      required: true
+  - type: input
+    id: os-detail
+    attributes:
+      label: OS version and shell
+      description: For example "Fedora 44, bash", "macOS 27.2, zsh", "Windows 11, Windows PowerShell 5.1 in the classic console".
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How tswap was installed
+      options:
+        - Release download (zip, tar.gz or pkg)
+        - Install script
+        - Built from source
+        - Other
+  - type: dropdown
+    id: slot
+    attributes:
+      label: What opens the vault on this machine
+      multiple: true
+      options:
+        - YubiKey (challenge-response)
+        - FIDO2 security key
+        - TPM
+        - Secure Enclave
+        - Vault password / tswap agent
+        - Recovery key
+        - Not relevant
+  - type: textarea
+    id: command
+    attributes:
+      label: The command you ran
+      description: With `{{tokens}}` as you typed them, never their values.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened, and what you expected
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Output
+      description: The full output, with any secret value removed.
+      render: text
+  - type: checkboxes
+    id: no-secrets
+    attributes:
+      label: Before you submit
+      options:
+        - label: This report contains no secret values.
+          required: true
