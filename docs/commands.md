@@ -84,8 +84,10 @@ commands print a note naming the count and the reindex, which adds the newer var
 `[POSSIBLE SECRET]`, with a warning on stderr naming the line and the keyword, never the value; a
 short or unusual value can still slip through, such as one with spaces (the heuristic needs 12
 unbroken characters, so `password: correct horse battery staple` is neither flagged nor masked,
-though a value the vault holds is still masked by its fingerprints), so check the output before
-sharing it.
+though a value the vault holds is still masked by its fingerprints), or one that follows a value
+running straight into its keyword without a space (in `password=aaaaaaaaaaaatoken = bbbbbbbbbbbbbbbb`
+the first match takes `token` as part of the first value, so the second value is not found), so
+check the output before sharing it.
 
 The other reading commands keep working on format 2 records: `names`, `list`, `burned`, and
 `check`, `get` or `apply` on a record they name, decrypt such a record whole (the only way to read
