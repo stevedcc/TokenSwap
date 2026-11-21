@@ -1667,7 +1667,8 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
             for ($y = 0; $y -le $lastRow; $y++) {
                 $line = New-Object Text.StringBuilder $width
                 for ($x = 0; $x -lt $width; $x++) {
-                    [void]$line.Append($cells[$y, $x].Character)
+                    $cell = $cells[$y, $x]
+                    [void]$line.Append($cell.Character)
                 }
                 $rows.Add($line.ToString().TrimEnd())
             }
