@@ -152,6 +152,34 @@ values, and a value containing `'` breaks even that. Task 2's fill tests already
   beside that section's `KEY=` paragraph.
 - **A8.** The broker stays out of scope; say so in the report for the owner.
 
+## Amendments (round 2: GLM ready; MiMo's two Importants and five Minors)
+
+- **A9 (MiMo N1).** The controller's detector variant reproduces the vulnerable wrapping:
+  `Process.Start("cmd.exe", "/c inert.cmd \"" + value + "\"")` (wrapper quotes added, embedded quotes not escaped).
+  With it, the two quote-bearing values must create `marker.txt`; that is the proof the detector works. The comment
+  also says that a marker from `^&echo INJECTED>marker.txt` would be a stray redirection at launch: the same
+  invariant fails, by another mechanism. Add one unbalanced-quote value, `a"&echo INJECTED>marker.txt`.
+- **A10 (MiMo N2).** Accepted outcomes, per batch:
+  - `inert.cmd`/`.bat`: `marker.txt` never exists (whether tswap ran the batch or refused it).
+  - `capture.cmd`: either (a) `out.txt` holds the value exactly, or (b) tswap refused the run with a message naming
+    batch files. Report which. A value that arrives **altered** (e.g. `%PATH%` expanded at launch) is its own finding
+    class.
+- **A11 (M1).** Replaces A4's naming rule: a secret name or file name used for a case must not contain that case's
+  value as a substring, nor any 8-code-point window of it (values of 8 or more), nor make a whole-word match for a
+  short value. `file.yaml`, `name`, `marker.txt`, `out.txt`, `inert.cmd`, `capture.cmd` are fine.
+- **A12 (M2).** Task 3 is one `[WindowsFact]` (skipped with a reason elsewhere, no early return) looping the cases,
+  with each failure message naming case and leg. Put the ConPTY version check (`IsWindowsVersionAtLeast(10, 0,
+  17763)`) around the ConPTY leg only.
+- **A13 (M3).** Adding overloads to the E2E helpers (`RunTswapInConPty`, `MakePsi`) that take a working directory is
+  expected; existing callers and existing tests stay unchanged.
+- **A14 (M4).** Task 2.1's oracle: decode the written double-quoted scalar by the escapes documented in
+  `docs/security-model.md` ("Files with secrets") and compare with `get`'s value. There is no YAML reader in the repo;
+  drop the "repo's own YAML reading" branch.
+- **A15 (M5).** `ingest --rotate`: ingest the case value, rotate with a fixed sibling value; `{{name:previous}}`
+  substitutes the case value exactly and `get` returns the sibling. `KnownFindings` keys use invariant names, not
+  numbers: `stored-exactly`, `one-argument`, `env-exact`, `no-reexpansion`, `masked-output`, `rotate-previous`,
+  `fill-roundtrip`, `redact-masks`, `tocomment-dryrun`, `export-import`, `batch-inert`, `batch-capture`.
+
 ## Out of scope
 
 - Fixing any finding (the controller files and rules on each).
