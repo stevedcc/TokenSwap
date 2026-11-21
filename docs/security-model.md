@@ -258,7 +258,8 @@ Limits of reading metadata only:
 
 - `redact` and `tocomment` find what the fingerprints describe. A record whose fingerprints don't
   describe its stored value (only a write bug, or someone holding the vault key, can make one) has
-  its stored value printed unmasked by `redact` and left in place, unmarked, by `tocomment`. Detecting that needs the value, which these
+  its stored value printed unmasked by `redact`, unless it matches the unknown-secret heuristic, which
+  masks it as `[POSSIBLE SECRET]`, and left in place, unmarked, by `tocomment`. Detecting that needs the value, which these
   commands must not decrypt; `get` and `apply` still check it and refuse that record.
 - `check`, `names`, `list` and `burned` don't open value sections, so they don't notice a damaged
   value section: they list the record as sound. The command that uses the value fails closed,
