@@ -57,15 +57,14 @@ whatever `result.json` holds. `classic.ps1`, in order:
 1. Sets `$env:TSWAP_TEST_KEY`, `$env:TSWAP_TEST_SUDO_BYPASS = '1'` and `$env:TSWAP_CONFIG_DIR` to the test's values
    (written into the script by the test, so the test process's environment is never changed).
 2. Reads the console output mode before the run: `Add-Type` with `GetStdHandle(-11)` and `GetConsoleMode`.
-3. Writes the line `T41-BEFORE-TSWAP` with `Write-Host`.
-4. Runs `& '<tswap binary>' run pwsh -NoProfile -File '<print3.ps1>' '{{my-secret}}'` **without** piping or
+3. Runs `& '<tswap binary>' run pwsh -NoProfile -File '<print3.ps1>' '{{my-secret}}'` **without** piping or
    assigning it (so tswap's stdout is the console itself), then keeps `$LASTEXITCODE`.
-5. Writes the line `T41-AFTER-TSWAP` with `Write-Host`.
-6. Reads the mode again, the window title (`$Host.UI.RawUI.WindowTitle`), and the screen buffer from row 0 to the
+4. Writes the line `T41-AFTER-TSWAP` with `Write-Host`.
+5. Reads the mode again, the window title (A2: `GetConsoleTitle`, as `titleAfter`), and the screen buffer from row 0 to the
    cursor's row (`$Host.UI.RawUI.GetBufferContents` over the buffer's full width; each row's characters joined and
    right-trimmed, rows joined with `\n`).
-7. Writes `{ "modeBefore", "modeAfter", "exit", "title", "buffer" }` to `result.json` as UTF-8 (`ConvertTo-Json`,
-   `Out-File -Encoding utf8`), and exits 0.
+6. Writes `{ "modeBefore", "modeAfter", "exit", "titleBefore", "titleAfter", "buffer" }` to `result.json` with
+   `ConvertTo-Json` and A5's BOM-less `WriteAllText`, and exits 0.
 
 **Assertions**, each with a dump of the whole result (the buffer with `EscapeVt`) in its message:
 
@@ -76,13 +75,13 @@ whatever `result.json` holds. `classic.ps1`, in order:
 | buffer contains | `[REDACTED: my-secret]`, `before`, `after`, `T41-AFTER-TSWAP` | the child's output reached the screen, redacted |
 | buffer doesn't contain | `s3cr3t-classic-value` | |
 | buffer doesn't contain | the ESC character (`\u001b`), `[?9001h`, `[?1004h`, `[?25l`, `[2J`, `]0;` | #349's first half: no sequence printed as text |
-| buffer contains | `T41-BEFORE-TSWAP` | #349's problem 2: the pseudo console's `[2J` must not have cleared what was on the screen before the run |
-| `title` | doesn't contain `pwsh` (ignore case) | #349's second half: the child's title didn't reach the window |
+| `titleAfter` | equals `titleBefore` | #349's second half: the window wasn't retitled (A2) |
+| `titleAfter` | doesn't contain `pwsh` (ignore case) | the child's title didn't reach the window |
 | `modeAfter` | equals `modeBefore` | AroundChild put the mode back |
 
 **If the unchanged product fails an assertion**, the first CI run will show it. Then stop and report the dump:
-don't change product code or the assertion. That holds especially for `T41-BEFORE-TSWAP`. T35 never decided
-whether the screen clear is acceptable, so a failure there is a product question for the owner.
+don't change product code or the assertion. (The pseudo console's screen clear is intended and documented in
+`docs/install.md`; this test doesn't assert anything about it.)
 
 **Break-it-once** (three CI runs on throwaway branches, which the controller runs from commits you prepare, each one
 line, never committed to `brief/t41`):
@@ -101,7 +100,7 @@ starts a real window, so timing matters).
 - **A1 (GLM Critical + Important 2, MiMo I3).** Drop step 3 (`T41-BEFORE-TSWAP`) and the assertion row
   "buffer contains `T41-BEFORE-TSWAP`". T35 decided the screen clear: it passes through on purpose and is documented
   ("The pseudo console clears the window before the command's output", `docs/install.md`). This test covers #349's
-  `←[` half and the title half only, as #367 scopes it. The "Why" sentence about T35 never deciding is wrong; ignore it.
+  `←[` half and the title half only, as #367 scopes it. Task 1 has been edited accordingly.
 - **A2 (MiMo I1).** Read the window title **before** the run as well (step 2), both times with `GetConsoleTitle`
   (`kernel32`, in the same `Add-Type` block), not `$Host.UI.RawUI.WindowTitle`. Write `titleBefore` and
   `titleAfter`. The title rows become: `titleAfter` **equals** `titleBefore`; and `titleAfter` doesn't contain
@@ -124,6 +123,16 @@ starts a real window, so timing matters).
 - **A8 (MiMo Minor 4).** Each table row is its own `Assert.True(..., dump)`, in table order.
 - **A9 (MiMo Minor 5).** The header's "rule 7" is the break-it-once requirement spelled out in Task 1: three CI
   breaks, each failing the named row.
+
+## Amendments (round 2: both reviewers ready, Minors folded in)
+
+- **A10 (GLM Minor 1).** Guard the timeout kill (check `HasExited`, or catch around the kill alone, never around
+  the assertions) so A5's "timed out after 90 s" message is the failure, not a stack trace.
+- **A11 (GLM Minor 2).** `GetConsoleTitle` with `CharSet.Unicode` and a 1024-character buffer, both reads the same.
+- **A12 (MiMo Minor 2).** For the new `CreateProcess` call: `cb = Marshal.SizeOf<WinStartupInfo>()`, `dwFlags = 0`
+  (don't copy the ConPTY helper's `STARTF_USESTDHANDLES` with null handles: that is the pseudo console's pattern),
+  `bInheritHandles: false`, `CREATE_NEW_CONSOLE` as the only creation flag.
+- MiMo Minor 1 (stale Task 1 text) is fixed in Task 1 itself.
 
 ## Out of scope
 
