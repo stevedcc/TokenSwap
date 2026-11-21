@@ -142,6 +142,10 @@ warning. Each time the new command test must fail.
   | `password='CorrectHorse"Battery&Staple' next` | `password='[POSSIBLE SECRET]' next` |
   | `token: abcdefghijklmnop # a comment` | `token: [POSSIBLE SECRET] # a comment` |
 
+- **A8 (owner).** Task 3's docs sentence names a value with spaces among those that can slip through (the heuristic
+  needs 12 unbroken characters, so `password: correct horse battery staple` is neither flagged nor masked; a stored
+  value is still masked by its fingerprint). A quoted-phrase rule is a separate issue, not this brief.
+
 ## Out of scope
 
 - The guessing-oracle rate limit for redaction (#252).
