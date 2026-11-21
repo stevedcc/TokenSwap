@@ -1967,6 +1967,34 @@ password2: """"  # tswap: missing-mixed-secret");
         Assert.Contains("[REDACTED: my-burned]", stdout);
     }
 
+    // --- brief T45 (#389): suspected unknown secrets are masked, the warning names no value ---
+
+    [Fact]
+    public void Redact_MasksSuspectedUnknownSecret_WarningShowsNoValue()
+    {
+        RunTswap("init", "--yubikey");
+        RunTswapWithStdin("known-secret-value-42", "ingest", "db-pw");
+
+        var file = Path.Combine(_tempDir, "config.txt");
+        File.WriteAllText(file, "user: admin\npassword: known-secret-value-42\ntoken: unknownsecretvalue9876\n");
+
+        var (exit, stdout, stderr) = RunTswap("redact", file);
+
+        Assert.Equal(0, exit);
+        Assert.Contains("password: [REDACTED: db-pw]", stdout);
+        Assert.Contains("token: [POSSIBLE SECRET]", stdout);
+        Assert.Contains("user: admin", stdout);
+        Assert.Equal("user: admin\npassword: [REDACTED: db-pw]\ntoken: [POSSIBLE SECRET]\n", stdout);
+        Assert.Contains("Line 3", stderr);
+        Assert.Contains("'token'", stderr);
+        Assert.Contains("⚠ Line 3: possible unrecognised secret after 'token', masked", stderr);
+        foreach (var value in new[] { "known-secret-value-42", "unknownsecretvalue9876" })
+        {
+            Assert.DoesNotContain(value, stdout);
+            Assert.DoesNotContain(value, stderr);
+        }
+    }
+
     [Fact]
     public void ToComment_IncludesBurnedSecretValues()
     {

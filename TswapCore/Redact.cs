@@ -6,15 +6,19 @@ using TswapCore.Fingerprints;
 namespace TswapCore;
 
 /// <summary>
-/// Static facade over <see cref="SecretMatcher"/>, plus the standalone heuristic scanner for
+/// Static facade over <see cref="SecretMatcher"/>, plus the standalone heuristic that masks
 /// unrecognised secrets.
 /// </summary>
 public static class Redact
 {
     // Matches credential-keyword = value patterns for heuristic unknown-secret detection.
+    // Brief T45 (A4): the keyword and the value are named groups; what matches is unchanged.
     private static readonly Regex CredentialHeuristic = new(
-        @"(?:password|passwd|token|secret|key|apikey|api_key|pass)\s*[:=]\s*[""']?([A-Za-z0-9+/\-_]{12,}=*)[""']?",
+        @"(?<keyword>password|passwd|token|secret|key|apikey|api_key|pass)\s*[:=]\s*[""']?(?<value>[A-Za-z0-9+/\-_]{12,}=*)[""']?",
         RegexOptions.IgnoreCase);
+
+    /// <summary>What <see cref="MaskUnknownSecrets"/> puts in place of a suspected value.</summary>
+    public const string PossibleSecretMask = "[POSSIBLE SECRET]";
 
     /// <summary>
     /// <c>redact</c>: a copy of <paramref name="content"/> with every value <paramref name="matcher"/>
@@ -106,22 +110,62 @@ public static class Redact
     }
 
     /// <summary>
-    /// Scans <paramref name="content"/> for strings that look like unrecognised credentials
-    /// (adjacent to a keyword like <c>password</c>, <c>token</c>, etc.). Returns the 1-based
-    /// line number and the matched snippet for each hit.
+    /// Brief T45 (#389): <paramref name="content"/> with every value that looks like an unrecognised
+    /// credential (a <see cref="CredentialHeuristic"/> match) replaced by <see cref="PossibleSecretMask"/>,
+    /// and one hit per masked value: its 1-based line and the keyword as written. A hit holds no value
+    /// character. The mask covers the whole run from the value's first character: up to the matching
+    /// quote when a quote stands right before it, otherwise up to the next whitespace, <c>,</c>,
+    /// <c>;</c>, <c>)</c>, <c>]</c> or <c>}</c>; either way at most to the end of the line. A match
+    /// that starts inside a run already masked adds nothing. Line endings are kept as they are.
     /// </summary>
-    public static IReadOnlyList<(int Line, string Snippet)> FindUnknownSecrets(string content)
+    public static (string Masked, IReadOnlyList<(int Line, string Keyword)> Hits) MaskUnknownSecrets(string content)
     {
-        List<(int, string)> results = [];
-        var lines = content.Split('\n');
-
-        for (int i = 0; i < lines.Length; i++)
+        var masked = new StringBuilder(content.Length);
+        List<(int, string)> hits = [];
+        var lineNumber = 0;
+        var lineStart = 0;
+        while (lineStart <= content.Length)
         {
-            var matches = CredentialHeuristic.Matches(lines[i]);
-            if (matches.Count > 0)
-                results.Add((i + 1, lines[i].Trim()));
-        }
+            lineNumber++;
+            var newline = content.IndexOf('\n', lineStart);
+            var next = newline < 0 ? content.Length : newline;
+            // The line without its ending ('\n' or "\r\n"); the ending is copied as it is. A '\r' with no
+            // '\n' after it (the end of the text) is part of the line.
+            var end = newline >= 0 && next > lineStart && content[next - 1] == '\r' ? next - 1 : next;
+            var line = content[lineStart..end];
 
-        return results;
+            var copied = 0;
+            foreach (Match match in CredentialHeuristic.Matches(line))
+            {
+                var value = match.Groups["value"];
+                if (value.Index < copied)
+                    continue; // inside the run just masked
+                var runEnd = RunEnd(line, value.Index);
+                masked.Append(line, copied, value.Index - copied).Append(PossibleSecretMask);
+                copied = runEnd;
+                hits.Add((lineNumber, match.Groups["keyword"].Value));
+            }
+            masked.Append(line, copied, line.Length - copied);
+
+            if (newline < 0)
+                break;
+            masked.Append(content, end, newline + 1 - end);
+            lineStart = newline + 1;
+        }
+        return (masked.ToString(), hits);
+    }
+
+    /// <summary>Where the run of a suspected value starting at <paramref name="start"/> ends (exclusive).</summary>
+    private static int RunEnd(string line, int start)
+    {
+        if (start > 0 && line[start - 1] is '"' or '\'')
+        {
+            var close = line.IndexOf(line[start - 1], start);
+            return close < 0 ? line.Length : close;
+        }
+        var end = start;
+        while (end < line.Length && !char.IsWhiteSpace(line[end]) && line[end] is not (',' or ';' or ')' or ']' or '}'))
+            end++;
+        return end;
     }
 }
