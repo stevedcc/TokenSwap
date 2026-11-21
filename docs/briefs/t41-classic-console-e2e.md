@@ -134,6 +134,25 @@ starts a real window, so timing matters).
   `bInheritHandles: false`, `CREATE_NEW_CONSOLE` as the only creation flag.
 - MiMo Minor 1 (stale Task 1 text) is fixed in Task 1 itself.
 
+## Amendments (controller, after CI round 3)
+
+- **A13 (controller, after CI round 3).** Evidence: the clean run (44898949443) and all three breaks (B1 44898955377,
+  B2 44898961183, B3 44898966785) failed on the precondition: "the new console already interprets VT; this test can't
+  show #349. exit=0 modeBefore=0x7 modeAfter=0x7 titleBefore=[Administrator:
+  C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe] titleAfter=[same] screen buffer (51 chars):
+  [before\n[REDACTED: my-secret]\nafter\nT41-AFTER-TSWAP\n]". On Windows Server 2025 a new console has
+  `ENABLE_VIRTUAL_TERMINAL_PROCESSING` on before tswap runs; on the owner's laptop it was off, which is #349. So the
+  script recreates the owner's condition itself instead of relying on the console's default:
+  - `SetConsoleMode` joins the `Add-Type` block. After reading the original mode, the script calls
+    `SetConsoleMode(handle, original & ~0x4)` and fails through `Fail-Script` if that returns false. It then reads the
+    mode back, and that read-back is `modeBefore`. The untouched value is written as `modeOriginal` in `result.json`
+    and in the dump.
+  - The precondition row stays exactly as it is, on `modeBefore` (the read-back): if the console refuses to switch VT
+    off, the test still fails loudly.
+  - The `modeAfter == modeBefore` row stays: tswap must put back the mode it found (VT off), which is what B3 breaks.
+  - If Windows PowerShell turns VT back on around native commands by itself, B1 will pass and B3 may pass too. Don't
+    work around that; the break runs show it and the controller reports it to the owner.
+
 ## Out of scope
 
 - Any change to `run`, `WindowsVirtualTerminal`, `TerminalTitleMatcher` or RedactingPty, even if the test finds

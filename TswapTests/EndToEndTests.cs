@@ -1441,8 +1441,9 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     /// console window (<c>CREATE_NEW_CONSOLE</c>), runs <c>tswap run</c> there with stdout on the console itself, and
     /// reads back what the console shows: its screen buffer, its window title and its output mode, before and after.
     /// The pseudo console's screen clear passes through on purpose (docs/install.md), so nothing is asserted about
-    /// it. Windows only (CI); returns early elsewhere, as its neighbours do. If the new console interprets VT before
-    /// the run, the test can't show #349: report it, never loosen the precondition.
+    /// it. Windows only (CI); returns early elsewhere, as its neighbours do. A13: a new console on the CI image has VT
+    /// processing on already, so the script switches it off before the run (the owner's console had it off); if the
+    /// console still interprets VT then, the test can't show #349: report it, never loosen the precondition.
     /// </summary>
     [Fact]
     public void Run_ClassicConsole_ShowsNoEscapeText_WindowsConsole()
@@ -1536,13 +1537,14 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         if (result.TryGetProperty("error", out var error))
             Assert.Fail($"the console script failed (powershell.exe exit {consoleExit}): {error.GetString()}");
 
+        var modeOriginal = result.GetProperty("modeOriginal").GetUInt32();
         var modeBefore = result.GetProperty("modeBefore").GetUInt32();
         var modeAfter = result.GetProperty("modeAfter").GetUInt32();
         var exitCode = result.GetProperty("exit").GetInt32();
         var titleBefore = result.GetProperty("titleBefore").GetString() ?? "";
         var titleAfter = result.GetProperty("titleAfter").GetString() ?? "";
         var buffer = result.GetProperty("buffer").GetString() ?? "";
-        var dump = $"exit={exitCode} modeBefore=0x{modeBefore:X} modeAfter=0x{modeAfter:X} " +
+        var dump = $"exit={exitCode} modeOriginal=0x{modeOriginal:X} modeBefore=0x{modeBefore:X} modeAfter=0x{modeAfter:X} " +
                    $"titleBefore=[{EscapeVt(titleBefore)}] titleAfter=[{EscapeVt(titleAfter)}] " +
                    $"screen buffer ({buffer.Length} chars): [{EscapeVt(buffer)}]";
 
@@ -1616,6 +1618,9 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
 
                 [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
                 public static extern uint GetConsoleTitle(StringBuilder lpConsoleTitle, uint nSize);
+
+                [DllImport("kernel32.dll", SetLastError = true)]
+                public static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint dwMode);
             }
             '@
 
@@ -1647,6 +1652,17 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
                 Fail-Script ('GetStdHandle(STD_OUTPUT_HANDLE) failed (handle ' + $handleValue + '), Win32 error ' + $err)
             }
 
+            # A13: a new console on the CI image has VT processing on already; the owner's had it off (#349). The
+            # script switches it off itself, and the mode read back afterwards is modeBefore.
+            $modeOriginal = Get-OutputMode $handle 'original'
+            $vtOff = $modeOriginal
+            if (($modeOriginal -band 4) -ne 0) {
+                $vtOff = [uint32]($modeOriginal - 4)
+            }
+            if (-not [T41Console]::SetConsoleMode($handle, $vtOff)) {
+                $err = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+                Fail-Script ('SetConsoleMode (VT off, mode ' + $vtOff + ') failed, Win32 error ' + $err)
+            }
             $modeBefore = Get-OutputMode $handle 'before'
             $titleBefore = Get-Title 'before'
 
@@ -1675,6 +1691,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
             $buffer = $rows -join "`n"
 
             Write-Result ([ordered]@{
+                modeOriginal = $modeOriginal
                 modeBefore = $modeBefore
                 modeAfter = $modeAfter
                 'exit' = $tswapExit
