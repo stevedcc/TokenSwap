@@ -6,8 +6,8 @@ body:
     attributes:
       value: |
         Thanks for trying tswap. Short notes are fine: unclear messages and awkward steps are exactly what helps.
-        **Never paste a secret value.** For output, use `tswap redact <file>` and paste what it prints (it masks only
-        values your vault knows). Questions and ideas are welcome in [Discussions](https://github.com/stevedcc/TokenSwap/discussions) too.
+        **Never paste a secret value.** For output, use `tswap redact output.txt > redacted.txt` and paste redacted.txt,
+        not the terminal (its warnings quote flagged lines unmasked); it masks only values your vault knows. Questions and ideas are welcome in [Discussions](https://github.com/stevedcc/TokenSwap/discussions) too.
   - type: input
     id: version
     attributes:

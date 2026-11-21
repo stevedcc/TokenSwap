@@ -6,9 +6,10 @@ body:
     attributes:
       value: |
         Thanks for reporting. **Never paste a secret value**, not even a burned one. For output that may contain
-        secrets, save it to a file and run `tswap redact <file>`: paste **what it prints** (the file itself is not
-        changed; delete it afterwards). `redact` masks only values your vault knows, so check for anything else
-        yourself (a recovery key, a vault password, a value you never stored).
+        secrets, save it to a file and run `tswap redact output.txt > redacted.txt`, then paste **redacted.txt**.
+        Don't paste the terminal: `redact`'s warnings there quote the lines they flag, unmasked. Delete both files
+        afterwards. `redact` masks only values your vault knows, so check for anything else yourself (a recovery
+        key, a vault password, a value you never stored).
 
         If a secret does land in an issue, editing the issue is not enough: burn and rotate it
         ([rotating and burning](https://github.com/stevedcc/TokenSwap/blob/main/docs/rotating-and-burning.md)).
@@ -79,7 +80,7 @@ body:
     id: output
     attributes:
       label: Output
-      description: The full output, after `tswap redact` or with every secret value removed by hand.
+      description: The full output, as `tswap redact` wrote it to a file (not its terminal warnings), or with every secret value removed by hand.
       render: text
   - type: checkboxes
     id: no-secrets
