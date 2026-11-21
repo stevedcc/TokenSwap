@@ -439,39 +439,110 @@ label: myapp-prod";
     }
 
     // -------------------------------------------------------------------------
-    // Redact.FindUnknownSecrets
+    // Redact.MaskUnknownSecrets (brief T45, #389; moved from FindUnknownSecrets)
     // -------------------------------------------------------------------------
 
     [Fact]
-    public void FindUnknownSecrets_MatchesCredentialKeyword()
+    public void MaskUnknownSecrets_MatchesCredentialKeyword()
     {
-        var hits = Redact.FindUnknownSecrets("password: abcdefghijklmno");
+        var hits = Redact.MaskUnknownSecrets("password: abcdefghijklmno").Hits;
         Assert.Single(hits);
         Assert.Equal(1, hits[0].Line);
     }
 
     [Fact]
-    public void FindUnknownSecrets_ShortValue_NotMatched()
+    public void MaskUnknownSecrets_ShortValue_NotMatched()
     {
         // Value shorter than 12 chars should not trigger the heuristic
-        var hits = Redact.FindUnknownSecrets("password: short");
+        var hits = Redact.MaskUnknownSecrets("password: short").Hits;
         Assert.Empty(hits);
     }
 
     [Fact]
-    public void FindUnknownSecrets_NoKeyword_NotMatched()
+    public void MaskUnknownSecrets_NoKeyword_NotMatched()
     {
-        var hits = Redact.FindUnknownSecrets("hostname: abcdefghijklmno");
+        var hits = Redact.MaskUnknownSecrets("hostname: abcdefghijklmno").Hits;
         Assert.Empty(hits);
     }
 
     [Fact]
-    public void FindUnknownSecrets_MultipleLines_ReturnsCorrectLineNumbers()
+    public void MaskUnknownSecrets_MultipleLines_ReturnsCorrectLineNumbers()
     {
         var content = "ok: nothing\ntoken: abcdefghijklmnop\nfine: nope";
-        var hits = Redact.FindUnknownSecrets(content);
+        var hits = Redact.MaskUnknownSecrets(content).Hits;
         Assert.Single(hits);
         Assert.Equal(2, hits[0].Line);
+    }
+
+    private const string Mask = "[POSSIBLE SECRET]";
+
+    /// <summary>
+    /// The brief's table (Task 1, A1, A7): input, the masked text, and the hits as "line:keyword" pairs
+    /// joined by '|' ("" for none).
+    /// </summary>
+    public static TheoryData<string, string, string> MaskRows => new()
+    {
+        { "password: abcdefghijklmno", "password: [POSSIBLE SECRET]", "1:password" },
+        { "TOKEN=\"abcdefghijklmnop\"", "TOKEN=\"[POSSIBLE SECRET]\"", "1:TOKEN" },
+        { "a: 1\r\napi_key=ABCDEFGHIJKLMNOP==\r\n", "a: 1\r\napi_key=[POSSIBLE SECRET]\r\n", "2:api_key" },
+        { "a: 1\napi_key=ABCDEFGHIJKLMNOP==\nb: 2", "a: 1\napi_key=[POSSIBLE SECRET]\nb: 2", "2:api_key" },
+        { "password=aaaaaaaaaaaaaa token=bbbbbbbbbbbbbbbb", "password=[POSSIBLE SECRET] token=[POSSIBLE SECRET]", "1:password|1:token" },
+        { "password: short", "password: short", "" },
+        { "hostname: abcdefghijklmno", "hostname: abcdefghijklmno", "" },
+        { "password: [REDACTED: db-pw]", "password: [REDACTED: db-pw]", "" },
+        // A1: the whole run from the value group's first character.
+        { "password: CorrectHorse!Battery", "password: [POSSIBLE SECRET]", "1:password" },
+        { "token: eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJl", "token: [POSSIBLE SECRET]", "1:token" },
+        { "token=\"abcdefghijkl!x\" next", "token=\"[POSSIBLE SECRET]\" next", "1:token" },
+        { "password=aaaaaaaaaaaaaa,user=bob", "password=[POSSIBLE SECRET],user=bob", "1:password" },
+        { "password=aaaaaaaaaaaaaatoken=bbbbbbbbbbbbbbbb", "password=[POSSIBLE SECRET]", "1:password" },
+        // A match whose value starts inside a run already masked adds nothing (implementer's ruling).
+        { "password: CorrectHorse!token=abcdefghijklmnop", "password: [POSSIBLE SECRET]", "1:password" },
+        // A7: quotes, '#' and '&' inside a value; a quoted value ends at its matching quote.
+        { "password: CorrectHorse'Battery#Staple&x", "password: [POSSIBLE SECRET]", "1:password" },
+        { "password=\"CorrectHorse'Battery#Staple\" next", "password=\"[POSSIBLE SECRET]\" next", "1:password" },
+        { "password='CorrectHorse\"Battery&Staple' next", "password='[POSSIBLE SECRET]' next", "1:password" },
+        { "token: abcdefghijklmnop # a comment", "token: [POSSIBLE SECRET] # a comment", "1:token" },
+    };
+
+    [Theory]
+    [MemberData(nameof(MaskRows))]
+    public void MaskUnknownSecrets_MasksOnlyTheValueRun(string input, string expectedMasked, string expectedHits)
+    {
+        var (masked, hits) = Redact.MaskUnknownSecrets(input);
+
+        Assert.Equal(expectedMasked, masked);
+        Assert.Equal(expectedHits, string.Join('|', hits.Select(h => $"{h.Line}:{h.Keyword}")));
+        // A2: the characters the mask replaced appear nowhere in the output and in no hit.
+        var runs = ReplacedRuns(input, expectedMasked);
+        Assert.Equal(expectedHits == "" ? 0 : expectedHits.Split('|').Length, runs.Count);
+        foreach (var run in runs)
+        {
+            Assert.DoesNotContain(run, masked);
+            foreach (var (_, keyword) in hits)
+                Assert.DoesNotContain(run, keyword);
+        }
+    }
+
+    /// <summary>
+    /// The input text each <c>[POSSIBLE SECRET]</c> of <paramref name="masked"/> stands for: the text
+    /// between the kept pieces around it, found in <paramref name="input"/> in order.
+    /// </summary>
+    private static List<string> ReplacedRuns(string input, string masked)
+    {
+        var kept = masked.Split(Mask);
+        Assert.StartsWith(kept[0], input);
+        var at = kept[0].Length;
+        List<string> runs = [];
+        for (var i = 1; i < kept.Length; i++)
+        {
+            var end = i == kept.Length - 1 ? input.Length - kept[i].Length : input.IndexOf(kept[i], at + 1, StringComparison.Ordinal);
+            Assert.True(end > at, $"no replaced text before piece {i} of '{masked}'");
+            runs.Add(input[at..end]);
+            at = end + kept[i].Length;
+        }
+        Assert.Equal(input.Length, at);
+        return runs;
     }
 
     // -------------------------------------------------------------------------
