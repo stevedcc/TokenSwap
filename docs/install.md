@@ -216,7 +216,7 @@ the quarantine mark on the unpacked folder, as yourself (no admin needed):
 xattr -dr com.apple.quarantine <folder>
 ```
 
-`curl -LO <archive URL>` downloads carry no quarantine mark. The Windows binaries before 0.3.1 are not signed either.
+`curl -LO <archive URL>` downloads carry no quarantine mark. The Windows binaries before v0.3.1-rc.2 are not signed either.
 
 ## Building from source
 
