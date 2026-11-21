@@ -129,6 +129,19 @@ warning. Each time the new command test must fail.
 - **A6 (MiMo).** Task 2's commit message says the warning's format changed on purpose. `TswapCore/Prompt.cs` stays as
   it is (no prompt-hash change for this).
 
+- **A7 (owner, 2026-11-21: "when I want to make some escaping trouble I make sure &, ' and # are in there").** A1's
+  delimiter list cut a value at a quote inside it. The run rule becomes: if the value group is **preceded by** a quote
+  (`"` or `'`), the run ends at the **matching** quote of the same kind (or the end of the line); otherwise it ends at
+  the next whitespace, `,`, `;`, `)`, `]`, `}` or the end of the line, and quotes, `#` and `&` inside it are part of the
+  value. Add these rows (A1's rows keep their results):
+
+  | Input | `Masked` |
+  |---|---|
+  | `password: CorrectHorse'Battery#Staple&x` | `password: [POSSIBLE SECRET]` |
+  | `password="CorrectHorse'Battery#Staple" next` | `password="[POSSIBLE SECRET]" next` |
+  | `password='CorrectHorse"Battery&Staple' next` | `password='[POSSIBLE SECRET]' next` |
+  | `token: abcdefghijklmnop # a comment` | `token: [POSSIBLE SECRET] # a comment` |
+
 ## Out of scope
 
 - The guessing-oracle rate limit for redaction (#252).
