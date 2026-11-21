@@ -2,6 +2,7 @@ using TswapCli;
 using TswapCore;
 using TswapCore.Vault;
 using Xunit;
+using Xunit.Abstractions;
 using static TswapTests.EvilValues;
 
 namespace TswapTests;
@@ -25,9 +26,11 @@ public sealed class EvilValuesTests : IDisposable
     private readonly string _filesRoot;
     private readonly byte[] _testKey =
         Convert.FromHexString("0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF");
+    private readonly ITestOutputHelper _output;
 
-    public EvilValuesTests()
+    public EvilValuesTests(ITestOutputHelper output)
     {
+        _output = output;
         _tempDir = Path.Combine(Path.GetTempPath(), "tswap-evil-test-" + Guid.NewGuid().ToString("N")[..8]);
         _configDir = Path.Combine(_tempDir, "config");
         _work = Path.Combine(_tempDir, "work");
@@ -309,5 +312,227 @@ public sealed class EvilValuesTests : IDisposable
         Assert.True(exit == 0, $"{caseName}: run failed: {err}");
         Assert.True(pty.Argv is ["tool", var previous] && previous == stored, $"{caseName}: {{{{name:previous}}}} isn't exactly the case value");
         Assert.Equal(RotatedSibling, GetValue(caseName));
+    }
+
+    /// <summary>A11: the first of <paramref name="candidates"/> that holds no part of <paramref name="value"/>.</summary>
+    private static string FileNameFor(string caseName, string value, params string[] candidates)
+    {
+        var name = candidates.FirstOrDefault(c => NameIsSafeFor(c, value));
+        Assert.True(name is not null, $"{caseName}: no candidate file name is safe for this value (A11)");
+        return name!;
+    }
+
+    /// <summary>The lines a masking command reads: the value inside a line, and for a short value the T30 pair.</summary>
+    private static string FileLines(string stored) =>
+        IsShort(stored) ? $"token: {stored}\nother: {stored}ylophone\n" : $"token: {stored}\n";
+
+    // ── Task 2, invariant 1: the {{@file}} fill ─────────────────────────────────────────────────────────────────
+
+    public static TheoryData<string> FillRoundtripCases => CasesFor(FillRoundtrip);
+
+    [Theory, MemberData(nameof(FillRoundtripCases))]
+    public void FillRoundtrip_FilledCopyDecodesToTheStoredValue(string caseName) => CheckFillRoundtrip(caseName);
+
+    private void CheckFillRoundtrip(string caseName)
+    {
+        var stored = Stored(EvilValues.Get(caseName).Value);
+        IngestCase(caseName, EvilValues.Get(caseName).Value);
+        var file = FileNameFor(caseName, stored, "file.yaml", "values.yml");
+        File.WriteAllText(Path.Combine(_work, file), $"key: \"\"  # tswap: {Name}\n");
+        string? copy = null;
+        var pty = new RecordingPty();
+        pty.Child = argv =>
+        {
+            copy = File.ReadAllText(argv[1]);
+            return "";
+        };
+
+        var (exit, stdout, err) = Execute("", ["run", "tool", "{{@" + file + "}}"], pty);
+
+        Assert.True(exit == 0, $"{caseName}: run failed: {err}");
+        Assert.True(pty.Argv is ["tool", _], $"{caseName}: argv isn't [tool, the copy's path]");
+        Assert.True(copy is not null, $"{caseName}: the child never read the filled copy");
+        Assert.True(DecodeFilledLine(caseName, copy!) == GetValue(caseName), $"{caseName}: the filled copy decodes to another value than get's");
+        AssertNoValueIn(caseName, stored, "run's stdout", stdout);
+        AssertNoValueIn(caseName, stored, "run's stderr", err);
+    }
+
+    /// <summary>
+    /// A14: the value of the filled line <c>key: "…"  # tswap: name</c>, decoded by the escapes docs/security-model.md
+    /// documents for a double-quoted value ("Files with secrets": <c>\\</c>, <c>\"</c>, <c>\n</c>, <c>\r</c>,
+    /// <c>\t</c>, <c>\uXXXX</c>). An unescaped quote, any other escape or a raw control character (one the doc says is
+    /// escaped) fails, naming the position.
+    /// </summary>
+    private static string DecodeFilledLine(string caseName, string copy)
+    {
+        const string prefix = "key: \"";
+        var suffix = $"\"  # tswap: {Name}\n";
+        Assert.True(copy.StartsWith(prefix, StringComparison.Ordinal), $"{caseName}: the filled line doesn't start with the key and a double quote");
+        Assert.True(copy.EndsWith(suffix, StringComparison.Ordinal), $"{caseName}: the filled line doesn't end with a double quote and the marker");
+        var body = copy[prefix.Length..^suffix.Length];
+        var decoded = new System.Text.StringBuilder(body.Length);
+        for (var i = 0; i < body.Length; i++)
+        {
+            var c = body[i];
+            if (c == '"')
+                Assert.Fail($"{caseName}: an unescaped double quote at index {i} of the scalar");
+            if (c < ' ' || c is >= '\u007F' and <= '\u009F' or '\u2028' or '\u2029')
+                Assert.Fail($"{caseName}: a raw control character U+{(int)c:X4} at index {i} of the scalar");
+            if (c != '\\')
+            {
+                decoded.Append(c);
+                continue;
+            }
+            Assert.True(i + 1 < body.Length, $"{caseName}: the scalar ends in a lone backslash");
+            var escape = body[++i];
+            switch (escape)
+            {
+                case '\\': decoded.Append('\\'); break;
+                case '"': decoded.Append('"'); break;
+                case 'n': decoded.Append('\n'); break;
+                case 'r': decoded.Append('\r'); break;
+                case 't': decoded.Append('\t'); break;
+                case 'u':
+                    Assert.True(i + 4 < body.Length
+                        && int.TryParse(body.AsSpan(i + 1, 4), System.Globalization.NumberStyles.AllowHexSpecifier, null, out _),
+                        $"{caseName}: a \\u escape without four hex digits at index {i}");
+                    decoded.Append((char)int.Parse(body.AsSpan(i + 1, 4), System.Globalization.NumberStyles.AllowHexSpecifier));
+                    i += 4;
+                    break;
+                default:
+                    Assert.Fail($"{caseName}: an undocumented escape '\\{escape}' at index {i - 1} of the scalar");
+                    break;
+            }
+        }
+        return decoded.ToString();
+    }
+
+    // ── Task 2, invariant 2: redact ────────────────────────────────────────────────────────────────────────────
+
+    public static TheoryData<string> RedactMasksCases => CasesFor(RedactMasks);
+
+    [Theory, MemberData(nameof(RedactMasksCases))]
+    public void RedactMasks_ValueInsideALine_Masked(string caseName) => CheckRedactMasks(caseName);
+
+    private void CheckRedactMasks(string caseName)
+    {
+        var stored = Stored(EvilValues.Get(caseName).Value);
+        IngestCase(caseName, EvilValues.Get(caseName).Value);
+        var path = Path.Combine(_work, FileNameFor(caseName, stored, "redact.txt", "masked.log"));
+        File.WriteAllText(path, FileLines(stored));
+
+        var (exit, stdout, err) = Execute("", ["redact", path]);
+
+        Assert.True(exit == 0, $"{caseName}: redact failed: {err}");
+        if (IsShort(stored))
+            Assert.True(stdout == $"token: {Label}\nother: {stored}ylophone\n",
+                $"{caseName}: the short value's whole-word masking differs ({stdout.Length} chars of output)");
+        Assert.True(stdout.Contains(Label, StringComparison.Ordinal), $"{caseName}: '{Label}' missing from redact's output");
+        AssertNoValueIn(caseName, stored, "redact's stdout", stdout);
+        AssertNoValueIn(caseName, stored, "redact's stderr", err);
+    }
+
+    // ── Task 2, invariant 3: tocomment --dry-run ───────────────────────────────────────────────────────────────
+
+    public static TheoryData<string> TocommentDryrunCases => CasesFor(TocommentDryrun);
+
+    [Theory, MemberData(nameof(TocommentDryrunCases))]
+    public void TocommentDryrun_NamesTheSecret_PrintsNoValue(string caseName) => CheckTocommentDryrun(caseName);
+
+    private void CheckTocommentDryrun(string caseName)
+    {
+        var stored = Stored(EvilValues.Get(caseName).Value);
+        IngestCase(caseName, EvilValues.Get(caseName).Value);
+        var path = Path.Combine(_work, FileNameFor(caseName, stored, "tocomment.txt", "config.txt"));
+        var content = FileLines(stored);
+        File.WriteAllText(path, content);
+
+        var (exit, stdout, err) = Execute("", ["tocomment", path, "--dry-run"]);
+
+        Assert.True(exit == 0, $"{caseName}: tocomment failed: {err.Length} chars of stderr");
+        Assert.True(err.Contains($"  + token: \"\"  # tswap: {Name}", StringComparison.Ordinal), $"{caseName}: the change doesn't replace the value with '# tswap: {Name}'");
+        Assert.False(err.Contains($"# tswap: {OtherSecretName}", StringComparison.Ordinal), $"{caseName}: the change names {OtherSecretName}");
+        // Only the line with the value; for a short value, not the line where it is inside a word (T30, A4).
+        Assert.True(err.Contains("(dry run) 1 line(s) would be modified.", StringComparison.Ordinal), $"{caseName}: not exactly one line would be modified");
+        Assert.True(File.ReadAllText(path) == content, $"{caseName}: --dry-run changed the file");
+        AssertNoValueIn(caseName, stored, "tocomment's stdout", stdout);
+        // tocomment prints its replacement, '""  # tswap: name', by design; for a value that is itself marker syntax
+        // ('# tswap: other-secret') that text holds an 8-code-point window of the value without being a fragment of it.
+        AssertNoValueIn(caseName, stored, "tocomment's stderr (its replacements left out)", err.Replace(TocommentReplacement, ""));
+    }
+
+    /// <summary>What tocomment puts in place of the value (ToCommentProcessor.Replacement).</summary>
+    private const string TocommentReplacement = "\"\"  # tswap: " + Name;
+
+    // Findings (A1): each pair is left out of its theory by KnownFindings; the full assertion is here, skipped.
+
+    [Fact(Skip = "T46 finding 1: redact turns the file's CRLF into LF before matching, so a value holding CRLF is not masked")]
+    public void Finding1_CrlfInside_RedactMasks() => CheckRedactMasks("crlf-inside");
+
+    [Fact(Skip = "T46 finding 2: tocomment matches line by line, so a value holding a line break inside a line is not found")]
+    public void Finding2_LfInside_TocommentDryrun() => CheckTocommentDryrun("lf-inside");
+
+    [Fact(Skip = "T46 finding 2: tocomment matches line by line, so a value holding a line break inside a line is not found")]
+    public void Finding2_CrlfInside_TocommentDryrun() => CheckTocommentDryrun("crlf-inside");
+
+    // ── Task 2, invariant 4: export, then import into a fresh vault ────────────────────────────────────────────
+
+    public static TheoryData<string> ExportImportCases => CasesFor(ExportImport);
+
+    [Theory, MemberData(nameof(ExportImportCases))]
+    public void ExportImport_IntoAFreshVault_GetReturnsTheValue(string caseName) => CheckExportImport(caseName);
+
+    private void CheckExportImport(string caseName)
+    {
+        var stored = Stored(EvilValues.Get(caseName).Value);
+        IngestCase(caseName, EvilValues.Get(caseName).Value);
+        var export = Path.Combine(_tempDir, FileNameFor(caseName, stored, "backup.json", "archive.json"));
+        var (exportExit, _, exportErr) = Execute("pass\npass\n", ["export", export]);
+        Assert.True(exportExit == 0, $"{caseName}: export failed: {exportErr}");
+        var fresh = Path.Combine(_tempDir, "fresh");
+        Directory.CreateDirectory(fresh);
+        Assert.Equal(0, Execute("", ["init", "--yubikey"], configDir: fresh).Exit);
+
+        var (importExit, _, importErr) = Execute("pass\n", ["import", export], configDir: fresh);
+
+        Assert.True(importExit == 0, $"{caseName}: import failed: {importErr}");
+        Assert.True(GetValue(caseName, configDir: fresh) == stored, $"{caseName}: get after import doesn't return the stored value");
+    }
+
+    // ── Task 2: NFD, an owner decision (#392); nothing asserted about the NFD form's masking ────────────────────
+
+    private static string NfdLine(string output) => output.Split('\n')[1];
+
+    [Fact]
+    public void Nfd_InRunOutput_RecordedForTheOwner()
+    {
+        var nfc = EvilValues.Get("nfc-e-acute").Value;
+        var nfd = nfc.Normalize(System.Text.NormalizationForm.FormD);
+        Assert.NotEqual(nfc, nfd);
+        IngestCase("nfc-e-acute", nfc);
+        var pty = new RecordingPty { Child = _ => $"nfc {nfc} end\nnfd {nfd} end\n" };
+
+        var (exit, _, err) = Execute("", ["run", "tool", "{{" + Name + "}}"], pty);
+
+        Assert.True(exit == 0, err);
+        var output = pty.Output.ToString();
+        Assert.StartsWith($"nfc {Label} end\n", output); // the stored (NFC) form is masked
+        _output.WriteLine($"T46 owner decision (NFC/NFD), run: the NFD form was {(NfdLine(output) == $"nfd {Label} end" ? "masked" : "not masked")}");
+    }
+
+    [Fact]
+    public void Nfd_InRedactInput_RecordedForTheOwner()
+    {
+        var nfc = EvilValues.Get("nfc-e-acute").Value;
+        var nfd = nfc.Normalize(System.Text.NormalizationForm.FormD);
+        IngestCase("nfc-e-acute", nfc);
+        var path = Path.Combine(_work, "redact.txt");
+        File.WriteAllText(path, $"nfc {nfc} end\nnfd {nfd} end\n");
+
+        var (exit, stdout, err) = Execute("", ["redact", path]);
+
+        Assert.True(exit == 0, err);
+        Assert.StartsWith($"nfc {Label} end\n", stdout); // the stored (NFC) form is masked
+        _output.WriteLine($"T46 owner decision (NFC/NFD), redact: the NFD form was {(NfdLine(stdout) == $"nfd {Label} end" ? "masked" : "not masked")}");
     }
 }

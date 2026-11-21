@@ -157,7 +157,13 @@ public static class EvilValues
     public static readonly IReadOnlyDictionary<(string Case, string Invariant), (int Number, string Line)> KnownFindings =
         new Dictionary<(string, string), (int, string)>
         {
+            [("crlf-inside", RedactMasks)] = (1, Finding1),
+            [("lf-inside", TocommentDryrun)] = (2, Finding2),
+            [("crlf-inside", TocommentDryrun)] = (2, Finding2),
         };
+
+    private const string Finding1 = "redact turns the file's CRLF into LF before matching, so a value holding CRLF is not masked";
+    private const string Finding2 = "tocomment matches line by line, so a value holding a line break inside a line is not found";
 
     /// <summary>
     /// The theory data of <paramref name="invariant"/>: the names of the cases <paramref name="where"/> selects (all
