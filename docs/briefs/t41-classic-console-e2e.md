@@ -8,13 +8,18 @@ at 3fba65a. Read AGENTS.md and CLAUDE.md first, then `TswapCli/WindowsVirtualTer
 (lines 23-90), the "Windows ConPTY coverage" section (`Run_NoChildTitle_WindowsConPty` in particular) and the
 P/Invoke helpers below it.
 
-One commit for the test, test first in the sense of rule 7 (below: break it three times on CI and name each
-result in the commit message). `./runtests.sh --unit` and the E2E category locally before committing (the new test
+One commit for the test. Its proof is three break-it-once CI runs (below), each named in the commit message with the
+test and assertion that failed. `./runtests.sh --unit` and the E2E category locally before committing (the new test
 returns early off Windows, as its neighbours do). No hardware suites, `ykman`, `sudo`, real YubiKeys or
 `~/.config/tswap`. Commits end with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`, explicit-path
 commits, no push, merge or rebase: **the controller pushes `brief/t41`, runs Windows CI and the break runs, and
 hands you the logs.** Stop and report when the brief can't be built as written. No product code changes
 (`TswapCli/`, `TswapCore/`), and no existing test changes.
+
+**Review history.** Round 1 (GLM and MiMo, 516ed76): both "no". GLM's Critical: the brief asserted that the
+screen isn't cleared, but T35 decided the pseudo console's clear passes through (documented in `docs/install.md`,
+accepted in the owner's check 3 on 2026-11-20), so the test could never pass → A1. MiMo I1-I3 → A2, A3 (I3 is void
+with A1). Minors → A4-A9. Where Task 1 and an amendment differ, the amendment wins.
 
 ## Why
 
@@ -90,6 +95,35 @@ line, never committed to `brief/t41`):
 Write the three one-line diffs into your report. The commit message names each break, the test that failed and
 the assertion's message. The test must also pass in **three** separate Windows CI runs of the unchanged tree (it
 starts a real window, so timing matters).
+
+## Amendments (round 1)
+
+- **A1 (GLM Critical + Important 2, MiMo I3).** Drop step 3 (`T41-BEFORE-TSWAP`) and the assertion row
+  "buffer contains `T41-BEFORE-TSWAP`". T35 decided the screen clear: it passes through on purpose and is documented
+  ("The pseudo console clears the window before the command's output", `docs/install.md`). This test covers #349's
+  `←[` half and the title half only, as #367 scopes it. The "Why" sentence about T35 never deciding is wrong; ignore it.
+- **A2 (MiMo I1).** Read the window title **before** the run as well (step 2), both times with `GetConsoleTitle`
+  (`kernel32`, in the same `Add-Type` block), not `$Host.UI.RawUI.WindowTitle`. Write `titleBefore` and
+  `titleAfter`. The title rows become: `titleAfter` **equals** `titleBefore`; and `titleAfter` doesn't contain
+  `pwsh` (ignore case). B2 must fail on the first of these.
+- **A3 (MiMo I2).** Step 2 checks `GetStdHandle` and `GetConsoleMode`'s results. If either fails, the script writes
+  `{ "error": "<which call failed, with the Win32 error>" }` to `result.json` and exits 2, and the test fails with
+  that message. The precondition is never read from a failed call.
+- **A4 (GLM Minor 3).** The escape row also checks for `←` (U+2190): the classic console shows ESC as that glyph,
+  and the buffer may hold the glyph instead of `\u001b`.
+- **A5 (GLM Minor 4 + 5, MiMo Minor 2).** The script writes `result.json` without a BOM:
+  `[IO.File]::WriteAllText($Result, $json, (New-Object Text.UTF8Encoding $false))`. The test reads it with
+  `File.ReadAllText`. If it is missing, empty or doesn't parse, the test fails with "the console script never wrote
+  a usable result.json", plus the exit code, or "timed out after 90 s".
+- **A6 (MiMo Minor 1).** On timeout, kill the whole tree:
+  `Process.GetProcessById((int)pi.dwProcessId).Kill(entireProcessTree: true)`, then wait for it.
+- **A7 (MiMo Minor 3).** The test writes `classic.ps1` as UTF-8 **with** a BOM (Windows PowerShell 5.1 reads a
+  BOM-less script as ANSI), doubles every `'` in the paths it embeds in single quotes, starts
+  `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe` by its full path, and builds the command line with
+  the file's `QuoteWindowsArg`. The struct to pass is the file's `WinStartupInfo` (the plain one).
+- **A8 (MiMo Minor 4).** Each table row is its own `Assert.True(..., dump)`, in table order.
+- **A9 (MiMo Minor 5).** The header's "rule 7" is the break-it-once requirement spelled out in Task 1: three CI
+  breaks, each failing the named row.
 
 ## Out of scope
 
