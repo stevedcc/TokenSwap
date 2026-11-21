@@ -1458,9 +1458,15 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         var resultPath = Path.Combine(_tempDir, "result.json");
         var classicScript = Path.Combine(_tempDir, "classic.ps1");
         // A7: UTF-8 with a BOM, as Windows PowerShell 5.1 reads a BOM-less script as ANSI.
-        File.WriteAllText(classicScript, ClassicConsoleScript(printScript), new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
+        var scriptText = ClassicConsoleScript(printScript);
+        File.WriteAllText(classicScript, scriptText, new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
 
         var powershell = Environment.ExpandEnvironmentVariables(@"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe");
+        // CI round 1: Windows PowerShell 5.1's parser reads the script first, so a parse error is reported as such
+        // (powershell -File only exits 1 on one, in a window nobody sees).
+        var parseErrors = WindowsPowerShellParseErrors(powershell, classicScript);
+        Assert.True(parseErrors.Length == 0,
+            $"Windows PowerShell can't parse classic.ps1:\n{parseErrors}\nclassic.ps1:\n{NumberedLines(scriptText)}");
         string[] argv = [powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", classicScript, "-Result", resultPath];
         var cmdStr = string.Join(' ', argv.Select(QuoteWindowsArg));
         var cmdLine = new char[cmdStr.Length + 1];
@@ -1523,7 +1529,8 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
             }
         }
         Assert.True(usable,
-            $"the console script never wrote a usable result.json (powershell.exe exit {consoleExit}): [{EscapeVt(raw)}]");
+            $"the console script never wrote a usable result.json (powershell.exe exit {consoleExit}): [{EscapeVt(raw)}]" +
+            (File.Exists(resultPath) ? "" : $"\nclassic.ps1:\n{NumberedLines(scriptText)}"));
         // A3: a failed GetStdHandle or GetConsoleMode (or any other script error) is reported as such; the
         // precondition is never read from a failed call.
         if (result.TryGetProperty("error", out var error))
@@ -1571,8 +1578,6 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     /// </summary>
     private string ClassicConsoleScript(string printScript)
     {
-        static string Quote(string value) => "'" + value.Replace("'", "''") + "'";
-
         const string script = """
             param([Parameter(Mandatory = $true)][string]$Result)
             $ErrorActionPreference = 'Stop'
@@ -1671,7 +1676,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
             Write-Result ([ordered]@{
                 modeBefore = $modeBefore
                 modeAfter = $modeAfter
-                exit = $tswapExit
+                'exit' = $tswapExit
                 titleBefore = $titleBefore
                 titleAfter = $titleAfter
                 buffer = $buffer
@@ -1679,11 +1684,53 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
             exit 0
             """;
 
+        // CRLF throughout, whatever line endings the checkout gave this source file.
         return script
-            .Replace("@@KEY@@", Quote(_testKeyHex))
-            .Replace("@@CONFIG@@", Quote(_tempDir))
-            .Replace("@@TSWAP@@", Quote(_binaryPath))
-            .Replace("@@PRINT@@", Quote(printScript));
+            .Replace("@@KEY@@", PsQuote(_testKeyHex))
+            .Replace("@@CONFIG@@", PsQuote(_tempDir))
+            .Replace("@@TSWAP@@", PsQuote(_binaryPath))
+            .Replace("@@PRINT@@", PsQuote(printScript))
+            .ReplaceLineEndings("\r\n");
+    }
+
+    // A single-quoted PowerShell literal, every ' doubled (A7).
+    private static string PsQuote(string value) => "'" + value.Replace("'", "''") + "'";
+
+    // Brief T41, CI round 1: a script's text with 1-based line numbers, for a failure message.
+    private static string NumberedLines(string text) =>
+        string.Join('\n', text.ReplaceLineEndings("\n").Split('\n').Select((line, i) => $"{i + 1,4}: {line}"));
+
+    /// <summary>
+    /// Brief T41, CI round 1: parses <paramref name="scriptPath"/> with Windows PowerShell 5.1's own parser in a
+    /// separate, redirected process (no new console) and returns its parse errors, one per line with line and
+    /// column; empty when it parses.
+    /// </summary>
+    private static string WindowsPowerShellParseErrors(string powershell, string scriptPath)
+    {
+        var command =
+            "$tokens = $null; $errors = $null; " +
+            $"[void][System.Management.Automation.Language.Parser]::ParseFile({PsQuote(scriptPath)}, [ref]$tokens, [ref]$errors); " +
+            "foreach ($e in $errors) { 'line ' + $e.Extent.StartLineNumber + ', column ' + $e.Extent.StartColumnNumber + ': ' + $e.Message }";
+        var psi = new ProcessStartInfo
+        {
+            FileName = powershell,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        string[] args = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command];
+        foreach (var arg in args)
+            psi.ArgumentList.Add(arg);
+        using var process = Process.Start(psi)!;
+        var stderrTask = process.StandardError.ReadToEndAsync();
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = stderrTask.Result;
+        process.WaitForExit();
+        // Not stderr's emptiness: a redirected Windows PowerShell may write progress records (CLIXML) there.
+        Assert.True(process.ExitCode == 0,
+            $"the parse check itself failed (powershell.exe exit {process.ExitCode}): stdout [{stdout}] stderr [{stderr}]");
+        return stdout.Trim();
     }
 
     // --- ConPTY P/Invoke helpers (used by Run_CompoundCommand_RedactedOutput_WindowsConPty) ---
