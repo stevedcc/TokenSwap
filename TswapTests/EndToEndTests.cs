@@ -1434,6 +1434,258 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         Assert.False(output.Contains("←["), $"an escape sequence was printed as text. {dump}");
     }
 
+    /// <summary>
+    /// Brief T41 (#349): what the owner saw lived in a classic console window (conhost) running Windows PowerShell
+    /// 5.1, where VT processing is off unless the writer turns it on; under an outer pseudo console (the tests above)
+    /// tswap's stdout interprets VT already, so they can't show it. This test starts Windows PowerShell 5.1 in a new
+    /// console window (<c>CREATE_NEW_CONSOLE</c>), runs <c>tswap run</c> there with stdout on the console itself, and
+    /// reads back what the console shows: its screen buffer, its window title and its output mode, before and after.
+    /// The pseudo console's screen clear passes through on purpose (docs/install.md), so nothing is asserted about
+    /// it. Windows only (CI); returns early elsewhere, as its neighbours do. If the new console interprets VT before
+    /// the run, the test can't show #349: report it, never loosen the precondition.
+    /// </summary>
+    [Fact]
+    public void Run_ClassicConsole_ShowsNoEscapeText_WindowsConsole()
+    {
+        if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 17763)) return; // ConPTY requires Win10 1809+
+
+        RunTswap("init", "--yubikey", "--no-recovery");
+        RunTswapWithStdin("s3cr3t-classic-value", "ingest", "my-secret");
+        var printScript = Path.Combine(_tempDir, "print3.ps1");
+        File.WriteAllText(printScript,
+            "param($v)\nWrite-Output before\nWrite-Output $v\nWrite-Output after\nStart-Sleep -Milliseconds 1500\n");
+
+        var resultPath = Path.Combine(_tempDir, "result.json");
+        var classicScript = Path.Combine(_tempDir, "classic.ps1");
+        // A7: UTF-8 with a BOM, as Windows PowerShell 5.1 reads a BOM-less script as ANSI.
+        File.WriteAllText(classicScript, ClassicConsoleScript(printScript), new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
+
+        var powershell = Environment.ExpandEnvironmentVariables(@"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe");
+        string[] argv = [powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", classicScript, "-Result", resultPath];
+        var cmdStr = string.Join(' ', argv.Select(QuoteWindowsArg));
+        var cmdLine = new char[cmdStr.Length + 1];
+        cmdStr.CopyTo(0, cmdLine, 0, cmdStr.Length);
+
+        // A12: a plain STARTUPINFO with no flags, no inherited handles, a new console as the only creation flag. The
+        // script sets the test's environment variables itself, so this process's environment is never changed.
+        const uint CREATE_NEW_CONSOLE = 0x00000010;
+        var si = new WinStartupInfo { cb = Marshal.SizeOf<WinStartupInfo>(), dwFlags = 0 };
+        if (!CreateProcess(null, cmdLine, IntPtr.Zero, IntPtr.Zero, false,
+                CREATE_NEW_CONSOLE, IntPtr.Zero, _tempDir, ref si, out var pi))
+            Assert.Fail($"CreateProcess({cmdStr}) failed ({Marshal.GetLastWin32Error()})");
+
+        bool timedOut;
+        uint consoleExit;
+        try
+        {
+            timedOut = WaitForSingleObject(pi.hProcess, 90_000) != 0;
+            if (timedOut)
+            {
+                // A6, A10: kill the whole tree; guarded so the failure below is "timed out after 90 s".
+                try
+                {
+                    using var console = Process.GetProcessById(pi.dwProcessId);
+                    if (!console.HasExited)
+                    {
+                        console.Kill(entireProcessTree: true);
+                        console.WaitForExit(TimeSpan.FromSeconds(10));
+                    }
+                }
+                catch (Exception e) when (e is ArgumentException or InvalidOperationException)
+                {
+                    // It exited between the wait and the kill.
+                }
+            }
+            GetExitCodeProcess(pi.hProcess, out consoleExit);
+        }
+        finally
+        {
+            CloseHandle(pi.hThread);
+            CloseHandle(pi.hProcess);
+        }
+
+        // A5: read without assuming a BOM; missing, empty or unparsable is its own failure.
+        var raw = File.Exists(resultPath) ? File.ReadAllText(resultPath) : "";
+        Assert.False(timedOut, $"timed out after 90 s; result.json: [{EscapeVt(raw)}]");
+        JsonElement result = default;
+        var usable = false;
+        if (raw.Length > 0)
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(raw);
+                result = doc.RootElement.Clone();
+                usable = result.ValueKind == JsonValueKind.Object;
+            }
+            catch (JsonException)
+            {
+                // Reported by the assertion below, with the raw text.
+            }
+        }
+        Assert.True(usable,
+            $"the console script never wrote a usable result.json (powershell.exe exit {consoleExit}): [{EscapeVt(raw)}]");
+        // A3: a failed GetStdHandle or GetConsoleMode (or any other script error) is reported as such; the
+        // precondition is never read from a failed call.
+        if (result.TryGetProperty("error", out var error))
+            Assert.Fail($"the console script failed (powershell.exe exit {consoleExit}): {error.GetString()}");
+
+        var modeBefore = result.GetProperty("modeBefore").GetUInt32();
+        var modeAfter = result.GetProperty("modeAfter").GetUInt32();
+        var exitCode = result.GetProperty("exit").GetInt32();
+        var titleBefore = result.GetProperty("titleBefore").GetString() ?? "";
+        var titleAfter = result.GetProperty("titleAfter").GetString() ?? "";
+        var buffer = result.GetProperty("buffer").GetString() ?? "";
+        var dump = $"exit={exitCode} modeBefore=0x{modeBefore:X} modeAfter=0x{modeAfter:X} " +
+                   $"titleBefore=[{EscapeVt(titleBefore)}] titleAfter=[{EscapeVt(titleAfter)}] " +
+                   $"screen buffer ({buffer.Length} chars): [{EscapeVt(buffer)}]";
+
+        // A8: one assertion per row of the brief's table (per value where a row lists several), in its order.
+        Assert.True((modeBefore & WindowsEnableVirtualTerminalProcessing) == 0,
+            $"the new console already interprets VT; this test can't show #349. {dump}");
+        Assert.True(exitCode == 0, $"Expected exit 0. {dump}");
+        Assert.True(buffer.Contains("[REDACTED: my-secret]"), $"redaction marker missing from the screen. {dump}");
+        Assert.True(buffer.Contains("before"), $"the child's 'before' line missing from the screen. {dump}");
+        Assert.True(buffer.Contains("after"), $"the child's 'after' line missing from the screen. {dump}");
+        Assert.True(buffer.Contains("T41-AFTER-TSWAP"), $"the script's line after tswap missing from the screen. {dump}");
+        Assert.False(buffer.Contains("s3cr3t-classic-value"), $"raw secret on the screen. {dump}");
+        // #349's first half: no sequence printed as text. The classic console shows ESC as '←' (A4).
+        Assert.False(buffer.Contains('\u001b'), $"an escape sequence was printed as text (ESC on the screen). {dump}");
+        Assert.False(buffer.Contains('←'), $"an escape sequence was printed as text ('←' on the screen). {dump}");
+        string[] fragments = ["[?9001h", "[?1004h", "[?25l", "[2J", "]0;"];
+        foreach (var fragment in fragments)
+            Assert.False(buffer.Contains(fragment), $"an escape sequence was printed as text ('{fragment}' on the screen). {dump}");
+        // #349's second half (A2): the window wasn't retitled, and the child's title didn't reach it.
+        Assert.True(titleAfter == titleBefore, $"the window was retitled by the run. {dump}");
+        Assert.False(titleAfter.Contains("pwsh", StringComparison.OrdinalIgnoreCase), $"the child's title reached the window. {dump}");
+        Assert.True(modeAfter == modeBefore, $"the console output mode wasn't put back after the run. {dump}");
+    }
+
+    // ENABLE_VIRTUAL_TERMINAL_PROCESSING, the test's own copy (not the product's constant).
+    private const uint WindowsEnableVirtualTerminalProcessing = 0x0004;
+
+    /// <summary>
+    /// Brief T41: the Windows PowerShell 5.1 script <see cref="Run_ClassicConsole_ShowsNoEscapeText_WindowsConsole"/>
+    /// runs in its new console (5.1 syntax only; the <c>Add-Type</c> code is C# 5). The test's values are written in
+    /// as single-quoted literals, every <c>'</c> doubled (A7). A script error writes <c>{ "error" }</c> too (exit 3),
+    /// so the test reports it instead of a missing result.
+    /// </summary>
+    private string ClassicConsoleScript(string printScript)
+    {
+        static string Quote(string value) => "'" + value.Replace("'", "''") + "'";
+
+        const string script = """
+            param([Parameter(Mandatory = $true)][string]$Result)
+            $ErrorActionPreference = 'Stop'
+
+            function Write-Result($data) {
+                $json = ConvertTo-Json -InputObject $data -Compress
+                [IO.File]::WriteAllText($Result, $json, (New-Object Text.UTF8Encoding $false))
+            }
+
+            function Fail-Script([string]$message) {
+                Write-Result ([ordered]@{ error = $message })
+                exit 2
+            }
+
+            trap {
+                Write-Result ([ordered]@{ error = ('script error: ' + $_.ToString()) })
+                exit 3
+            }
+
+            $env:TSWAP_TEST_KEY = @@KEY@@
+            $env:TSWAP_TEST_SUDO_BYPASS = '1'
+            $env:TSWAP_CONFIG_DIR = @@CONFIG@@
+
+            Add-Type -TypeDefinition @'
+            using System;
+            using System.Runtime.InteropServices;
+            using System.Text;
+
+            public static class T41Console
+            {
+                [DllImport("kernel32.dll", SetLastError = true)]
+                public static extern IntPtr GetStdHandle(int nStdHandle);
+
+                [DllImport("kernel32.dll", SetLastError = true)]
+                public static extern bool GetConsoleMode(IntPtr hConsoleHandle, out uint lpMode);
+
+                [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+                public static extern uint GetConsoleTitle(StringBuilder lpConsoleTitle, uint nSize);
+            }
+            '@
+
+            function Get-OutputMode([IntPtr]$handle, [string]$when) {
+                $mode = [uint32]0
+                if (-not [T41Console]::GetConsoleMode($handle, [ref]$mode)) {
+                    $err = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+                    Fail-Script ('GetConsoleMode (' + $when + ') failed, Win32 error ' + $err)
+                }
+                return $mode
+            }
+
+            function Get-Title([string]$when) {
+                $title = New-Object Text.StringBuilder 1024
+                $length = [T41Console]::GetConsoleTitle($title, 1024)
+                if ($length -eq 0) {
+                    $err = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+                    if ($err -ne 0) {
+                        Fail-Script ('GetConsoleTitle (' + $when + ') failed, Win32 error ' + $err)
+                    }
+                }
+                return $title.ToString()
+            }
+
+            $handle = [T41Console]::GetStdHandle(-11)
+            $handleValue = $handle.ToInt64()
+            if ($handleValue -eq 0 -or $handleValue -eq -1) {
+                $err = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+                Fail-Script ('GetStdHandle(STD_OUTPUT_HANDLE) failed (handle ' + $handleValue + '), Win32 error ' + $err)
+            }
+
+            $modeBefore = Get-OutputMode $handle 'before'
+            $titleBefore = Get-Title 'before'
+
+            & @@TSWAP@@ run pwsh -NoProfile -File @@PRINT@@ '{{my-secret}}'
+            $tswapExit = $LASTEXITCODE
+
+            Write-Host 'T41-AFTER-TSWAP'
+
+            $modeAfter = Get-OutputMode $handle 'after'
+            $titleAfter = Get-Title 'after'
+
+            $rawUi = $Host.UI.RawUI
+            $width = $rawUi.BufferSize.Width
+            $lastRow = $rawUi.CursorPosition.Y
+            $rect = New-Object System.Management.Automation.Host.Rectangle -ArgumentList 0, 0, ($width - 1), $lastRow
+            $cells = $rawUi.GetBufferContents($rect)
+            $rows = New-Object 'System.Collections.Generic.List[string]'
+            for ($y = 0; $y -le $lastRow; $y++) {
+                $line = New-Object Text.StringBuilder $width
+                for ($x = 0; $x -lt $width; $x++) {
+                    [void]$line.Append($cells[$y, $x].Character)
+                }
+                $rows.Add($line.ToString().TrimEnd())
+            }
+            $buffer = $rows -join "`n"
+
+            Write-Result ([ordered]@{
+                modeBefore = $modeBefore
+                modeAfter = $modeAfter
+                exit = $tswapExit
+                titleBefore = $titleBefore
+                titleAfter = $titleAfter
+                buffer = $buffer
+            })
+            exit 0
+            """;
+
+        return script
+            .Replace("@@KEY@@", Quote(_testKeyHex))
+            .Replace("@@CONFIG@@", Quote(_tempDir))
+            .Replace("@@TSWAP@@", Quote(_binaryPath))
+            .Replace("@@PRINT@@", Quote(printScript));
+    }
+
     // --- ConPTY P/Invoke helpers (used by Run_CompoundCommand_RedactedOutput_WindowsConPty) ---
 
     [StructLayout(LayoutKind.Sequential)]
@@ -1489,6 +1741,15 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         bool bInheritHandles, uint dwCreationFlags,
         IntPtr lpEnvironment, string? lpCurrentDirectory,
         ref WinStartupInfoEx lpStartupInfo, out WinProcessInformation lpProcessInformation);
+
+    // Brief T41: the plain STARTUPINFO overload, for a process in a new console of its own (no pseudo console).
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool CreateProcess(
+        string? lpApplicationName, [In] char[] lpCommandLine,
+        IntPtr lpProcessAttributes, IntPtr lpThreadAttributes,
+        bool bInheritHandles, uint dwCreationFlags,
+        IntPtr lpEnvironment, string? lpCurrentDirectory,
+        ref WinStartupInfo lpStartupInfo, out WinProcessInformation lpProcessInformation);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern uint WaitForSingleObject(IntPtr hHandle, uint dwMilliseconds);
