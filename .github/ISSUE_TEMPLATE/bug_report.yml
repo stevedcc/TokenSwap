@@ -63,17 +63,30 @@ body:
         - Recovery key
         - Not relevant
   - type: textarea
-    id: command
+    id: what-happened
     attributes:
-      label: The command you ran
-      description: With `{{tokens}}` as you typed them, never their values.
-      render: shell
+      label: What happened
+      description: What you saw. The full output goes in the Output field below.
     validations:
       required: true
   - type: textarea
-    id: what-happened
+    id: expected
     attributes:
-      label: What happened, and what you expected
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How you got there
+      description: |
+        The steps from a working vault to the problem, one per line, with the commands as you typed them
+        (`{{tokens}}` as written, never their values). For example: enrolled a second machine, synced the folder,
+        ran `tswap rotate db-pw` on both, then `tswap run ...`.
+      placeholder: |
+        1. tswap init --yubikey
+        2. tswap create db-pw
+        3. tswap run psql "postgresql://app:{{db-pw}}@db/app"
     validations:
       required: true
   - type: textarea
