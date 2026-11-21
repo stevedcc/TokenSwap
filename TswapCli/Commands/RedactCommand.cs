@@ -27,12 +27,14 @@ public sealed class RedactCommand : ICliCommand
 
         var content = File.ReadAllText(filePath);
         var redacted = Redact.RedactContent(content, matcher);
+        // Brief T45 (#389): a value that looks like a credential the vault doesn't know is masked too,
+        // and its warning names the line and the keyword, never the value.
+        var (masked, hits) = Redact.MaskUnknownSecrets(redacted);
 
-        ctx.Console.Out.Write(redacted);
+        ctx.Console.Out.Write(masked);
 
-        var unknowns = Redact.FindUnknownSecrets(redacted);
-        foreach (var (line, snippet) in unknowns)
-            ctx.Console.Error.WriteLine($"⚠ Line {line}: possible unrecognised secret: {snippet}");
+        foreach (var (line, keyword) in hits)
+            ctx.Console.Error.WriteLine($"⚠ Line {line}: possible unrecognised secret after '{keyword}', masked");
         return 0;
     }
 }

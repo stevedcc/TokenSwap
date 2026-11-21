@@ -6,7 +6,7 @@ using TswapCore.Fingerprints;
 namespace TswapCore;
 
 /// <summary>
-/// Static facade over <see cref="SecretMatcher"/>, plus the standalone heuristic scanner for
+/// Static facade over <see cref="SecretMatcher"/>, plus the standalone heuristic that masks
 /// unrecognised secrets.
 /// </summary>
 public static class Redact
@@ -166,25 +166,5 @@ public static class Redact
         while (end < line.Length && !char.IsWhiteSpace(line[end]) && line[end] is not (',' or ';' or ')' or ']' or '}'))
             end++;
         return end;
-    }
-
-    /// <summary>
-    /// Scans <paramref name="content"/> for strings that look like unrecognised credentials
-    /// (adjacent to a keyword like <c>password</c>, <c>token</c>, etc.). Returns the 1-based
-    /// line number and the matched snippet for each hit.
-    /// </summary>
-    public static IReadOnlyList<(int Line, string Snippet)> FindUnknownSecrets(string content)
-    {
-        List<(int, string)> results = [];
-        var lines = content.Split('\n');
-
-        for (int i = 0; i < lines.Length; i++)
-        {
-            var matches = CredentialHeuristic.Matches(lines[i]);
-            if (matches.Count > 0)
-                results.Add((i + 1, lines[i].Trim()));
-        }
-
-        return results;
     }
 }
