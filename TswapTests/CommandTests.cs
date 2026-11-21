@@ -1984,8 +1984,10 @@ password2: """"  # tswap: missing-mixed-secret");
         Assert.Contains("password: [REDACTED: db-pw]", stdout);
         Assert.Contains("token: [POSSIBLE SECRET]", stdout);
         Assert.Contains("user: admin", stdout);
+        Assert.Equal("user: admin\npassword: [REDACTED: db-pw]\ntoken: [POSSIBLE SECRET]\n", stdout);
         Assert.Contains("Line 3", stderr);
         Assert.Contains("'token'", stderr);
+        Assert.Contains("⚠ Line 3: possible unrecognised secret after 'token', masked", stderr);
         foreach (var value in new[] { "known-secret-value-42", "unknownsecretvalue9876" })
         {
             Assert.DoesNotContain(value, stdout);
