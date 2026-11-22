@@ -217,6 +217,28 @@ sentences: Task 2's "Only `{{name}}` tokens in argv count; a `{{@file}}` token i
   instead of `!PW!` (must show `marker.txt`); 2d, a `capture.sh` with `eval "$1"` (must show `marker.txt`).
 - **A19 (GLM M5).** Task 3 also adds `docs/scripts.md` to `docs/README.md`'s page list.
 
+## Amendments (round 3: GLM ready; MiMo one Important, Minors)
+
+Also superseded (MiMo M-10, M-11): Task 2d's `printf` probe (A11), Task 1's `BatchArgumentRefusal(string program, …)`
+signature (A13), Task 2c's "T46's batch cases all contain a space or a quote" and its `QuoteWindowsArg` (A17: the method
+is `WindowsQuoteArg`), Task 2's PATH/PATHEXT resolution step (A16).
+
+- **A20 (MiMo I-4).** `ProgramWords` yields extension-stripped names (`ProgramName`), so the batch check must test the
+  **raw** argv word at each position the walk visits: add a sibling walk that yields positions (or raw words), keep
+  `ProgramWords`' normalised yields for `GetFileTokenRefusal`, and call `IsBatchTarget(argv[i])` on the raw word.
+  Tests: `run x.cmd`, `C:\dir\x.cmd`, `timeout 5 x.cmd`, `find . -exec x.cmd … ;` all reach `IsBatchTarget` with the
+  `.cmd` intact.
+- **A21 (M-12).** `-File` matches any unambiguous prefix: `-f`, `-fi`, `-fil`, `-file`, any case.
+- **A22 (M-13, M-14).** Build the per-character values locally (`"abcdefg" + c + "hijklmno"`); `EvilValues.Inside` stays
+  private. Dropping `(` makes the open-parenthesis row fail (singular).
+- **A23 (M-15).** 2b's break variant uses its own value, `;New-Item -Path marker.txt;`, with a `capture.ps1` that runs
+  `Invoke-Expression "Write-Output $($args[0])"`; that one must create `marker.txt`.
+- **A24 (M-16).** A missing zsh: follow T46's leg idiom (leave the zsh leg out and `_output.WriteLine` why), never an
+  early return; the test is a `[UnixFact]`.
+- **A25 (M-17).** No test pins rule 3's sentence in the prompt (verified by MiMo); if one turns up, stop and ask.
+- **A26 (M-18).** A mixed refusal lists every refused token in argv order, uses the secrets clause and appends "Rename
+  the file." for the file tokens. The advice interpolates the first refused secret's name (not a literal `{{a}}`).
+
 ## Out of scope
 
 - Fixing PowerShell or Unix-shell behaviour (Tasks 2b-2d test and document it; report failures).
