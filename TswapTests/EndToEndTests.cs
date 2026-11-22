@@ -1865,11 +1865,10 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
 
     /// <summary>
     /// Brief T48 Task 2: every non-ASCII corpus value, piped into <c>ingest</c> as raw UTF-8 bytes (as
-    /// <c>kubectl … | jq … | tswap ingest</c> delivers it), is stored exactly: <c>tswap get</c> (A12, A20) prints it, and
-    /// <c>tswap run &lt;Git Bash&gt; ./capture.sh {{name}}</c> (<c>printf '%s' "$1" &gt; out.txt</c>) writes it, each
-    /// trimmed at the end as ingest does. Before, Windows decoded stdin with the console code page (437 on the runner):
-    /// <c>café-value</c> arrived as <c>caf├⌐-value</c>. A value that <c>get</c> shows right but <c>out.txt</c> doesn't is
-    /// a Git Bash finding (#402), named as such in the failure.
+    /// <c>kubectl … | jq … | tswap ingest</c> delivers it), is stored exactly: <c>tswap run &lt;Git Bash&gt; ./capture.sh
+    /// {{name}}</c> (<c>printf '%s' "$1" &gt; out.txt</c>) writes it, trimmed at the end as ingest does. Before, Windows
+    /// decoded stdin with the console code page (437 on the runner): <c>café-value</c> arrived as <c>caf├⌐-value</c>.
+    /// No <c>tswap get</c> check (A12/A20 withdrawn): get's redirected stdout on Windows is the console code page (T35 A1).
     /// </summary>
     /// <remarks>
     /// Break-it-once (the controller's, on Windows CI): <c>SystemConsole.In</c> back to <c>Console.In</c>; the test must
@@ -1902,28 +1901,12 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
                 continue;
             }
 
-            var getPsi = MakePsi();
-            getPsi.StandardOutputEncoding = new UTF8Encoding(false);
-            getPsi.ArgumentList.Add("get");
-            getPsi.ArgumentList.Add(name);
-            using (var get = Process.Start(getPsi)!)
-            {
-                var stdoutTask = get.StandardOutput.ReadToEndAsync();
-                var getErr = get.StandardError.ReadToEnd();
-                get.WaitForExit();
-                var stored = stdoutTask.Result.Trim();
-                if (get.ExitCode != 0)
-                    failures.Add($"{c.Name}: get failed (exit {get.ExitCode}): {getErr}");
-                else if (stored != expected)
-                    failures.Add($"{c.Name}: get printed another value (read as UTF-8): expected [{Shown(expected)}], got [{Shown(stored)}]");
-            }
-
             File.Delete(outFile);
             var (runExit, runOut, runErr) = RunTswapIn(work, "run", bash!, "./capture.sh", "{{" + name + "}}");
             if (!File.Exists(outFile))
                 failures.Add($"{c.Name}: no out.txt (exit {runExit}): {Shown(runErr + runOut)}");
             else if (File.ReadAllText(outFile, Encoding.UTF8) is var captured && captured != expected)
-                failures.Add($"{c.Name}: out.txt ALTERED (a Git Bash finding, #402, if get matched): expected [{Shown(expected)}], got [{Shown(captured)}]");
+                failures.Add($"{c.Name}: out.txt ALTERED: expected [{Shown(expected)}], got [{Shown(captured)}]");
             _output.WriteLine($"T48 raw utf-8: {c.Name}: ingest exit {ingestExit}, run exit {runExit}");
         }
 
