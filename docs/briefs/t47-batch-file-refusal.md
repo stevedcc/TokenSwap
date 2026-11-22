@@ -109,13 +109,34 @@ Linux runner may not, so a missing zsh skips that host with a reason, never an e
   default) and `shopt -s extglob`.
 - Each failure names the case, the shell and its options.
 
-## Task 3: docs
+## Task 3: docs (owner, 2026-11-22: "we'll need docs about this")
 
-- `docs/commands.md`, the `run` section: one paragraph. On Windows, `run` refuses to pass a secret to a `.cmd`/`.bat`
-  file (or `cmd`) when its value holds a character `cmd.exe` interprets, because `cmd.exe` parses a batch file's
-  arguments again; use a PowerShell script with `-File`. An `--env` variable read by a batch file as `%NAME%` is
-  expanded by the batch itself, so the same care applies inside the script.
-- `docs/install.md`'s Windows notes: one line pointing there.
+**A new guide, `docs/scripts.md`: "Passing secrets to scripts".** What the tests in Tasks 2b-2d and T46 proved, per
+shell, each with a short correct example and the one thing that breaks it:
+
+- **How a value reaches a script:** as one argument (`{{name}}`), in the environment (`--env VAR={{name}}`), or in a
+  file (`{{@file}}`); when to use which (arguments are visible in the process list while the command runs, see
+  security-model.md; the environment isn't, to other users).
+- **bash:** read `"$1"` quoted; never `eval`, `source` or unquoted `$1` with the value.
+- **zsh:** `"$1"`; unquoted `$1` isn't split by default (unless `SH_WORD_SPLIT`); never `eval`.
+- **PowerShell (Windows PowerShell 5.1 and 7):** `-File script.ps1`, read `$args[0]` (or a `param()`); never
+  `Invoke-Expression` or `& ([scriptblock]::Create(...))` with it. In PowerShell, quote the token you type: `'{{name}}'`
+  (T43).
+- **cmd and batch files:** `run` refuses to pass a value `cmd.exe` would re-parse (why: a batch file's arguments are
+  parsed again at launch and again by `%1` inside the script; tswap's generated values often contain such characters).
+  The way: `--env PW={{name}}` and `setlocal EnableDelayedExpansion` with `!PW!`; never `%PW%` or `%1` with a secret.
+- **Files that a shell sources** (`.env`): single-quoted values; a value with `'` breaks even that (T46 Task 4 text,
+  moved or linked here).
+- **The calling shell doesn't see values:** tokens are substituted inside tswap; only the token's own quoting matters
+  (PowerShell braces, T43; zsh `BRACE_CCL`).
+
+Link it from README.md (the docs list), `docs/commands.md` (the `run` section: one paragraph on the refusal, linking
+here), `docs/install.md`'s Windows notes and `docs/agent-integration.md`.
+
+**The agent prompt (`TswapCore/Prompt.cs`):** rule 3's example (`run ./deploy.sh {{secret-name}}`, "the script reads it
+as $1") says to read `"$1"` quoted, and on Windows to use a PowerShell `-File` script, never a batch file. This changes
+`prompt-hash`, which is fine in 0.3.2; keep the prompt ASCII-only (T43's test) and update any prompt test that pins
+the changed sentence only with the controller's sanction, listing it in the report.
 
 ## Out of scope
 
