@@ -173,8 +173,53 @@ MiMo's C1 (scope versus #392's comment) is settled: Tasks 2b-2d and the docs tas
   section. Spelling and doc-link guards apply.
 - **A10 (GLM M5).** `run powershell {{name}}` with no `-File` runs the value as code today; that's issue #401, not this brief, but `docs/scripts.md` says to always use `-File`.
 
+## Amendments (round 2: both "no"; three Importants each, all brief errors)
+
+Where a task and an amendment differ, the amendment wins (this applies to every amendment in this brief). Superseded
+sentences: Task 2's "Only `{{name}}` tokens in argv count; a `{{@file}}` token is … (no metacharacters)" (A2) and
+"Only on Windows (`OperatingSystem.IsWindows()`)" (A8: the `ctx.Os` seam); Task 1's message text (A14).
+
+- **A11 (both I1/I2, Task 2d calling shell).** The probe is `tswap -v run true {{name}}` (`printf` is on tswap's
+  blocklist and is refused before tokens are read). Assert tswap's `-v` line `Found tokens: name`. Under zsh's
+  `BRACE_CCL` the unquoted `{name}` is expanded to its characters (zsh's documentation, Brace Expansion), so assert:
+  unquoted, the token does **not** arrive (tswap reports no token, or a different one); quoted `'{{name}}'`, it arrives
+  unchanged. Same pair in bash (plain, `set -B`, `extglob`): unquoted arrives unchanged there. `docs/scripts.md` says
+  to quote tokens in zsh when `BRACE_CCL` is set.
+- **A12 (MiMo I-2, sanction).** Adding `x&echo.>marker.txt` to `EvilValues.BatchCases` changes the expected array in
+  `EvilValuesCorpusTests.BatchCases_AreTheBriefsValues`: update it (a test input changed because this brief changed the
+  rules; say so in the commit message, AGENTS.md rule 5).
+- **A13 (MiMo I-3, API).** The entry point takes the post-substitution argv:
+  `BatchArgumentRefusal(IReadOnlyList<string> argv, IReadOnlyList<SubstitutedToken> tokens)` where a token is a secret
+  name or a file token with the argv index it went into. It walks `ProgramWords` (make it `internal`) **and** an
+  interpreter's script argument: `powershell`/`pwsh` with `-File` matched by PowerShell's unambiguous-prefix rule as
+  `IsPowerShellInline` does (`-f`, `-fi`, `-file`, any case). A one-word helper `IsBatchTarget(string program)` (A4's
+  normalisation) serves the unit tests. `RunCommand` calls the entry point once, after substitution, when
+  `ctx.Os == OSPlatform.Windows`.
+- **A14 (MiMo M-1, GLM M3, message).** Final texts (British spelling; each lists the set exactly):
+  - one or more secrets: `Refused: tswap won't pass secret(s) 'a', 'b' to a batch file. cmd.exe parses a batch file's
+    arguments again, and their values contain characters it interprets (one of " & | < > ^ % ! ( ) or a line break;
+    tswap's generated values often do). Use a PowerShell script ('run powershell -File .\script.ps1 {{a}}', read as
+    $args[0]), or the environment ('run --env PW={{a}} script.cmd', read with setlocal EnableDelayedExpansion as !PW!).`
+  - a file token: `Refused: tswap won't pass the copy of 'name.yaml' to a batch file: its name contains characters
+    cmd.exe interprets (one of …). Rename the file.`
+  Tests assert the names appear, and that no value as a whole and no `INJECTED` appear.
+- **A15 (both, A7's rows).** The per-character values live in `BatchArgumentTests` only (`EvilValues.Cases` stays as
+  T46 left it): build them with T46's `Inside(char)` helper for `^`, `(`, `)` and reuse the existing cases for the
+  rest. Break-it-once additionally drops `(` and sees the parenthesis rows fail.
+- **A16 (MiMo M-4, GLM M4, PATHEXT).** Cite RedactingPty's `FallbackPty.cs` (ProcessStartInfo, CreateProcess rules) and
+  `WindowsPty.cs` (`CreateProcessW(null, cmdLine…)`): neither starts a `.cmd`/`.bat` from an extension-less name, so
+  checking the given (normalised) name is enough. Fail closed if that ever changes: a comment at the check says so.
+- **A17 (MiMo M-5, GLM M2, Task 2c).** The criterion: `WindowsQuoteArg` (RedactingPty `WindowsPty.cs`) and .NET quote an
+  argument only for a space, tab or quote (`%PATH%` already rides unquoted). "out.txt holds the value exactly" means
+  T46's comparison, `captured == value + "\r\n"` (`echo(` appends CRLF).
+- **A18 (MiMo M-6, break-it-once for the E2E tasks; the controller runs them on CI).** Ship each as a commented variant:
+  2b, a `capture.ps1` that `Invoke-Expression`s `$args[0]` (must show `marker.txt`); 2c, the batch reading `%PW%`
+  instead of `!PW!` (must show `marker.txt`); 2d, a `capture.sh` with `eval "$1"` (must show `marker.txt`).
+- **A19 (GLM M5).** Task 3 also adds `docs/scripts.md` to `docs/README.md`'s page list.
+
 ## Out of scope
 
+- Fixing PowerShell or Unix-shell behaviour (Tasks 2b-2d test and document it; report failures).
 - Escaping for `cmd.exe` instead of refusing (owner's option B was refusal; escaping is notoriously error-prone).
-- PowerShell scripts, Unix shells, the broker.
+- The broker.
 - Publishing the advisory and the release notes (the controller and the owner).
