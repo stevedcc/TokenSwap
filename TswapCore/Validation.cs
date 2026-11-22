@@ -253,19 +253,24 @@ public static class Validation
     // argv[0] and, through simple wrappers (nice, timeout, sudo, ...: their options and leading
     // positional skipped as CheckWrapper does) and find's -exec family, the command each runs. Tools
     // with subcommands (docker, npm, ...) end the walk: their later words aren't a program on this machine.
-    private static IEnumerable<string> ProgramWords(IReadOnlyList<string> argv)
+    // Normalised (ProgramName), for GetFileTokenRefusal; ProgramPositions keeps the raw word (brief T47, A20).
+    internal static IEnumerable<string> ProgramWords(IReadOnlyList<string> argv) =>
+        ProgramPositions(argv).Select(i => ProgramName(argv[i]));
+
+    /// <summary>Brief T47 (A20): the walk of <see cref="ProgramWords"/>, as positions in <paramref name="argv"/>.</summary>
+    internal static IEnumerable<int> ProgramPositions(IReadOnlyList<string> argv)
     {
         var i = 0;
         while (i < argv.Count)
         {
             var program = ProgramName(argv[i]);
-            yield return program;
+            yield return i;
             if (program.Equals("find", StringComparison.OrdinalIgnoreCase))
             {
                 for (var j = i + 1; j < argv.Count; j++)
                     if (FindExecOptions.Contains(argv[j]))
-                        foreach (var word in ProgramWords(argv.Skip(j + 1).TakeWhile(a => a is not (";" or "+")).ToList()))
-                            yield return word;
+                        foreach (var position in ProgramPositions(argv.Skip(j + 1).TakeWhile(a => a is not (";" or "+")).ToList()))
+                            yield return j + 1 + position;
                 yield break;
             }
             if (!Wrappers.Contains(program) || SubcommandTools.Contains(program))
@@ -298,6 +303,120 @@ public static class Validation
             i = next;
         }
     }
+
+    /// <summary>
+    /// Brief T47: a token <c>run</c> substituted into argv: a secret token (<c>name</c> or <c>name:previous</c>) or,
+    /// with <paramref name="IsFile"/>, a <c>{{@path}}</c> token (<paramref name="Name"/> is the path as typed); the
+    /// argv index it went into, and the text it was replaced with (the value, or the filled copy's path).
+    /// </summary>
+    public readonly record struct SubstitutedToken(string Name, int ArgIndex, string Value, bool IsFile = false);
+
+    /// <summary>
+    /// Brief T47: every token of <paramref name="args"/> (the command as typed) that
+    /// <see cref="SubstituteAllTokensInArgs"/> replaces, in argv order, with the text it is replaced with.
+    /// </summary>
+    public static IReadOnlyList<SubstitutedToken> SubstitutedTokens(IReadOnlyList<string> args,
+        IReadOnlyDictionary<string, string> secretValues, IReadOnlyDictionary<string, string> filePaths)
+    {
+        List<SubstitutedToken> tokens = [];
+        for (var i = 0; i < args.Count; i++)
+            foreach (Match m in AnyTokenRegex.Matches(args[i]))
+            {
+                if (m.Groups[1].Success && filePaths.TryGetValue(m.Groups[1].Value, out var path))
+                    tokens.Add(new(m.Groups[1].Value, i, path, IsFile: true));
+                else if (m.Groups[2].Success && secretValues.TryGetValue(m.Groups[2].Value, out var value))
+                    tokens.Add(new(m.Groups[2].Value, i, value));
+            }
+        return tokens;
+    }
+
+    // Brief T47 (A3): what cmd.exe interprets in a batch file's arguments, which it parses again at launch.
+    private static readonly System.Buffers.SearchValues<char> BatchCharacters =
+        System.Buffers.SearchValues.Create("\"&|<>^%!()\r\n");
+
+    private const string BatchCharacterList = "one of \" & | < > ^ % ! ( ) or a line break";
+
+    /// <summary>
+    /// Brief T47 (A4): whether <paramref name="program"/> starts as a batch file or is cmd itself: its last component,
+    /// normalised as Windows does (a drive prefix, a <c>:stream</c> suffix and trailing dots and spaces dropped), ends
+    /// in <c>.cmd</c> or <c>.bat</c>, or is <c>cmd</c> (<c>cmd.exe</c>), ignoring case.
+    /// </summary>
+    public static bool IsBatchTarget(string program)
+    {
+        var name = program.Length >= 2 && program[1] == ':' && char.IsAsciiLetter(program[0]) ? program[2..] : program;
+        name = name.Replace('\\', '/');
+        name = name[(name.LastIndexOf('/') + 1)..];
+        if (name.IndexOf(':') is var colon and >= 0)
+            name = name[..colon];
+        name = name.TrimEnd('.', ' ');
+        return name.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase)
+            || name.EndsWith(".bat", StringComparison.OrdinalIgnoreCase)
+            || ProgramName(name).Equals("cmd", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Brief T47 (A13, A20): the refusal of a command line that hands a batch file (or cmd) a substituted text holding
+    /// a character cmd.exe interprets (batch files re-parse arguments), or null. The walk visits every program word
+    /// (<see cref="ProgramPositions"/>: argv[0], wrappers, find -exec) and tests the raw word with
+    /// <see cref="IsBatchTarget"/>; for <c>powershell</c> and <c>pwsh</c> also the script of <c>-File</c> (any
+    /// unambiguous prefix, any case). With a batch target, every substituted token counts (failing closed: a wrapper's
+    /// own arguments can reach it too). Names every refused token in argv order, never a value or which character.
+    /// </summary>
+    /// <remarks>
+    /// The given name is checked, not one resolved through PATH and PATHEXT: neither of run's start paths (RedactingPty's
+    /// FallbackPty through .NET's process start, WindowsPty through CreateProcessW with no application name) starts a
+    /// batch file from a name without its extension; CreateProcess appends only ".exe". If a start path ever resolves
+    /// PATHEXT, this check must resolve the name the same way first, or it fails open.
+    /// </remarks>
+    public static string? BatchArgumentRefusal(IReadOnlyList<string> argv, IReadOnlyList<SubstitutedToken> tokens)
+    {
+        if (!BatchTargets(argv).Any())
+            return null;
+        var refused = tokens.Where(t => t.Value.AsSpan().ContainsAny(BatchCharacters))
+            .OrderBy(t => t.ArgIndex)
+            .DistinctBy(t => (t.Name, t.IsFile))
+            .ToList();
+        if (refused.Count == 0)
+            return null;
+
+        var secrets = refused.Where(t => !t.IsFile).ToList();
+        if (secrets.Count == 0)
+            return $"Refused: tswap won't pass the copy of {string.Join(", ", refused.Select(t => $"'{Printable(t.Name)}'"))} " +
+                   $"to a batch file: its name contains characters cmd.exe interprets ({BatchCharacterList}). Rename the file.";
+
+        var names = string.Join(", ", refused.Select(t => t.IsFile ? $"'{{{{@{Printable(t.Name)}}}}}'" : $"'{t.Name}'"));
+        var first = secrets[0].Name;
+        var message =
+            $"Refused: tswap won't pass secret(s) {names} to a batch file. cmd.exe parses a batch file's arguments again, " +
+            $"and their values contain characters it interprets ({BatchCharacterList}; tswap's generated values often do). " +
+            $"Use a PowerShell script ('run powershell -File .\\script.ps1 {{{{{first}}}}}', read as $args[0]), or the " +
+            $"environment ('run --env PW={{{{{first}}}}} script.cmd', read with setlocal EnableDelayedExpansion as !PW!).";
+        return secrets.Count < refused.Count ? message + " Rename the file." : message;
+    }
+
+    // The positions of the batch targets the walk reaches: program words, and PowerShell's -File script.
+    private static IEnumerable<int> BatchTargets(IReadOnlyList<string> argv)
+    {
+        foreach (var i in ProgramPositions(argv))
+        {
+            if (IsBatchTarget(argv[i]))
+                yield return i;
+            var program = ProgramName(argv[i]);
+            if (!program.Equals("powershell", StringComparison.OrdinalIgnoreCase) && !program.Equals("pwsh", StringComparison.OrdinalIgnoreCase))
+                continue;
+            for (var j = i + 1; j + 1 < argv.Count; j++)
+                if (IsPowerShellFile(argv[j]))
+                {
+                    if (IsBatchTarget(argv[j + 1]))
+                        yield return j + 1;
+                    break;
+                }
+        }
+    }
+
+    // Brief T47 (A13, A21): -File by PowerShell's unambiguous-prefix rule, as IsPowerShellInline: -f, -fi, -fil, -file.
+    private static bool IsPowerShellFile(string arg) =>
+        arg.Length >= 2 && "-file".StartsWith(arg.ToLowerInvariant(), StringComparison.Ordinal);
 
     private static string FileTokenWayOut(string word) =>
         $"With a {{{{@file}}}} token no word of the command may be '{word}': rename the file if that is its name, " +
