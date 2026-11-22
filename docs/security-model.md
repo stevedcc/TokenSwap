@@ -400,6 +400,11 @@ JSON both read back byte for byte; a `''` marker line is written with double quo
 A `KEY=` line (`.env` style: `KEY=""`, `KEY=''`, `KEY=`) refuses it, naming the line and the marker,
 before anything is written: `.env` parsers disagree on escapes (Docker's `--env-file` reads the quotes
 literally), so pass such a value with a `{{name}}` token or use a YAML file.
+A filled file is written literally, so if a shell sources it (`source .env`, `. ./.env`), a value
+containing `$(...)`, a backtick or another `$` runs a command or expands there (the `\"` and `\\` of a
+double-quoted line read back correctly). A shell-sourced file therefore needs single-quoted values
+(`KEY=''`), and a value containing `'` breaks even that: the `''` a single-quoted line gets for it
+reads back as nothing.
 
 This replaces `apply` for agents, which now needs sudo. What it does not do:
 
