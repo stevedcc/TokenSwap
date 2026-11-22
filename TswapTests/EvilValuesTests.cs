@@ -468,13 +468,13 @@ public sealed class EvilValuesTests : IDisposable
 
     // Findings (A1): each pair is left out of its theory by KnownFindings; the full assertion is here, skipped.
 
-    [Fact(Skip = "T46 finding 1: redact turns the file's CRLF into LF before matching, so a value holding CRLF is not masked")]
+    [Fact(Skip = "T46 finding 1: redact turns the file's CRLF into LF before matching, so a value holding CRLF is not masked (#398)")]
     public void Finding1_CrlfInside_RedactMasks() => CheckRedactMasks("crlf-inside");
 
-    [Fact(Skip = "T46 finding 2: tocomment matches line by line, so a value holding a line break inside a line is not found")]
+    [Fact(Skip = "T46 finding 2: tocomment matches line by line, so a value holding a line break inside a line is not found (#399)")]
     public void Finding2_LfInside_TocommentDryrun() => CheckTocommentDryrun("lf-inside");
 
-    [Fact(Skip = "T46 finding 2: tocomment matches line by line, so a value holding a line break inside a line is not found")]
+    [Fact(Skip = "T46 finding 2: tocomment matches line by line, so a value holding a line break inside a line is not found (#399)")]
     public void Finding2_CrlfInside_TocommentDryrun() => CheckTocommentDryrun("crlf-inside");
 
     // ── Task 2, invariant 4: export, then import into a fresh vault ────────────────────────────────────────────

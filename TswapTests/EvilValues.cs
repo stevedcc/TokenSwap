@@ -190,8 +190,8 @@ public static class EvilValues
             [("cr-inside", GitBashExact)] = (5, Finding5),
         };
 
-    private const string Finding1 = "redact turns the file's CRLF into LF before matching, so a value holding CRLF is not masked";
-    private const string Finding2 = "tocomment matches line by line, so a value holding a line break inside a line is not found";
+    private const string Finding1 = "redact turns the file's CRLF into LF before matching, so a value holding CRLF is not masked (#398)";
+    private const string Finding2 = "tocomment matches line by line, so a value holding a line break inside a line is not found (#399)";
 
     // Brief T47 Task 2f (#402): public, so the skipped facts' Skip text is built from the same line.
     public const string Finding3 = "Git Bash (MSYS2) parses run's unquoted argument by its own rules and removes the ' (#402)";
