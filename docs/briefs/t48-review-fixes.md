@@ -65,3 +65,43 @@ does); it is on every GitHub Windows runner.
 T46 detector proof (CI 45003739420 on `t46-detector`, and the head's own red run 45003711187, which is the batch
 injection T47 fixes); the T46 tocomment-exclusion and Task 4 wording rulings, ratified; #402 gets the WindowsPty
 quoting note for finding 5.
+
+## Round 2 (controller ruling, after the F1 check found more spellings)
+
+The F1 report showed PowerShell 7's host parser (`CommandLineParameterParser.GetSwitchKey`/`MatchSwitch`,
+`CharExtensions.IsDash`) accepts more than `-` and `/`: a doubled dash, the Unicode dashes U+2013, U+2014, U+2015,
+surrounding whitespace, and any prefix down to the parameter's short form (`-co`, `-com`, `-en`). A spelling list will
+keep missing one, so both checks follow PowerShell's own rule, failing closed where Windows PowerShell 5.1's closed
+parser could differ.
+
+### F9: one PowerShell parameter normaliser
+
+`Validation.PowerShellParameterKey(string arg)` (private or internal): trim whitespace (`string.Trim()`), then strip every
+leading character that is `/`, `-`, U+2013, U+2014 or U+2015 (any number: fail closed), lower-case invariant. It returns
+null when nothing was stripped (not a parameter) or nothing is left.
+
+`IsPowerShellInline(arg)` is then: the key is non-null and is `ec` or `cwa`, or a prefix (length 1 or more) of
+`command`, `encodedcommand` or `commandwithargs`. (So `-c`, `-co`, `-com`, `--command`, `–c`, `—Command`, ` -c `, `/c`,
+`-e`, `-en`, `--encodedcommand` are all inline; `-ex` (ExecutionPolicy), `-config…`, `-nop`, `-f` are not.)
+
+Tests (next to F1's rows): each of those spellings is refused for `powershell` and `pwsh`, and `-ExecutionPolicy`,
+`-ConfigurationName`, `-NoProfile`, `-File` are not inline. **`PowerShellTooShortPrefix_SpeltWithASlash_BehavesAsItsDashForm`
+(added in F1 on this branch, never on main) is replaced**: `-co`/`/co` are now refused. That test exists only on this
+branch, so this is the brief's own correction, not a change to an existing test; say so in the commit. Break-it-once:
+strip only `-` and `/`; the Unicode-dash and `--` rows fail.
+
+### F10: the batch check after PowerShell fails closed
+
+For a program word that is `powershell` or `pwsh` (as `IsInterpreter` names them, any case, with `.exe`), **every later
+word that `IsBatchTarget` accepts after `Trim()`** counts as a batch target, whatever option or position it is in (this
+replaces the `-File`/`/File`/positional walk for these two programs; it covers `--file`, Unicode dashes, padding and
+Windows PowerShell 5.1's positional `-Command`, #401's case for batch files). This over-refuses a batch file's name passed
+as a plain argument to a PowerShell script (`pwsh -File s.ps1 x.cmd {{pw}}`), as ruling 2 already did for pwsh;
+accepted. Tests: `powershell x.cmd {{v}}`, `powershell --file x.cmd {{v}}`, `pwsh –File x.cmd {{v}}`, `pwsh " x.cmd" {{v}}`
+are refused; `powershell -File .\deploy.ps1 {{v}}` and `pwsh -File ./deploy.ps1 {{v}}` are still allowed (the refusal's
+own examples, `TheRefusalsOwnExamples_AreNotRefused`). If an existing test on main asserts that a batch-file word after
+`powershell`/`pwsh` is allowed, stop and list it. Break-it-once: restore the old walk; the `--file` and positional rows
+fail.
+
+`docs/scripts.md`: the inline-code sentence says "in any spelling PowerShell accepts (`-`, `--`, `/`, the Unicode
+dashes, a prefix)", and the batch section says any batch file named after `powershell` or `pwsh` counts.
