@@ -22,9 +22,11 @@ public sealed class EvilValuesCorpusTests
     [Fact]
     public void BatchCases_AreTheBriefsValues()
     {
-        // Task 3's four values and A9's unbalanced quote, verbatim; names unique and apart from the corpus's.
+        // Task 3's four values, A9's unbalanced quote and T47 Task 2c's unquoted ampersand, verbatim; names unique and
+        // apart from the corpus's.
         Assert.Equal(
-            ["\"&echo INJECTED>marker.txt&\"", "a\" & echo INJECTED>marker.txt & \"", "%PATH%", "^&echo INJECTED>marker.txt", "a\"&echo INJECTED>marker.txt"],
+            ["\"&echo INJECTED>marker.txt&\"", "a\" & echo INJECTED>marker.txt & \"", "%PATH%", "^&echo INJECTED>marker.txt", "a\"&echo INJECTED>marker.txt",
+             "x&echo.>marker.txt"],
             BatchCases.Select(c => c.Value).ToArray());
         Assert.Empty(BatchCases.Select(c => c.Name).Intersect(Cases.Select(c => c.Name)));
         Assert.Equal(BatchCases.Count, BatchCases.Select(c => c.Name).Distinct().Count());

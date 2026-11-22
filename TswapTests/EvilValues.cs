@@ -145,6 +145,9 @@ public static class EvilValues
         new("batch-percent-path", "%PATH%", "batch"),
         new("batch-caret-ampersand", "^&echo INJECTED>marker.txt", "batch"),
         new("batch-unbalanced-quote", "a\"&echo INJECTED>marker.txt", "batch"),
+        // Brief T47 Task 2c: no space and no quote, so .NET and WindowsPty pass it to cmd.exe unquoted, as they would
+        // a generated value such as aB3&xY9 (create's charset includes & ^ % !).
+        new("batch-unquoted-ampersand", "x&echo.>marker.txt", "batch"),
     ];
 
     /// <summary>The corpus as <c>(caseName, value)</c> rows.</summary>
