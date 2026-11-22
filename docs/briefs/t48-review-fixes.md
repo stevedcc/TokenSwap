@@ -105,3 +105,40 @@ fail.
 
 `docs/scripts.md`: the inline-code sentence says "in any spelling PowerShell accepts (`-`, `--`, `/`, the Unicode
 dashes, a prefix)", and the batch section says any batch file named after `powershell` or `pwsh` counts.
+
+## Round 3 (code review of T48 + fixes: GLM ready, MiMo one Important)
+
+### F11 (Important, MiMo): the batch check looks at every word (replaces F10's trigger)
+
+F10 checks words after a program word that `ProgramName` calls `pwsh`/`powershell`, but `ProgramName` doesn't normalise
+as Windows does, so `"pwsh.exe."`, `"pwsh.exe "`, `"pwsh.exe::$DATA"`, an 8.3 name, or an unknown wrapper (`docker run …`)
+still hand a value to `x.cmd`. Stop guessing which program starts it: on Windows, when a substituted value holds a set
+character, **every word of the command (the raw words, as A20 keeps them, after `Trim()`) that `IsBatchTarget` accepts is
+a batch target**, whatever program or position it is in. The program walk for batch purposes (`ProgramPositions` and the
+F10 PowerShell rule) is no longer needed for this check; remove what only it used (keep what other checks use).
+Over-refusal (accepted): a batch file's name (or the word `cmd`) passed as plain data next to such a secret, e.g.
+`git commit -m "fix x.cmd" {{pw}}` is not affected (the word is `fix x.cmd`, not a batch name) but `tool x.cmd {{pw}}` is.
+Tests: rows `["pwsh.exe.", "x.cmd", v]`, `["pwsh.exe ", "x.cmd", v]`, `["PowerShell.EXE.", "x.cmd", v]`,
+`["pwsh.exe::$DATA", "x.cmd", v]`, `["POWERS~1.EXE", "x.cmd", v]`, `["docker", "run", "img", "x.cmd", v]`,
+`["anytool", "--flag", "x.bat", v]` refused; the refusal's own examples still allowed (`TheRefusalsOwnExamples_AreNotRefused`),
+`powershell -File .\deploy.ps1 {{v}}` allowed, `--env PW={{v}} deploy.cmd` allowed. Existing rows in `AllowedCommands`
+that hold a batch word as data: if any exists, stop and list it. Break-it-once: restore F10's PowerShell-only trigger;
+the `pwsh.exe.`, `docker` and `anytool` rows fail. `docs/scripts.md` and `docs/commands.md` "run and batch files" (GLM
+minor 4): say a batch file named anywhere in the command counts.
+
+### F12 (Important, MiMo): the inline check normalises the program word as Windows does
+
+`ProgramName` (used by `GetBlockedInvocation`) strips, before its extension strip and comparisons, a drive prefix, a
+`:stream` suffix and trailing dots and spaces, exactly as `IsBatchTarget` normalises (one shared helper for both). Rows
+in `InlineCodeBlockTests`: `["pwsh.exe.", "-c", "Write-Host {{v}}"]`, `["pwsh.exe ", "-c", …]`, `["PowerShell.EXE.", "-c", …]`,
+`["pwsh.exe::$DATA", "-c", …]` refused, and the same normalisation for the other interpreters it names (one row each for
+`python.exe.` and `cmd.exe.`). 8.3 names can't be matched as text: say so in `docs/security-model.md`'s list of what the
+inline check doesn't catch (it is a shallow guard). Break-it-once: drop the trailing-dot strip; the `pwsh.exe.` row fails.
+
+### Minors
+
+- F13 (MiMo M2): rename `PowerShellInlineParameter_InAnySpellingPowerShellAccepts_IsRefused` to
+  `PowerShellInlineParameter_InAnySpellingPowerShellAccepts_OrANearMiss_IsRefused`, doc comment: `-/cwa` and `---ec` are
+  near misses PowerShell 7 rejects, refused fail-closed.
+- F14 (MiMo M3): `docs/commands.md` "(and every other command that reads piped input)" → "(and every other command that
+  reads piped text)".
