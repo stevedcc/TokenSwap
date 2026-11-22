@@ -164,6 +164,16 @@ public sealed class BatchArgumentTests
         new[] { "powershell", "-fil", "x.cmd", "{{" + Name + "}}" },
         new[] { "powershell", "-FILE", "x.bat", "{{" + Name + "}}" },
         new[] { "timeout", "5", "powershell", "-File", "x.cmd", "{{" + Name + "}}" },
+        // Controller ruling 2: pwsh's positional script (no -File), and /File by its unambiguous prefixes.
+        new[] { "pwsh", "x.cmd", "{{" + Name + "}}" },
+        new[] { "pwsh", "-NoProfile", "x.cmd", "{{" + Name + "}}" },
+        new[] { "pwsh", "-ExecutionPolicy", "Bypass", "x.bat", "{{" + Name + "}}" },
+        new[] { @"C:\Program Files\PowerShell\7\pwsh.exe", @"C:\dir\x.cmd", "{{" + Name + "}}" },
+        new[] { "powershell", "/File", "x.cmd", "{{" + Name + "}}" },
+        new[] { "pwsh", "/f", "x.cmd", "{{" + Name + "}}" },
+        new[] { "powershell", "/fi", "x.cmd", "{{" + Name + "}}" },
+        new[] { "pwsh", "/fil", "x.cmd", "{{" + Name + "}}" },
+        new[] { "powershell", "/FILE", "x.cmd", "{{" + Name + "}}" },
     };
 
     [Theory]
@@ -180,6 +190,11 @@ public sealed class BatchArgumentTests
         new[] { "wrapper.exe", "x.cmd", "{{" + Name + "}}" },
         // A batch file named as data to a program that isn't a wrapper.
         new[] { "tool.exe", "--script", "x.cmd", "{{" + Name + "}}" },
+        // Ruling 2: Windows PowerShell 5.1's positional argument is -Command (#401), not a script; pwsh's script is
+        // the first non-option argument, so a later x.cmd is that script's argument.
+        new[] { "powershell", "x.cmd", "{{" + Name + "}}" },
+        new[] { "pwsh", "./s.ps1", "x.cmd", "{{" + Name + "}}" },
+        new[] { "pwsh", "-File", "s.ps1", "x.cmd", "{{" + Name + "}}" },
     };
 
     [Theory]

@@ -394,7 +394,7 @@ public static class Validation
         return secrets.Count < refused.Count ? message + " Rename the file." : message;
     }
 
-    // The positions of the batch targets the walk reaches: program words, and PowerShell's -File script.
+    // The positions of the batch targets the walk reaches: program words, and PowerShell's script.
     private static IEnumerable<int> BatchTargets(IReadOnlyList<string> argv)
     {
         foreach (var i in ProgramPositions(argv))
@@ -402,21 +402,49 @@ public static class Validation
             if (IsBatchTarget(argv[i]))
                 yield return i;
             var program = ProgramName(argv[i]);
-            if (!program.Equals("powershell", StringComparison.OrdinalIgnoreCase) && !program.Equals("pwsh", StringComparison.OrdinalIgnoreCase))
+            var pwsh = program.Equals("pwsh", StringComparison.OrdinalIgnoreCase);
+            if (!pwsh && !program.Equals("powershell", StringComparison.OrdinalIgnoreCase))
                 continue;
-            for (var j = i + 1; j + 1 < argv.Count; j++)
-                if (IsPowerShellFile(argv[j]))
-                {
-                    if (IsBatchTarget(argv[j + 1]))
-                        yield return j + 1;
-                    break;
-                }
+            if (PowerShellScript(argv, i + 1, pwsh) is { } script && IsBatchTarget(argv[script]))
+                yield return script;
         }
     }
 
-    // Brief T47 (A13, A21): -File by PowerShell's unambiguous-prefix rule, as IsPowerShellInline: -f, -fi, -fil, -file.
+    /// <summary>
+    /// Brief T47 (A13, A21; controller ruling 2): the position of the script PowerShell runs, or null. Both editions:
+    /// the argument after <c>-File</c> or <c>/File</c>. pwsh only, whose first positional argument is <c>-File</c>'s
+    /// (Windows PowerShell 5.1's is <c>-Command</c>'s, #401): the first argument that isn't an option, where one that
+    /// follows an option may be that option's value, so a batch target there still counts (failing closed: a value is
+    /// rarely a .cmd).
+    /// </summary>
+    private static int? PowerShellScript(IReadOnlyList<string> argv, int from, bool pwsh)
+    {
+        var afterOption = false;
+        for (var j = from; j < argv.Count; j++)
+        {
+            var arg = argv[j];
+            if (IsPowerShellFile(arg))
+                return j + 1 < argv.Count ? j + 1 : null;
+            if (!pwsh)
+                continue;
+            if (IsBatchTarget(arg))
+                return j;
+            if (arg.StartsWith('-') || arg.StartsWith('/'))
+            {
+                afterOption = true;
+                continue;
+            }
+            if (!afterOption)
+                return j; // the script, not a batch file; what follows is its arguments
+            afterOption = false;
+        }
+        return null;
+    }
+
+    // Brief T47 (A13, A21; ruling 2): -File or /File by PowerShell's unambiguous-prefix rule, as IsPowerShellInline:
+    // -f, -fi, -fil, -file (and the same with /), any case.
     private static bool IsPowerShellFile(string arg) =>
-        arg.Length >= 2 && "-file".StartsWith(arg.ToLowerInvariant(), StringComparison.Ordinal);
+        arg.Length >= 2 && arg[0] is '-' or '/' && "file".StartsWith(arg[1..].ToLowerInvariant(), StringComparison.Ordinal);
 
     private static string FileTokenWayOut(string word) =>
         $"With a {{{{@file}}}} token no word of the command may be '{word}': rename the file if that is its name, " +

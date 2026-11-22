@@ -123,6 +123,10 @@ public sealed class RunBatchRefusalTests : IDisposable
         new[] { "find", ".", "-exec", "x.cmd", "{{pw}}", ";" },
         // A5: PowerShell's -File script.
         new[] { "powershell", "-File", "x.cmd", "{{pw}}" },
+        // Controller ruling 2.
+        new[] { "pwsh", "x.cmd", "{{pw}}" },
+        new[] { "powershell", "/File", "x.cmd", "{{pw}}" },
+        new[] { "pwsh", "/f", "x.cmd", "{{pw}}" },
         // A4: a name Windows normalises to a batch file.
         new[] { "x.cmd.", "{{pw}}" },
         new[] { "CMD.EXE", "{{pw}}" },
