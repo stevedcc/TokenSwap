@@ -1357,6 +1357,8 @@ public sealed class RunFileTokenEndToEndTests(TswapBinaryFixture binary)
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             RedirectStandardInput = true,
+            // Brief T48 (A4): tswap reads piped stdin as UTF-8 on every OS.
+            StandardInputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
             UseShellExecute = false,
             WorkingDirectory = _tempDir,
         };
