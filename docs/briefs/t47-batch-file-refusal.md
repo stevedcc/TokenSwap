@@ -69,6 +69,17 @@ Tests:
 
 Break-it-once: skip the call in `RunCommand`; the in-process refusal test must fail.
 
+## Task 2b: prove the recommended way out (owner, 2026-11-22: "Both ps and cmd?")
+
+The refusal recommends a PowerShell script with `-File`; that path is untested on real Windows. In `EndToEndTests.cs`,
+next to T46's batch test, a `[WindowsFact]` with the real binary: a script `capture.ps1` that writes `$args[0]` to
+`out.txt` exactly (`[IO.File]::WriteAllText("$PSScriptRoot\out.txt", $args[0])`, no newline added), run as
+`tswap run powershell -File capture.ps1 {{name}}` **and** `tswap run pwsh -File capture.ps1 {{name}}` (pwsh is on the
+runners), on both legs (redirected and ConPTY, as T46's test does), for every T46 batch case value **and** the corpus's
+quote and shell-character cases. Assert: `out.txt` holds exactly the value, and `marker.txt` never appears anywhere the
+T46 test looks. Each failure names case, leg and host. If either PowerShell re-parses a value, that's a finding to report
+at once: the refusal's advice would then be wrong, and the controller decides before the brief goes on.
+
 ## Task 3: docs
 
 - `docs/commands.md`, the `run` section: one paragraph. On Windows, `run` refuses to pass a secret to a `.cmd`/`.bat`
