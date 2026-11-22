@@ -1818,6 +1818,91 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     }
 
     /// <summary>
+    /// Brief T47 Task 2e: Git Bash's <c>bash.exe</c> (MSYS2) from PATH: the first one under a <c>\Git\</c> folder, never
+    /// System32's <c>bash.exe</c> (WSL's launcher), or null.
+    /// </summary>
+    private static string? FindGitBash() =>
+        (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+            .Where(dir => dir.Contains(@"\Git\", StringComparison.OrdinalIgnoreCase) || dir.EndsWith(@"\Git", StringComparison.OrdinalIgnoreCase))
+            .Select(dir => Path.Combine(dir, "bash.exe"))
+            .FirstOrDefault(File.Exists);
+
+    /// <summary>
+    /// Brief T47 Task 2e (owner: "And bash on Windows"): <c>tswap run &lt;Git Bash&gt; ./capture.sh {{name}}</c>, where
+    /// <c>capture.sh</c> writes <c>"$1"</c> to <c>out.txt</c> exactly (<c>printf '%s' "$1"</c>), on both legs (redirected
+    /// and ConPTY, as T46's batch test), for every corpus value (T46's cases and batch cases) and three built here: an
+    /// absolute Unix-looking path, a glob star and a glob question mark (with <c>abcXdef-value-2</c> in the work folder,
+    /// so a glob has something to match). Invariant (git-bash-exact): <c>out.txt</c> holds exactly the stored value, and
+    /// <c>marker.txt</c> never appears. MSYS2 converts path-like arguments when a non-MSYS program starts it, and may
+    /// glob: an alteration is a finding (T46's mechanism, <see cref="EvilValues.KnownFindings"/>, pairs left out here),
+    /// never a reason to weaken this test; the failure lists every altered case with its leg, for the controller's ruling.
+    /// </summary>
+    /// <remarks>
+    /// <para>Git Bash is started by its full path: CreateProcess searches System32 before PATH, where <c>bash.exe</c> is
+    /// WSL's launcher. Without Git Bash on PATH the legs are left out with a line saying why (never an early return).
+    /// <c>max-length</c> (65,536 characters) is left out: a Windows command line holds at most 32,767.</para>
+    /// <para>Break-it-once (the controller's, on Windows CI): a <c>capture.sh</c> that runs the value, so the ampersand
+    /// batch values must create <c>marker.txt</c>:</para>
+    /// <code>
+    /// File.WriteAllText(Path.Combine(work.FullName, "capture.sh"), "eval \"$1\"\nprintf '%s' \"$1\" &gt; out.txt\n");
+    /// </code>
+    /// </remarks>
+    [WindowsFact("Git Bash (MSYS2) started by a Windows program exists only on Windows")]
+    public void Run_GitBashScript_EvilValues_ArriveExactly_Windows()
+    {
+        var (work, anyMarker, removeMarkers) = ScriptWork();
+        File.WriteAllText(Path.Combine(work.FullName, "capture.sh"), "printf '%s' \"$1\" > out.txt\n");
+        File.WriteAllText(Path.Combine(work.FullName, "abcXdef-value-2"), "");
+        var outFile = Path.Combine(work.FullName, "out.txt");
+
+        var (initExit, _, initErr) = RunTswap("init", "--yubikey", "--no-recovery");
+        Assert.True(initExit == 0, $"init failed: {initErr}");
+        var (otherExit, _, otherErr) = RunTswapWithStdin(EvilValues.OtherSecretValue, "ingest", EvilValues.OtherSecretName);
+        Assert.True(otherExit == 0, otherErr);
+
+        var bash = FindGitBash();
+        List<string> legs = [];
+        if (bash is null)
+            _output.WriteLine("T47 git bash: no Git Bash (a bash.exe under a \\Git\\ folder) on PATH, its legs are not run");
+        else
+            legs = WindowsLegs("T47 git bash");
+
+        EvilValues.Case[] extra =
+        [
+            new("unix-absolute-path", "/abc/def-value-1", "git-bash"),
+            new("glob-star", "abc*def-value-2", "git-bash"),
+            new("glob-question-mark", "abc?def-value-3", "git-bash"),
+        ];
+        _output.WriteLine("T47 git bash: max-length is left out (a Windows command line holds at most 32,767 characters)");
+        var cases = EvilValues.Cases.Concat(EvilValues.BatchCases).Concat(extra)
+            .Where(c => c.Name != "max-length" && !EvilValues.KnownFindings.ContainsKey((c.Name, EvilValues.GitBashExact)));
+        var named = IngestEach(cases, "g");
+
+        static string Shown(string s) => EscapeVt(s).Length <= 80 ? EscapeVt(s) : EscapeVt(s)[..80] + "...";
+        List<string> failures = [];
+        foreach (var (c, name) in named)
+        foreach (var leg in legs)
+        {
+            removeMarkers();
+            File.Delete(outFile);
+            var where = $"{c.Name} [{leg} leg, git bash]";
+            var (exit, output) = RunWindowsLeg(work, leg, name, bash!, "./capture.sh", "{{" + name + "}}");
+            var expected = c.Value.TrimEnd();
+            var marker = anyMarker();
+            if (marker)
+                failures.Add($"{where}: marker.txt APPEARED (exit {exit})");
+            if (!File.Exists(outFile))
+                failures.Add($"{where}: no out.txt (exit {exit}): {Shown(output)}");
+            else if (File.ReadAllText(outFile, Encoding.UTF8) is var captured && captured != expected)
+                failures.Add($"{where}: ALTERED: expected [{Shown(expected)}] ({expected.Length} chars), got [{Shown(captured)}] ({captured.Length} chars)");
+            _output.WriteLine($"T47 git bash: {where}: exit {exit}; marker.txt {(marker ? "APPEARED" : "absent")}");
+        }
+        removeMarkers();
+
+        Assert.True(failures.Count == 0, $"{failures.Count} finding(s):\n" + string.Join("\n", failures));
+    }
+
+    /// <summary>
     /// Brief T47 Task 2d, the calling shell (A11): a script that itself runs <c>tswap -v run true {{pw}}</c>, the token
     /// written literally in its source, unquoted and quoted (<c>'{{pw}}'</c>). tswap substitutes; the calling shell only
     /// decides whether the token arrives. bash (plain, <c>set -B</c>, <c>shopt -s extglob</c>) and zsh (<c>zsh -f</c>,

@@ -32,11 +32,13 @@ public static class EvilValues
     public const string ExportImport = "export-import";
     public const string BatchInert = "batch-inert";
     public const string BatchCapture = "batch-capture";
+    /// <summary>Brief T47 Task 2e: Git Bash (MSYS2) on Windows receives the value exactly.</summary>
+    public const string GitBashExact = "git-bash-exact";
 
     public static readonly IReadOnlyList<string> Invariants =
     [
         StoredExactly, OneArgument, EnvExact, NoReexpansion, MaskedOutput, RotatePrevious,
-        FillRoundtrip, RedactMasks, TocommentDryrun, ExportImport, BatchInert, BatchCapture,
+        FillRoundtrip, RedactMasks, TocommentDryrun, ExportImport, BatchInert, BatchCapture, GitBashExact,
     ];
 
     /// <summary>The class of the cases that hold tswap's own syntax (the no-reexpansion invariant's cases).</summary>
