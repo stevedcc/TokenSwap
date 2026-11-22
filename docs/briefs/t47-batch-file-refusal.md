@@ -138,6 +138,42 @@ as $1") says to read `"$1"` quoted, and on Windows to use a PowerShell `-File` s
 `prompt-hash`, which is fine in 0.3.2; keep the prompt ASCII-only (T43's test) and update any prompt test that pins
 the changed sentence only with the controller's sanction, listing it in the report.
 
+## Amendments (round 1: GLM and MiMo, both "no")
+
+MiMo's C1 (scope versus #392's comment) is settled: Tasks 2b-2d and the docs task were added after the commit it read.
+
+- **A1 (GLM C1, wrappers).** The check runs on **every program word** `Validation.ProgramWords` yields for the
+  **post-substitution** argv (wrappers such as `timeout`, `nohup`, `find -exec`), not only `argv[0]`. Tests:
+  `timeout 5 x.cmd {{name}}` and `find . -exec x.cmd {{name}} ;` are refused with `Starts == 0`; break-it-once: check only
+  `argv[0]` and see the wrapper rows fail. An unknown wrapper executable (`wrapper.exe x.cmd …`) stays out of reach, as
+  for every other check: say so in the report and the docs.
+- **A2 (both, `{{@file}}`).** The filled copy keeps the source's base name, and Windows file names may hold `& % ! ^ ( )`.
+  So for a batch target the check covers **every substituted argv element**: secret values and `{{@file}}` paths. A
+  refused path names the file token, not a secret. Test: `run x.cmd {{@a&b.yaml}}` is refused.
+- **A3 (MiMo I1).** The set adds `(` and `)`: `" & | < > ^ % ! ( )`, CR, LF. `'` and backtick matter only inside a
+  script's own `for /f`; that is the script's business (docs). The message lists the set exactly as checked.
+- **A4 (MiMo I2, names).** Before deciding, normalise the program name as Windows does: strip trailing dots and spaces
+  from the last component and a `:stream` suffix (`x.cmd::$DATA`); compare ignoring case. Tests: `x.cmd.`, `"x.cmd "`,
+  `x.cmd...`, `x.cmd::$DATA`, `CMD.EXE`, `X.BAT` are batch targets.
+- **A5 (MiMo I5).** `powershell`/`pwsh` with `-File <batch>` counts as a batch target (record in the report what each
+  edition does with a `.cmd` script; refuse either way). Test row: `run powershell -File x.cmd {{name}}` refused.
+- **A6 (MiMo I3; controller ruling).** `--env` values stay allowed for batch targets: read with delayed expansion
+  (`!PW!`) they're never parsed as command text, which Task 2c's E2E proves. `%PW%` inside the script is the script's
+  re-parse; the docs say never `%PW%` (or `%1`) with a secret.
+- **A7 (both, tests).** Task 1's refused rows include one corpus case per character of the set (`double-quote`,
+  `ampersand`, `pipe`, `less-than`, `greater-than`, `caret`, `percent`, `bang`, an open and a close parenthesis,
+  `cr-inside`, `lf-inside`). Break-it-once: drop `"` and `&` and see the `double-quote` and `ampersand` rows fail; then
+  drop `!` and see the `bang` row fail. The message test asserts only that the value as a whole and the word `INJECTED`
+  don't appear.
+- **A8 (MiMo M2, M3, M4).** The Windows gate is the existing seam `ctx.Os == OSPlatform.Windows` (as
+  `RunWindowsWordingTests` uses), never the real OS check. When several tokens trip it, the message names every
+  refused secret or file token, in argv order.
+- **A9 (MiMo I6, GLM M6).** The `run` paragraph goes **outside** `docs/commands.md`'s generated block (lines between
+  `BEGIN GENERATED` and `END GENERATED` are checked by `CommandReferenceTests`): next to the hand-written `## run --env`
+  section. Spelling and doc-link guards apply.
+- **A10 (GLM M5).** `run powershell {{name}}` with no `-File` runs the value as code today; that's issue #<filed by the
+  controller>, not this brief, but `docs/scripts.md` says to always use `-File`.
+
 ## Out of scope
 
 - Escaping for `cmd.exe` instead of refusing (owner's option B was refusal; escaping is notoriously error-prone).
