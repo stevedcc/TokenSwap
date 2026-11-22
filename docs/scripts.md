@@ -86,8 +86,8 @@ What breaks it:
 
 - `Invoke-Expression` with the value, or `& ([scriptblock]::Create(...))`, which run it as code.
 - Leaving out `-File`: `powershell .\deploy.ps1 ...` or `powershell -Command ...` reads the rest of the command line
-  as PowerShell code, so the value is parsed too. `run` refuses `-Command` and `-EncodedCommand`; give `-File` every
-  time.
+  as PowerShell code, so the value is parsed too. `run` refuses `-Command` and `-EncodedCommand` (also spelt with
+  `/`); give `-File` every time.
 - In a PowerShell window, an unquoted token: PowerShell reads `{...}` as a script block, so `tswap` never sees the
   token. Quote it: `'{{db-pw}}'` ([Windows notes](install.md#windows-notes)).
 

@@ -143,6 +143,34 @@ public sealed class RunBatchRefusalTests : IDisposable
         AssertRefused(Run(OSPlatform.Windows, command), Amp, "pw");
     }
 
+    public static TheoryData<string[]> PowerShellSlashCommandBatchCommands => new()
+    {
+        new[] { "powershell", "/command", "x.cmd", "{{pw}}" },
+        new[] { "powershell", "/c", "x.cmd", "{{pw}}" },
+        new[] { "pwsh", "/command", "x.cmd", "{{pw}}" },
+    };
+
+    /// <summary>
+    /// Review fix F1: <c>/command</c> and <c>/c</c> are PowerShell's -Command too, so a batch file run through them is
+    /// refused (by whichever check fires first), the child never starts and the value is never printed; on every OS.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(PowerShellSlashCommandBatchCommands))]
+    public void ABatchFileThroughPowerShellsSlashCommand_IsRefused(string[] command)
+    {
+        Secret("pw", Amp);
+
+        foreach (var os in new[] { OSPlatform.Windows, OSPlatform.Linux })
+        {
+            var (exit, stdout, stderr) = Run(os, command);
+
+            Assert.True(exit == 1, $"{os}: exit {exit}: {stderr}");
+            Assert.Equal(0, _pty.Starts);
+            Assert.Contains("❌ Error: ", stderr);
+            Assert.DoesNotContain(Amp, stderr + stdout);
+        }
+    }
+
     [Fact]
     public void SeveralRefusedSecrets_AreNamedInArgvOrder()
     {

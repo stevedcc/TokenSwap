@@ -254,4 +254,43 @@ public class InlineCodeBlockTests
         Assert.Equal("sh", blocked!.Program);
         Assert.Contains("script file", blocked.Reason);
     }
+
+    // ── Review fix F1: PowerShell takes '/' as its parameter prefix as well as '-' ─────────────────
+
+    public static TheoryData<string, string> PowerShellSlashSpellings()
+    {
+        var data = new TheoryData<string, string>();
+        foreach (var program in new[] { "powershell", "pwsh" })
+        foreach (var flag in new[] { "/c", "/C", "/e", "/ec", "/cwa", "/comm", "/Command", "/enc", "/EncodedCommand", "/commandwithargs" })
+            data.Add(program, flag);
+        return data;
+    }
+
+    /// <summary>
+    /// F1: each slash spelling of an inline-code parameter is refused exactly as its dash form is, and the refusal
+    /// names the spelling given.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(PowerShellSlashSpellings))]
+    public void PowerShellInlineParameter_SpeltWithASlash_IsRefusedAsItsDashForm(string program, string slash)
+    {
+        var dash = "-" + slash[1..];
+        var byDash = Validation.GetBlockedInvocation([program, dash, "Write-Output {{x}}"]);
+        var bySlash = Validation.GetBlockedInvocation([program, slash, "Write-Output {{x}}"]);
+
+        Assert.NotNull(byDash);
+        Assert.NotNull(bySlash);
+        Assert.Equal(program, bySlash!.Program);
+        Assert.Equal(byDash!.Reason.Replace(dash, slash), bySlash.Reason);
+    }
+
+    /// <summary>F1: <c>/co</c> is too short to name one parameter, as <c>-co</c> is, and behaves as <c>-co</c> does.</summary>
+    [Theory]
+    [InlineData("powershell")]
+    [InlineData("pwsh")]
+    public void PowerShellTooShortPrefix_SpeltWithASlash_BehavesAsItsDashForm(string program)
+    {
+        Assert.Null(Validation.GetBlockedInvocation([program, "-co", "x", "{{x}}"]));
+        Assert.Null(Validation.GetBlockedInvocation([program, "/co", "x", "{{x}}"]));
+    }
 }

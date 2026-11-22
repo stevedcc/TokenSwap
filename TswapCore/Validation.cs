@@ -930,10 +930,14 @@ public static class Validation
         || name.Equals("pwsh", StringComparison.OrdinalIgnoreCase) || name.Equals("powershell", StringComparison.OrdinalIgnoreCase)
         || name.Equals("cmd", StringComparison.OrdinalIgnoreCase) || name.Equals("deno", StringComparison.OrdinalIgnoreCase);
 
-    // PowerShell accepts unambiguous prefixes of its parameters (-comm = -Command).
+    // PowerShell accepts unambiguous prefixes of its parameters (-comm = -Command). Review fix F1: its host takes '/'
+    // as the parameter prefix too (/c, /Command, /EncodedCommand), on every OS here (fail closed): a leading '/' counts
+    // exactly as a leading '-'.
     private static bool IsPowerShellInline(string arg)
     {
         var a = arg.ToLowerInvariant();
+        if (a.StartsWith('/'))
+            a = "-" + a[1..];
         if (a is "-c" or "-e" or "-ec" or "-cwa")
             return true;
         return (a.Length >= 4 && "-command".StartsWith(a, StringComparison.Ordinal))
