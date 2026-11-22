@@ -1915,7 +1915,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
                 if (get.ExitCode != 0)
                     failures.Add($"{c.Name}: get failed (exit {get.ExitCode}): {getErr}");
                 else if (stored != expected)
-                    failures.Add($"{c.Name}: STORED ALTERED: expected [{Shown(expected)}], get printed [{Shown(stored)}]");
+                    failures.Add($"{c.Name}: get printed another value (read as UTF-8): expected [{Shown(expected)}], got [{Shown(stored)}]");
             }
 
             File.Delete(outFile);
