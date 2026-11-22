@@ -78,8 +78,8 @@ public class PromptTests
     {
         var text = Prompt.GetText("tswap").ReplaceLineEndings(" ");
 
-        Assert.Contains("the script reads it as \"$1\", quoted", text);
-        Assert.Contains("never a batch file", text);
+        Assert.Contains("the script reads it quoted: \"$1\" in bash or zsh, $args[0] in a PowerShell script run with -File", text);
+        Assert.Contains("never pass a secret to a batch file or cmd", text);
     }
 
     [Fact]

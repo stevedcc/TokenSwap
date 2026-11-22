@@ -58,7 +58,7 @@ What breaks it: `eval "$1"` (and `source`, `zsh -c "$1"`), which run the value a
 
 Tested by `EndToEndTests.Run_UnixShellScripts_EvilValues_ArriveExactly` (where zsh is installed: macOS has it).
 
-## PowerShell (Windows PowerShell 5.1 and PowerShell 7)
+## PowerShell (Windows PowerShell 5.1, and PowerShell 7 on Windows, Linux and macOS)
 
 ```powershell
 # deploy.ps1
@@ -67,7 +67,8 @@ param($Password)            # or $args[0]
 ```
 
 Run it with `-File`, always: `tswap run powershell -File .\deploy.ps1 '{{db-pw}}'` (or `pwsh -File`). With `-File`,
-PowerShell passes each argument to the script as a string.
+PowerShell passes each argument to the script as a string. PowerShell 7 (`pwsh`) works the same on Linux and macOS: `tswap run pwsh -File ./deploy.ps1
+'{{db-pw}}'` (the tests below run on Windows; the rules are the same everywhere).
 
 What breaks it:
 
