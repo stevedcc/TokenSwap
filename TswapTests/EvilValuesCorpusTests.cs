@@ -90,7 +90,9 @@ public sealed class EvilValuesCorpusTests
             .ToList();
         foreach (var ((caseName, invariant), (number, line)) in KnownFindings)
         {
-            Assert.Contains(invariant is BatchInert or BatchCapture ? BatchCases : Cases, c => c.Name == caseName);
+            // T47 Task 2f: git-bash-exact runs over the corpus and the batch cases.
+            Assert.Contains(invariant is BatchInert or BatchCapture ? BatchCases
+                : invariant is GitBashExact ? Cases.Concat(BatchCases) : Cases, c => c.Name == caseName);
             Assert.Contains(invariant, Invariants);
             var name = FindingFactName(caseName, invariant, number);
             var fact = Assert.Single(facts, f => f.Name == name).Fact!;

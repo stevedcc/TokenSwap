@@ -1850,8 +1850,58 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     [WindowsFact("Git Bash (MSYS2) started by a Windows program exists only on Windows")]
     public void Run_GitBashScript_EvilValues_ArriveExactly_Windows()
     {
+        // Task 2f: the extras are local to this test, outside the corpus KnownFindings checks, so glob-star (altered
+        // on CI, #402) is left out here with a line, not registered.
+        _output.WriteLine("T47 git bash: glob-star is left out (Git Bash expands the glob, #402; T47 Task 2f)");
+        var cases = EvilValues.Cases.Concat(EvilValues.BatchCases).Concat(GitBashExtras.Where(c => c.Name != "glob-star"))
+            .Where(c => !EvilValues.KnownFindings.ContainsKey((c.Name, EvilValues.GitBashExact)));
+        var failures = RunGitBashCases(cases, viaEnv: false);
+        Assert.True(failures.Count == 0, $"{failures.Count} finding(s):\n" + string.Join("\n", failures));
+    }
+
+    /// <summary>
+    /// Brief T47 Task 2f: the guide's and the prompt's way with Git Bash, <c>tswap run --env PW={{name}} -- &lt;Git
+    /// Bash&gt; ./capture-env.sh</c>, where <c>capture-env.sh</c> writes <c>"$PW"</c> to <c>out.txt</c> exactly
+    /// (<c>printf '%s' "$PW"</c>), on both legs, for every corpus value, the batch cases and the three extras (#402's spike:
+    /// all 73 values intact). Invariant: <c>out.txt</c> holds exactly the stored value, and <c>marker.txt</c> never
+    /// appears. Left out, with lines (<see cref="RunGitBashCases"/>): max-length, and the non-ASCII values, which wait
+    /// on the stdin-encoding question.
+    /// </summary>
+    /// <remarks>
+    /// Break-it-once (the controller's, on Windows CI): a <c>capture-env.sh</c> that runs the value, so the ampersand
+    /// batch values must create <c>marker.txt</c>:
+    /// <code>
+    /// File.WriteAllText(Path.Combine(work.FullName, "capture-env.sh"), "eval \"$PW\"\nprintf '%s' \"$PW\" &gt; out.txt\n");
+    /// </code>
+    /// </remarks>
+    [WindowsFact("Git Bash (MSYS2) started by a Windows program exists only on Windows")]
+    public void Run_GitBashScript_EnvValue_EvilValues_ArriveExactly_Windows()
+    {
+        var failures = RunGitBashCases(EvilValues.Cases.Concat(EvilValues.BatchCases).Concat(GitBashExtras), viaEnv: true);
+        Assert.True(failures.Count == 0, $"{failures.Count} failure(s):\n" + string.Join("\n", failures));
+    }
+
+    /// <summary>Brief T47 Task 2e: the three values built for Git Bash (a Unix-looking path, a glob star, a glob question mark).</summary>
+    private static readonly EvilValues.Case[] GitBashExtras =
+    [
+        new("unix-absolute-path", "/abc/def-value-1", "git-bash"),
+        new("glob-star", "abc*def-value-2", "git-bash"),
+        new("glob-question-mark", "abc?def-value-3", "git-bash"),
+    ];
+
+    /// <summary>
+    /// Brief T47 Tasks 2e and 2f: runs Git Bash through tswap for each case on both Windows legs and returns every
+    /// failure (marker.txt, no out.txt, an altered value), naming case and leg. With <paramref name="viaEnv"/> the value
+    /// goes in <c>--env PW</c> to <c>capture-env.sh</c> (<c>"$PW"</c>), else as an argument to <c>capture.sh</c>
+    /// (<c>"$1"</c>). An empty <c>abcXdef-value-2</c> in the work folder gives a glob something to match. Without Git
+    /// Bash on PATH no leg runs (a line says why). <c>max-length</c> is always left out, with a line: a Windows command
+    /// line holds at most 32,767 characters.
+    /// </summary>
+    private List<string> RunGitBashCases(IEnumerable<EvilValues.Case> cases, bool viaEnv)
+    {
         var (work, anyMarker, removeMarkers) = ScriptWork();
-        File.WriteAllText(Path.Combine(work.FullName, "capture.sh"), "printf '%s' \"$1\" > out.txt\n");
+        var script = viaEnv ? "capture-env.sh" : "capture.sh";
+        File.WriteAllText(Path.Combine(work.FullName, script), viaEnv ? "printf '%s' \"$PW\" > out.txt\n" : "printf '%s' \"$1\" > out.txt\n");
         File.WriteAllText(Path.Combine(work.FullName, "abcXdef-value-2"), "");
         var outFile = Path.Combine(work.FullName, "out.txt");
 
@@ -1860,23 +1910,21 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         var (otherExit, _, otherErr) = RunTswapWithStdin(EvilValues.OtherSecretValue, "ingest", EvilValues.OtherSecretName);
         Assert.True(otherExit == 0, otherErr);
 
+        var tag = viaEnv ? "T47 git bash env" : "T47 git bash";
         var bash = FindGitBash();
         List<string> legs = [];
         if (bash is null)
-            _output.WriteLine("T47 git bash: no Git Bash (a bash.exe under a \\Git\\ folder) on PATH, its legs are not run");
+            _output.WriteLine($"{tag}: no Git Bash (a bash.exe under a \\Git\\ folder) on PATH, its legs are not run");
         else
-            legs = WindowsLegs("T47 git bash");
-
-        EvilValues.Case[] extra =
-        [
-            new("unix-absolute-path", "/abc/def-value-1", "git-bash"),
-            new("glob-star", "abc*def-value-2", "git-bash"),
-            new("glob-question-mark", "abc?def-value-3", "git-bash"),
-        ];
-        _output.WriteLine("T47 git bash: max-length is left out (a Windows command line holds at most 32,767 characters)");
-        var cases = EvilValues.Cases.Concat(EvilValues.BatchCases).Concat(extra)
-            .Where(c => c.Name != "max-length" && !EvilValues.KnownFindings.ContainsKey((c.Name, EvilValues.GitBashExact)));
-        var named = IngestEach(cases, "g");
+            legs = WindowsLegs(tag);
+        _output.WriteLine($"{tag}: max-length is left out (a Windows command line holds at most 32,767 characters)");
+        // T47 Task 2f (controller's correction): a non-ASCII value may already be altered by ingest's stdin on Windows
+        // (the console code page), not by Git Bash; those cases wait on that question and are left out here.
+        var all = cases.Where(c => c.Name != "max-length").ToList();
+        var nonAscii = all.Where(c => c.Value.Any(ch => ch > '\x7F')).Select(c => c.Name).ToList();
+        if (nonAscii.Count > 0)
+            _output.WriteLine($"{tag}: left out, waiting on the stdin-encoding question (ingest's stdin on Windows): {string.Join(", ", nonAscii)}");
+        var named = IngestEach(all.Where(c => !nonAscii.Contains(c.Name)), "g");
 
         static string Shown(string s) => EscapeVt(s).Length <= 80 ? EscapeVt(s) : EscapeVt(s)[..80] + "...";
         List<string> failures = [];
@@ -1885,8 +1933,10 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         {
             removeMarkers();
             File.Delete(outFile);
-            var where = $"{c.Name} [{leg} leg, git bash]";
-            var (exit, output) = RunWindowsLeg(work, leg, name, bash!, "./capture.sh", "{{" + name + "}}");
+            var where = $"{c.Name} [{leg} leg, git bash{(viaEnv ? ", --env" : "")}]";
+            var (exit, output) = viaEnv
+                ? RunWindowsLeg(work, leg, name, "--env", "PW={{" + name + "}}", "--", bash!, "./" + script)
+                : RunWindowsLeg(work, leg, name, bash!, "./" + script, "{{" + name + "}}");
             var expected = c.Value.TrimEnd();
             var marker = anyMarker();
             if (marker)
@@ -1895,12 +1945,47 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
                 failures.Add($"{where}: no out.txt (exit {exit}): {Shown(output)}");
             else if (File.ReadAllText(outFile, Encoding.UTF8) is var captured && captured != expected)
                 failures.Add($"{where}: ALTERED: expected [{Shown(expected)}] ({expected.Length} chars), got [{Shown(captured)}] ({captured.Length} chars)");
-            _output.WriteLine($"T47 git bash: {where}: exit {exit}; marker.txt {(marker ? "APPEARED" : "absent")}");
+            _output.WriteLine($"{tag}: {where}: exit {exit}; marker.txt {(marker ? "APPEARED" : "absent")}");
         }
         removeMarkers();
-
-        Assert.True(failures.Count == 0, $"{failures.Count} finding(s):\n" + string.Join("\n", failures));
+        return failures;
     }
+
+    /// <summary>
+    /// Brief T47 Task 2f: a git-bash-exact finding's full assertion, the one case through <see cref="RunGitBashCases"/>
+    /// as an argument. Its facts are plain skipped <c>[Fact]</c>s (T46's protocol); un-skipping one means making it a
+    /// <c>[WindowsFact]</c> as well (#402).
+    /// </summary>
+    private void AssertGitBashArrivesExactly(string caseName)
+    {
+        var failures = RunGitBashCases([EvilValues.Get(caseName)], viaEnv: false);
+        Assert.True(failures.Count == 0, string.Join("\n", failures));
+    }
+
+    // Brief T47 Task 2f: the git-bash-exact findings of CI run 45021236991 (#402), one fact per (case, invariant).
+    [Fact(Skip = "T46 finding 3: " + EvilValues.Finding3)]
+    public void Finding3_SingleQuote_GitBashExact() => AssertGitBashArrivesExactly("single-quote");
+
+    [Fact(Skip = "T46 finding 3: " + EvilValues.Finding3)]
+    public void Finding3_OwnerEscapingSet_GitBashExact() => AssertGitBashArrivesExactly("owner-escaping-set");
+
+    [Fact(Skip = "T46 finding 4: " + EvilValues.Finding4)]
+    public void Finding4_TokenSyntax_GitBashExact() => AssertGitBashArrivesExactly("token-syntax");
+
+    [Fact(Skip = "T46 finding 4: " + EvilValues.Finding4)]
+    public void Finding4_FileTokenSyntax_GitBashExact() => AssertGitBashArrivesExactly("file-token-syntax");
+
+    [Fact(Skip = "T46 finding 4: " + EvilValues.Finding4)]
+    public void Finding4_EmbeddedTokenSyntax_GitBashExact() => AssertGitBashArrivesExactly("embedded-token-syntax");
+
+    [Fact(Skip = "T46 finding 5: " + EvilValues.Finding5)]
+    public void Finding5_LfInside_GitBashExact() => AssertGitBashArrivesExactly("lf-inside");
+
+    [Fact(Skip = "T46 finding 5: " + EvilValues.Finding5)]
+    public void Finding5_CrlfInside_GitBashExact() => AssertGitBashArrivesExactly("crlf-inside");
+
+    [Fact(Skip = "T46 finding 5: " + EvilValues.Finding5)]
+    public void Finding5_CrInside_GitBashExact() => AssertGitBashArrivesExactly("cr-inside");
 
     /// <summary>
     /// Brief T47 Task 2d, the calling shell (A11): a script that itself runs <c>tswap -v run true {{pw}}</c>, the token

@@ -107,6 +107,7 @@ Rules for fields:
    (the script reads it quoted: ""$1"" in bash or zsh, $args[0] in a PowerShell script run with -File, e.g.
    `%CMD% run powershell -File .\deploy.ps1 '{{secret-name}}'`; never pass a secret to a batch file or cmd:
    cmd.exe parses their arguments again)
+   With Git Bash on Windows, pass the secret as `--env NAME={{secret-name}}` and read it as ""$NAME"" (its arguments may arrive altered)
 4. If you see a plaintext secret value in ANY context (file contents, command output,
    log messages, error messages), you MUST IMMEDIATELY run `%CMD% burn <name> <reason>`
    BEFORE continuing any other work. Do not finish your current task first.

@@ -44,13 +44,17 @@ at spaces and expands as a pattern (`*`, `?`). Each turns the value into code or
 
 Tested by `EndToEndTests.Run_UnixShellScripts_EvilValues_ArriveExactly`.
 
-**Git Bash on Windows.** Git Bash's `bash.exe` is an MSYS2 program, and MSYS2 rewrites the arguments a Windows
-program (such as tswap) starts it with: an argument that looks like a Unix path (`/abc/def`) may be converted to a
-Windows path, and an argument with `*` or `?` may be expanded as a glob, before the script sees `"$1"`.
-<!-- T47 2e: confirm after CI --> Which of tswap's test values arrive altered is still to be confirmed by the
-Windows CI run. Setting `MSYS_NO_PATHCONV=1` (or `MSYS2_ARG_CONV_EXCL='*'`) in your shell turns off the path
-conversion. Start Git Bash by its full path (`C:\Program Files\Git\bin\bash.exe`): a bare `bash` can start WSL's
-`bash.exe` in System32 instead. Tested by `EndToEndTests.Run_GitBashScript_EvilValues_ArriveExactly_Windows`.
+**Git Bash on Windows.** Git Bash's `bash.exe` is an MSYS2 program, and MSYS2 parses the command line a Windows
+program (such as tswap) starts it with by its own rules. Through `run`'s arguments today, Git Bash removes a `'`,
+expands braces (`{{x}}` arrives as `x`) and globs (`abc*def` can match a file), so the script's `"$1"` can be a
+different value ([#402](https://github.com/stevedcc/TokenSwap/issues/402) tracks the fix). Pass secrets to a Git
+Bash script in the environment instead and read them as `"$PW"`: `tswap run --env PW={{db-pw}} --
+"C:\Program Files\Git\bin\bash.exe" ./deploy.sh`. That way is tested with every ASCII test value. Start Git Bash by its
+full path, as there: a bare `bash` can start WSL's `bash.exe` in System32 instead. MSYS2's path conversion doesn't
+apply when tswap starts Git Bash; it applies when the script passes the value on to a Windows `.exe`, and that is
+where `MSYS_NO_PATHCONV=1` (or `MSYS2_ARG_CONV_EXCL='*'`) belongs. Tested by
+`EndToEndTests.Run_GitBashScript_EnvValue_EvilValues_ArriveExactly_Windows` (the environment) and
+`EndToEndTests.Run_GitBashScript_EvilValues_ArriveExactly_Windows` (arguments).
 
 ## zsh
 

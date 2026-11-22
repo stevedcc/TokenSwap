@@ -178,10 +178,25 @@ public static class EvilValues
             [("crlf-inside", RedactMasks)] = (1, Finding1),
             [("lf-inside", TocommentDryrun)] = (2, Finding2),
             [("crlf-inside", TocommentDryrun)] = (2, Finding2),
+            // Brief T47 Task 2f: Git Bash (MSYS2) on Windows, CI run 45021236991, both legs unless the line says so (#402).
+            // ASCII cases only: the non-ASCII values wait on the stdin-encoding question (RunGitBashCases).
+            [("single-quote", GitBashExact)] = (3, Finding3),
+            [("owner-escaping-set", GitBashExact)] = (3, Finding3),
+            [("token-syntax", GitBashExact)] = (4, Finding4),
+            [("file-token-syntax", GitBashExact)] = (4, Finding4),
+            [("embedded-token-syntax", GitBashExact)] = (4, Finding4),
+            [("lf-inside", GitBashExact)] = (5, Finding5),
+            [("crlf-inside", GitBashExact)] = (5, Finding5),
+            [("cr-inside", GitBashExact)] = (5, Finding5),
         };
 
     private const string Finding1 = "redact turns the file's CRLF into LF before matching, so a value holding CRLF is not masked";
     private const string Finding2 = "tocomment matches line by line, so a value holding a line break inside a line is not found";
+
+    // Brief T47 Task 2f (#402): public, so the skipped facts' Skip text is built from the same line.
+    public const string Finding3 = "Git Bash (MSYS2) parses run's unquoted argument by its own rules and removes the ' (#402)";
+    public const string Finding4 = "Git Bash (MSYS2) expands the braces of run's unquoted argument, so {{x}} arrives as x (#402)";
+    public const string Finding5 = "on the ConPTY leg a value holding a line break reaches Git Bash (MSYS2) cut at the break (#402)";
 
     /// <summary>
     /// The theory data of <paramref name="invariant"/>: the names of the cases <paramref name="where"/> selects (all

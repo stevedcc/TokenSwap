@@ -80,6 +80,8 @@ public class PromptTests
 
         Assert.Contains("the script reads it quoted: \"$1\" in bash or zsh, $args[0] in a PowerShell script run with -File", text);
         Assert.Contains("never pass a secret to a batch file or cmd", text);
+        // T47 Task 2f (#402): Git Bash on Windows may alter arguments, so the environment.
+        Assert.Contains("With Git Bash on Windows, pass the secret as `--env NAME={{secret-name}}` and read it as \"$NAME\"", text);
     }
 
     [Fact]
