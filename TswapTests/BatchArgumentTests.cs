@@ -117,7 +117,7 @@ public sealed class BatchArgumentTests
             "Refused: tswap won't pass secret(s) 'db-pw' to a batch file. cmd.exe parses a batch file's arguments again, " +
             "and their values contain characters it interprets (one of \" & | < > ^ % ! ( ) or a line break; tswap's " +
             "generated values often do). Use a PowerShell script ('run powershell -File .\\script.ps1 {{db-pw}}', read as " +
-            "$args[0]), or the environment ('run --env PW={{db-pw}} script.cmd', read with setlocal EnableDelayedExpansion " +
+            "$args[0]), or the environment ('run --env PW={{db-pw}} deploy.cmd', read with setlocal EnableDelayedExpansion " +
             "as !PW!).",
             message);
     }
@@ -237,7 +237,7 @@ public sealed class BatchArgumentTests
         Assert.NotNull(message);
         Assert.StartsWith("Refused: tswap won't pass secret(s) 'zeta', 'alpha' to a batch file.", message);
         Assert.Contains("'run powershell -File .\\script.ps1 {{zeta}}'", message);
-        Assert.Contains("'run --env PW={{zeta}} script.cmd'", message);
+        Assert.Contains("'run --env PW={{zeta}} deploy.cmd'", message);
         Assert.DoesNotContain("plain", message);
     }
 

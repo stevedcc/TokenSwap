@@ -169,10 +169,36 @@ public sealed class RunBatchRefusalTests : IDisposable
         Assert.Empty(Directory.EnumerateFiles(_temp, "*", SearchOption.AllDirectories));
     }
 
+    /// <summary>
+    /// Controller ruling 1: both ways out the refusal names, taken from its own text with the secret's name in, run
+    /// on Windows without any refusal, also with a refused-class value.
+    /// </summary>
+    [Fact]
+    public void TheRefusalsOwnExamples_AreNotRefused()
+    {
+        Secret("pw", Amp);
+        var message = Run(OSPlatform.Windows, "x.cmd", "{{pw}}").Err;
+        var examples = System.Text.RegularExpressions.Regex.Matches(message, @"'run ([^']+)'")
+            .Select(m => m.Groups[1].Value.Split(' '))
+            .ToList();
+        Assert.Equal(2, examples.Count);
+        Assert.Contains(examples, e => e[0] == "--env");
+
+        foreach (var example in examples)
+        {
+            var before = _pty.Starts;
+            var (exit, _, err) = Run(OSPlatform.Windows, example);
+            Assert.True(exit == 0, $"'run {string.Join(' ', example)}' was refused: {err}");
+            Assert.Equal(before + 1, _pty.Starts);
+        }
+        Assert.Equal(["deploy.cmd"], _pty.Argv!);
+        Assert.Equal(Amp, _pty.Options!.Environment!["PW"]);
+    }
+
     [Fact]
     public void AnEnvValue_NeverCounts()
     {
-        // A6: an --env value never reaches the command line. (Not "script.cmd": run refuses "script", a code runner.)
+        // A6: an --env value never reaches the command line. (Not "script.cmd": run refuses "script", a code runner; the refusal's example is deploy.cmd.)
         Secret("pw", Amp);
 
         var (exit, _, err) = Run(OSPlatform.Windows, "--env", "PW={{pw}}", "--", "capture-env.cmd", "plain-arg");

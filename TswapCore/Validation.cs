@@ -390,7 +390,7 @@ public static class Validation
             $"Refused: tswap won't pass secret(s) {names} to a batch file. cmd.exe parses a batch file's arguments again, " +
             $"and their values contain characters it interprets ({BatchCharacterList}; tswap's generated values often do). " +
             $"Use a PowerShell script ('run powershell -File .\\script.ps1 {{{{{first}}}}}', read as $args[0]), or the " +
-            $"environment ('run --env PW={{{{{first}}}}} script.cmd', read with setlocal EnableDelayedExpansion as !PW!).";
+            $"environment ('run --env PW={{{{{first}}}}} deploy.cmd', read with setlocal EnableDelayedExpansion as !PW!).";
         return secrets.Count < refused.Count ? message + " Rename the file." : message;
     }
 
