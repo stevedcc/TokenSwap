@@ -95,6 +95,20 @@ script, `--env`: `run --env PW={{name}} script.cmd`, read inside the script with
 (`capture-env.cmd`: `@echo off`, `setlocal EnableDelayedExpansion`, `>"%~dp0out.txt" echo(!PW!`): `out.txt` holds the
 value exactly and `marker.txt` never appears, for every T46 batch case.
 
+## Task 2d: bash and zsh as targets and as the calling shell (owner, 2026-11-22: "part of the same problem")
+
+E2E with the real binary, in `EndToEndTests.cs` (bash on Linux and macOS, zsh where installed: macOS has it, and the
+Linux runner may not, so a missing zsh skips that host with a reason, never an early return):
+
+- **Target:** `capture.sh`/`capture.zsh` writing `"$1"` to `out.txt` exactly (`printf '%s' "$1" > out.txt`), run as
+  `tswap run bash ./capture.sh {{name}}` and `tswap run zsh -f ./capture.zsh {{name}}`, for every corpus value (T46's
+  `EvilValues`, the batch cases included). Assert `out.txt` holds exactly the value and no `marker.txt` appears.
+- **Calling shell:** a zsh script (`zsh -f`) that itself runs `tswap run printf %s {{name}}`, written as a literal token
+  in the zsh source, once as is and once after `setopt BRACE_CCL`; tswap must receive the token `{{name}}` unchanged
+  (assert the masked output or `--verbose`'s "Found tokens: name"). The same in bash, plus bash with `set -B` (the
+  default) and `shopt -s extglob`.
+- Each failure names the case, the shell and its options.
+
 ## Task 3: docs
 
 - `docs/commands.md`, the `run` section: one paragraph. On Windows, `run` refuses to pass a secret to a `.cmd`/`.bat`
