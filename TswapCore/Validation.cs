@@ -343,12 +343,7 @@ public static class Validation
     /// </summary>
     public static bool IsBatchTarget(string program)
     {
-        var name = program.Length >= 2 && program[1] == ':' && char.IsAsciiLetter(program[0]) ? program[2..] : program;
-        name = name.Replace('\\', '/');
-        name = name[(name.LastIndexOf('/') + 1)..];
-        if (name.IndexOf(':') is var colon and >= 0)
-            name = name[..colon];
-        name = name.TrimEnd('.', ' ');
+        var name = WindowsFileName(program);
         return name.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase)
             || name.EndsWith(".bat", StringComparison.OrdinalIgnoreCase)
             || ProgramName(name).Equals("cmd", StringComparison.OrdinalIgnoreCase);
@@ -1007,10 +1002,25 @@ public static class Validation
         || name.Equals("pwsh", StringComparison.OrdinalIgnoreCase) || name.Equals("powershell", StringComparison.OrdinalIgnoreCase);
 
     // Basename without a Windows executable extension: /bin/sh → sh, cmd.exe → cmd.
+    /// <summary>
+    /// Brief T47 (A4), review fix F12: the last component of <paramref name="path"/> as Windows names the file it
+    /// starts: a drive prefix (<c>C:</c>) dropped, either separator, a <c>:stream</c> suffix dropped, and trailing dots
+    /// and spaces dropped (<c>pwsh.exe.</c>, <c>pwsh.exe </c>, <c>pwsh.exe::$DATA</c> are <c>pwsh.exe</c>). Shared by
+    /// <see cref="IsBatchTarget"/> and <see cref="ProgramName"/>, on every OS (fail closed).
+    /// </summary>
+    private static string WindowsFileName(string path)
+    {
+        var name = path.Length >= 2 && path[1] == ':' && char.IsAsciiLetter(path[0]) ? path[2..] : path;
+        name = name.Replace('\\', '/');
+        name = name[(name.LastIndexOf('/') + 1)..];
+        if (name.IndexOf(':') is var colon and >= 0)
+            name = name[..colon];
+        return name.TrimEnd('.', ' ');
+    }
+
     private static string ProgramName(string path)
     {
-        var name = path.Replace('\\', '/');
-        name = name[(name.LastIndexOf('/') + 1)..];
+        var name = WindowsFileName(path);
         foreach (var ext in new[] { ".exe", ".cmd", ".bat", ".com" })
             if (name.EndsWith(ext, StringComparison.OrdinalIgnoreCase))
                 return name[..^ext.Length];

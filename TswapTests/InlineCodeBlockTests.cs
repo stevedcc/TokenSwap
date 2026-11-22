@@ -157,6 +157,13 @@ public class InlineCodeBlockTests
     // The existing blocklist, now also by path.
     [InlineData("/usr/bin/echo", "{{x}}")]
     [InlineData("./printf", "%s", "{{x}}")]
+    // Review fix F12: the program word normalised as Windows does (trailing dots and spaces, a :stream suffix).
+    [InlineData("pwsh.exe.", "-c", "Write-Host {{x}}")]
+    [InlineData("pwsh.exe ", "-c", "Write-Host {{x}}")]
+    [InlineData("PowerShell.EXE.", "-c", "Write-Host {{x}}")]
+    [InlineData("pwsh.exe::$DATA", "-c", "Write-Host {{x}}")]
+    [InlineData("python.exe.", "-c", "print('{{x}}')")]
+    [InlineData("cmd.exe.", "/c", "echo {{x}}")]
     public void InlineCodeOrBlockedProgram_IsRefused(params string[] argv)
     {
         Assert.NotNull(Validation.GetBlockedInvocation(argv));
