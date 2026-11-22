@@ -171,8 +171,7 @@ MiMo's C1 (scope versus #392's comment) is settled: Tasks 2b-2d and the docs tas
 - **A9 (MiMo I6, GLM M6).** The `run` paragraph goes **outside** `docs/commands.md`'s generated block (lines between
   `BEGIN GENERATED` and `END GENERATED` are checked by `CommandReferenceTests`): next to the hand-written `## run --env`
   section. Spelling and doc-link guards apply.
-- **A10 (GLM M5).** `run powershell {{name}}` with no `-File` runs the value as code today; that's issue #<filed by the
-  controller>, not this brief, but `docs/scripts.md` says to always use `-File`.
+- **A10 (GLM M5).** `run powershell {{name}}` with no `-File` runs the value as code today; that's issue #401, not this brief, but `docs/scripts.md` says to always use `-File`.
 
 ## Out of scope
 
