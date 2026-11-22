@@ -195,3 +195,28 @@ These replace the brief text they name; where they conflict with it, they win.
   `ProcessDetach` the agent's own protocol owns fd 0). No code change for it.
 - **A14 (MiMo).** The release note also says: on every OS, piped input that is not valid UTF-8 (also a recovery key
   piped into `recover` or `slot add --recovery`) is now refused instead of stored with replacement characters.
+
+## Amendments (round 2; both reviewers: ready to implement)
+
+- **A15 (GLM M1, MiMo M11; extends A2).** The peek checks the 4-byte BOMs **before** the 2-byte ones: `FF FE 00 00`
+  (UTF-32LE) before `FF FE` (UTF-16LE), and `00 00 FE FF` → `new UTF32Encoding(true, false, throwOnInvalidCharacters:
+  true)` (UTF-32BE). New rows: `FF FE 00 00` + UTF-32LE of `café-value` → `café-value` (fails if the order is wrong);
+  `00 00 FE FF` + UTF-32BE of `café-value` → `café-value`; and `EF BB BF` + UTF-8 of `café-value` from the
+  one-byte-per-`Read` stream → `café-value` (peek and strict decode together).
+- **A16 (GLM M2, MiMo note; extends A1).** The guard has a second pattern, `\bSystem\.Console\.(ReadLine|Read|In)\b`,
+  for the qualified forms, banned in every file outside the reader's and `SystemConsole.cs`. In `CommandContext.cs` a
+  match of the first pattern is allowed only when its trimmed line is `var input = Console.ReadLine()?.Trim();`, and
+  the guard asserts there are **exactly two** such matches there.
+- **A17 (GLM M3, MiMo M12; extends A6/A8).** Also drop the clause "and the non-ASCII values, which wait on the
+  stdin-encoding question" from the `--env` Git Bash test's XML summary (`EndToEndTests.cs` near line 1867);
+  `max-length`'s clause stays.
+- **A18 (MiMo M15; replaces A8's docs sentence).** `docs/scripts.md:52` becomes "That way is tested with every test value
+  that fits on a Windows command line." (`max-length` doesn't.)
+- **A19 (MiMo M13; replaces Task 3's first bullet's first sentence).** "stdin is read as UTF-8 on every OS; a leading
+  UTF-8 BOM is ignored, and a UTF-16 or UTF-32 BOM switches to that encoding (Windows PowerShell 5.1 sends UTF-16 when
+  `$OutputEncoding` is Unicode); input that isn't valid in the encoding in force is refused and nothing is stored." The
+  PowerShell 5.1 ASCII sentence stays.
+- **A20 (MiMo M14; corrects A12).** `get`'s output equals the value trimmed at the end as ingest does, asserted like
+  `get.stdout.Trim()` at `EndToEndTests.cs` near line 1415.
+- **A21 (GLM M4).** A4's stay-as-is list is right for a second reason too: the agent and broker helpers also pipe the
+  vault password, which is ASCII, so the strict reader accepts it unchanged.
