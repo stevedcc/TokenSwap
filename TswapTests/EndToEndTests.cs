@@ -1550,7 +1550,15 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
 
                 int exit;
                 string output;
-                if (leg == "redirected")
+                if (leg == "redirected" && batch == inertCmd)
+                {
+                    // T46 DETECTOR (throwaway branch, never merged): the vulnerable wrapping, outside tswap (A9).
+                    using var p = Process.Start(new ProcessStartInfo("cmd.exe", "/c inert.cmd \"" + c.Value + "\"")
+                        { WorkingDirectory = work.FullName, UseShellExecute = false })!;
+                    p.WaitForExit();
+                    (exit, output) = (p.ExitCode, "");
+                }
+                else if (leg == "redirected")
                 {
                     var (e, stdout, stderr) = RunTswapIn(work, "run", batch, "{{" + name + "}}");
                     (exit, output) = (e, stdout + stderr);
