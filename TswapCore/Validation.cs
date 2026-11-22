@@ -930,20 +930,29 @@ public static class Validation
         || name.Equals("pwsh", StringComparison.OrdinalIgnoreCase) || name.Equals("powershell", StringComparison.OrdinalIgnoreCase)
         || name.Equals("cmd", StringComparison.OrdinalIgnoreCase) || name.Equals("deno", StringComparison.OrdinalIgnoreCase);
 
-    // PowerShell accepts unambiguous prefixes of its parameters (-comm = -Command). Review fix F1: its host takes '/'
-    // as the parameter prefix too (/c, /Command, /EncodedCommand), on every OS here (fail closed): a leading '/' counts
-    // exactly as a leading '-'.
-    private static bool IsPowerShellInline(string arg)
+    /// <summary>
+    /// Review fix F9: a PowerShell host parameter as PowerShell 7's own parser reads it
+    /// (<c>CommandLineParameterParser.GetSwitchKey</c>, <c>CharExtensions.IsDash</c>): surrounding whitespace trimmed,
+    /// then every leading <c>/</c>, <c>-</c>, U+2013, U+2014 or U+2015 stripped (any number of them, which fails
+    /// closed where Windows PowerShell 5.1's closed parser may take fewer), lower-cased. Null when nothing was stripped
+    /// (not a parameter) or nothing is left.
+    /// </summary>
+    private static string? PowerShellParameterKey(string arg)
     {
-        var a = arg.ToLowerInvariant();
-        if (a.StartsWith('/'))
-            a = "-" + a[1..];
-        if (a is "-c" or "-e" or "-ec" or "-cwa")
-            return true;
-        return (a.Length >= 4 && "-command".StartsWith(a, StringComparison.Ordinal))
-            || (a.Length >= 4 && "-encodedcommand".StartsWith(a, StringComparison.Ordinal))
-            || (a.Length >= 9 && "-commandwithargs".StartsWith(a, StringComparison.Ordinal));
+        var trimmed = arg.Trim();
+        var key = trimmed.TrimStart('/', '-', '\u2013', '\u2014', '\u2015');
+        return key.Length == trimmed.Length || key.Length == 0 ? null : key.ToLowerInvariant();
     }
+
+    // PowerShell takes any prefix of a parameter's name down to its short form, and resolves -c and -e (and -co, -en)
+    // to -Command and -EncodedCommand itself (F9: PowerShell's own rule, fail closed): every prefix of the three
+    // inline-code parameters counts, as do their aliases -ec and -cwa.
+    private static bool IsPowerShellInline(string arg) =>
+        PowerShellParameterKey(arg) is { } key
+        && (key is "ec" or "cwa"
+            || "command".StartsWith(key, StringComparison.Ordinal)
+            || "encodedcommand".StartsWith(key, StringComparison.Ordinal)
+            || "commandwithargs".StartsWith(key, StringComparison.Ordinal));
 
     // ssh host [command]: a remote command is remote shell code.
     private static BlockedInvocation? CheckSsh(List<string> args)

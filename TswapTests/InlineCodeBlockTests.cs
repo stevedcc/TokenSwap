@@ -284,13 +284,58 @@ public class InlineCodeBlockTests
         Assert.Equal(byDash!.Reason.Replace(dash, slash), bySlash.Reason);
     }
 
-    /// <summary>F1: <c>/co</c> is too short to name one parameter, as <c>-co</c> is, and behaves as <c>-co</c> does.</summary>
-    [Theory]
-    [InlineData("powershell")]
-    [InlineData("pwsh")]
-    public void PowerShellTooShortPrefix_SpeltWithASlash_BehavesAsItsDashForm(string program)
+    // ── Review fix F9: PowerShell's own parameter rule (CommandLineParameterParser) ────────────────
+
+    public static TheoryData<string, string> PowerShellInlineSpellings()
     {
-        Assert.Null(Validation.GetBlockedInvocation([program, "-co", "x", "{{x}}"]));
-        Assert.Null(Validation.GetBlockedInvocation([program, "/co", "x", "{{x}}"]));
+        var data = new TheoryData<string, string>();
+        foreach (var program in new[] { "powershell", "pwsh", "pwsh.exe", "PowerShell.EXE" })
+        foreach (var flag in new[]
+                 {
+                     "-c", "-co", "-com", "--command", "\u2013c", "\u2014Command", "\u2015command", " -c ", "/c", "/co",
+                     "-e", "-en", "--encodedcommand", "\u2013EncodedCommand", "---ec", "-/cwa", "\t--commandwithargs\t",
+                 })
+            data.Add(program, flag);
+        return data;
+    }
+
+    /// <summary>
+    /// F9 (replaces F1's <c>PowerShellTooShortPrefix_SpeltWithASlash_BehavesAsItsDashForm</c>, which said
+    /// <c>-co</c>/<c>/co</c> were allowed): PowerShell's host strips surrounding whitespace and any run of <c>-</c>,
+    /// <c>/</c>, U+2013, U+2014 and U+2015, and takes any prefix of a parameter's name, so every such spelling of
+    /// -Command, -EncodedCommand and -CommandWithArgs is refused, and the refusal names the spelling given.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(PowerShellInlineSpellings))]
+    public void PowerShellInlineParameter_InAnySpellingPowerShellAccepts_IsRefused(string program, string flag)
+    {
+        var blocked = Validation.GetBlockedInvocation([program, flag, "Write-Output {{x}}"]);
+
+        Assert.NotNull(blocked);
+        var name = program.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? program[..^4] : program;
+        Assert.Equal(name, blocked!.Program);
+        Assert.Contains($"'{name} {flag}' runs inline code", blocked.Reason);
+    }
+
+    /// <summary>
+    /// F9: parameters that only share a first letter or a few with an inline one are not inline
+    /// code: -ExecutionPolicy (<c>-ex</c>), -ConfigurationName (<c>-config</c>), -NoProfile (<c>-nop</c>), -File
+    /// (<c>-f</c>). (Windows PowerShell 5.1 reading a positional word as -Command is #401, not this check.)
+    /// </summary>
+    [Theory]
+    [InlineData("-ExecutionPolicy")]
+    [InlineData("-ex")]
+    [InlineData("-ConfigurationName")]
+    [InlineData("-config")]
+    [InlineData("--configurationname")]
+    [InlineData("-NoProfile")]
+    [InlineData("-nop")]
+    [InlineData("-File")]
+    [InlineData("-f")]
+    [InlineData("\u2013File")]
+    public void PowerShellOtherParameter_IsNotInline(string flag)
+    {
+        foreach (var program in new[] { "powershell", "pwsh" })
+            Assert.Null(Validation.GetBlockedInvocation([program, flag, "deploy.ps1", "{{x}}"]));
     }
 }
