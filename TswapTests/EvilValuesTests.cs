@@ -224,7 +224,8 @@ public sealed class EvilValuesTests : IDisposable
         var environment = pty.Options!.Environment!;
         Assert.Equal(new[] { "X" }, environment.Keys.ToArray());
         Assert.True(environment["X"] == stored, $"{caseName}: X isn't exactly the stored value");
-        Assert.Equal(["tool"], pty.Argv!);
+        // Review fix F3: a failure names the case, never the argv it got (it could hold the value).
+        Assert.True(pty.Argv!.SequenceEqual(["tool"]), $"{caseName}: argv isn't exactly [tool]");
         AssertMasked(caseName, stored, pty.Output.ToString());
         AssertNoValueIn(caseName, stored, "run's stdout", stdout);
         AssertNoValueIn(caseName, stored, "run's stderr", err);
@@ -311,7 +312,7 @@ public sealed class EvilValuesTests : IDisposable
 
         Assert.True(exit == 0, $"{caseName}: run failed: {err}");
         Assert.True(pty.Argv is ["tool", var previous] && previous == stored, $"{caseName}: {{{{name:previous}}}} isn't exactly the case value");
-        Assert.Equal(RotatedSibling, GetValue(caseName));
+        Assert.True(GetValue(caseName) == RotatedSibling, $"{caseName}: get doesn't return the rotated sibling value"); // F3
     }
 
     /// <summary>A11: the first of <paramref name="candidates"/> that holds no part of <paramref name="value"/>.</summary>
@@ -516,7 +517,8 @@ public sealed class EvilValuesTests : IDisposable
 
         Assert.True(exit == 0, err);
         var output = pty.Output.ToString();
-        Assert.StartsWith($"nfc {Label} end\n", output); // the stored (NFC) form is masked
+        // The stored (NFC) form is masked. F3: Assert.StartsWith's own comparison (current culture), without printing the output.
+        Assert.True(output.StartsWith($"nfc {Label} end\n", StringComparison.CurrentCulture), "nfc-e-acute: run's output doesn't start with the masked NFC line");
         _output.WriteLine($"T46 owner decision (NFC/NFD), run: the NFD form was {(NfdLine(output) == $"nfd {Label} end" ? "masked" : "not masked")}");
     }
 
@@ -532,7 +534,8 @@ public sealed class EvilValuesTests : IDisposable
         var (exit, stdout, err) = Execute("", ["redact", path]);
 
         Assert.True(exit == 0, err);
-        Assert.StartsWith($"nfc {Label} end\n", stdout); // the stored (NFC) form is masked
+        // The stored (NFC) form is masked. F3: Assert.StartsWith's own comparison (current culture), without printing the output.
+        Assert.True(stdout.StartsWith($"nfc {Label} end\n", StringComparison.CurrentCulture), "nfc-e-acute: redact's output doesn't start with the masked NFC line");
         _output.WriteLine($"T46 owner decision (NFC/NFD), redact: the NFD form was {(NfdLine(stdout) == $"nfd {Label} end" ? "masked" : "not masked")}");
     }
 }
