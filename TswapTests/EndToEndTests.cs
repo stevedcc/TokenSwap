@@ -1822,6 +1822,115 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     }
 
     /// <summary>
+    /// Brief T48: <paramref name="bytes"/> written as they are to tswap's stdin (through
+    /// <see cref="Process.StandardInput"/>'s base stream, so no helper's encoding is involved), then stdin closed.
+    /// </summary>
+    private (int exitCode, string stdout, string stderr) RunTswapWithStdinBytes(byte[] bytes, params ReadOnlySpan<string> args)
+    {
+        var psi = MakePsi(redirectStdin: true);
+        foreach (var arg in args)
+            psi.ArgumentList.Add(arg);
+
+        using var process = Process.Start(psi)!;
+        process.StandardInput.BaseStream.Write(bytes);
+        process.StandardInput.BaseStream.Flush();
+        process.StandardInput.Close();
+        var stdoutTask = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        return (process.ExitCode, stdoutTask.Result, stderr);
+    }
+
+    /// <summary>
+    /// Brief T48 Task 2: invalid UTF-8 piped into <c>ingest</c> (an invalid continuation byte) is refused with the fixed
+    /// message, exit code 1, and nothing is stored. On every OS: before, Linux and macOS stored U+FFFD.
+    /// </summary>
+    /// <remarks>Break-it-once (A11): a lenient reader (replacement fallback) makes it fail on Linux (exit 0, bad1 stored).</remarks>
+    [Fact]
+    public void Ingest_InvalidUtf8_IsRefused_AndStoresNothing()
+    {
+        const string refusal =
+            "stdin is not valid UTF-8 (tswap reads piped input as UTF-8). Nothing was changed. In Windows PowerShell 5.1, run $OutputEncoding = [System.Text.UTF8Encoding]::new($false) first, or use PowerShell 7.";
+        var (initExit, _, initErr) = RunTswap("init", "--yubikey", "--no-recovery");
+        Assert.True(initExit == 0, $"init failed: {initErr}");
+
+        var (exit, _, stderr) = RunTswapWithStdinBytes([0x63, 0x61, 0x66, 0xC3, 0x28], "ingest", "bad1");
+
+        Assert.True(exit == 1, $"exit {exit}: {stderr}");
+        Assert.Contains(refusal, stderr);
+        var (namesExit, names, namesErr) = RunTswap("names");
+        Assert.True(namesExit == 0, namesErr);
+        Assert.DoesNotContain("bad1", names);
+    }
+
+    /// <summary>
+    /// Brief T48 Task 2: every non-ASCII corpus value, piped into <c>ingest</c> as raw UTF-8 bytes (as
+    /// <c>kubectl … | jq … | tswap ingest</c> delivers it), is stored exactly: <c>tswap get</c> (A12, A20) prints it, and
+    /// <c>tswap run &lt;Git Bash&gt; ./capture.sh {{name}}</c> (<c>printf '%s' "$1" &gt; out.txt</c>) writes it, each
+    /// trimmed at the end as ingest does. Before, Windows decoded stdin with the console code page (437 on the runner):
+    /// <c>café-value</c> arrived as <c>caf├⌐-value</c>. A value that <c>get</c> shows right but <c>out.txt</c> doesn't is
+    /// a Git Bash finding (#402), named as such in the failure.
+    /// </summary>
+    /// <remarks>
+    /// Break-it-once (the controller's, on Windows CI): <c>SystemConsole.In</c> back to <c>Console.In</c>; the test must
+    /// fail with the mangled values.
+    /// </remarks>
+    [WindowsFact("the console code page decoded piped stdin on Windows only; Git Bash (MSYS2) exists only on Windows")]
+    public void Ingest_RawUtf8Bytes_StoresTheValueExactly_Windows()
+    {
+        var bash = FindGitBash();
+        Assert.True(bash is not null, "no Git Bash (a bash.exe under a \\Git\\ folder) on PATH: it is on every GitHub Windows runner");
+        var (work, _, _) = ScriptWork();
+        File.WriteAllText(Path.Combine(work.FullName, "capture.sh"), "printf '%s' \"$1\" > out.txt\n");
+        var outFile = Path.Combine(work.FullName, "out.txt");
+        var (initExit, _, initErr) = RunTswap("init", "--yubikey", "--no-recovery");
+        Assert.True(initExit == 0, $"init failed: {initErr}");
+
+        static string Shown(string s) => EscapeVt(s).Length <= 80 ? EscapeVt(s) : EscapeVt(s)[..80] + "...";
+        var cases = EvilValues.Cases.Where(c => c.Value.Any(ch => ch > '\x7F')).ToList();
+        Assert.NotEmpty(cases);
+        List<string> failures = [];
+        foreach (var (c, i) in cases.Select((c, i) => (c, i)))
+        {
+            var name = $"r{i + 1}";
+            Assert.True(EvilValues.NameIsSafeFor(name, c.Value), $"{c.Name}: the name {name} holds part of the value");
+            var expected = c.Value.TrimEnd();
+            var (ingestExit, _, ingestErr) = RunTswapWithStdinBytes(new UTF8Encoding(false).GetBytes(c.Value), "ingest", name);
+            if (ingestExit != 0)
+            {
+                failures.Add($"{c.Name}: ingest failed (exit {ingestExit}): {ingestErr}");
+                continue;
+            }
+
+            var getPsi = MakePsi();
+            getPsi.StandardOutputEncoding = new UTF8Encoding(false);
+            getPsi.ArgumentList.Add("get");
+            getPsi.ArgumentList.Add(name);
+            using (var get = Process.Start(getPsi)!)
+            {
+                var stdoutTask = get.StandardOutput.ReadToEndAsync();
+                var getErr = get.StandardError.ReadToEnd();
+                get.WaitForExit();
+                var stored = stdoutTask.Result.Trim();
+                if (get.ExitCode != 0)
+                    failures.Add($"{c.Name}: get failed (exit {get.ExitCode}): {getErr}");
+                else if (stored != expected)
+                    failures.Add($"{c.Name}: STORED ALTERED: expected [{Shown(expected)}], get printed [{Shown(stored)}]");
+            }
+
+            File.Delete(outFile);
+            var (runExit, runOut, runErr) = RunTswapIn(work, "run", bash!, "./capture.sh", "{{" + name + "}}");
+            if (!File.Exists(outFile))
+                failures.Add($"{c.Name}: no out.txt (exit {runExit}): {Shown(runErr + runOut)}");
+            else if (File.ReadAllText(outFile, Encoding.UTF8) is var captured && captured != expected)
+                failures.Add($"{c.Name}: out.txt ALTERED (a Git Bash finding, #402, if get matched): expected [{Shown(expected)}], got [{Shown(captured)}]");
+            _output.WriteLine($"T48 raw utf-8: {c.Name}: ingest exit {ingestExit}, run exit {runExit}");
+        }
+
+        Assert.True(failures.Count == 0, $"{failures.Count} failure(s):\n" + string.Join("\n", failures));
+    }
+
+    /// <summary>
     /// Brief T47 Task 2e: Git Bash's <c>bash.exe</c> (MSYS2) from PATH: the first one under a <c>\Git\</c> folder, never
     /// System32's <c>bash.exe</c> (WSL's launcher), or null.
     /// </summary>
@@ -1868,8 +1977,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     /// Bash&gt; ./capture-env.sh</c>, where <c>capture-env.sh</c> writes <c>"$PW"</c> to <c>out.txt</c> exactly
     /// (<c>printf '%s' "$PW"</c>), on both legs, for every corpus value, the batch cases and the three extras (#402's spike:
     /// all 73 values intact). Invariant: <c>out.txt</c> holds exactly the stored value, and <c>marker.txt</c> never
-    /// appears. Left out, with lines (<see cref="RunGitBashCases"/>): max-length, and the non-ASCII values, which wait
-    /// on the stdin-encoding question.
+    /// appears. Left out, with a line (<see cref="RunGitBashCases"/>): max-length.
     /// </summary>
     /// <remarks>
     /// Break-it-once (the controller's, on Windows CI): a <c>capture-env.sh</c> that runs the value, so the ampersand
@@ -1922,13 +2030,8 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         else
             legs = WindowsLegs(tag);
         _output.WriteLine($"{tag}: max-length is left out (a Windows command line holds at most 32,767 characters)");
-        // T47 Task 2f (controller's correction): a non-ASCII value may already be altered by ingest's stdin on Windows
-        // (the console code page), not by Git Bash; those cases wait on that question and are left out here.
-        var all = cases.Where(c => c.Name != "max-length").ToList();
-        var nonAscii = all.Where(c => c.Value.Any(ch => ch > '\x7F')).Select(c => c.Name).ToList();
-        if (nonAscii.Count > 0)
-            _output.WriteLine($"{tag}: left out, waiting on the stdin-encoding question (ingest's stdin on Windows): {string.Join(", ", nonAscii)}");
-        var named = IngestEach(all.Where(c => !nonAscii.Contains(c.Name)), "g");
+        // Brief T48: ingest reads stdin as UTF-8 on Windows too, so the non-ASCII values run here as well.
+        var named = IngestEach(cases.Where(c => c.Name != "max-length"), "g");
 
         static string Shown(string s) => EscapeVt(s).Length <= 80 ? EscapeVt(s) : EscapeVt(s)[..80] + "...";
         List<string> failures = [];

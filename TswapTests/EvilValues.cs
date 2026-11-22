@@ -179,7 +179,7 @@ public static class EvilValues
             [("lf-inside", TocommentDryrun)] = (2, Finding2),
             [("crlf-inside", TocommentDryrun)] = (2, Finding2),
             // Brief T47 Task 2f: Git Bash (MSYS2) on Windows, CI run 45021236991, both legs unless the line says so (#402).
-            // ASCII cases only: the non-ASCII values wait on the stdin-encoding question (RunGitBashCases).
+            // All of them ASCII cases (brief T48: the non-ASCII values run too, RunGitBashCases).
             [("single-quote", GitBashExact)] = (3, Finding3),
             [("owner-escaping-set", GitBashExact)] = (3, Finding3),
             [("token-syntax", GitBashExact)] = (4, Finding4),
