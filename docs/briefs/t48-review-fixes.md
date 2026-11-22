@@ -143,3 +143,14 @@ inline check doesn't catch (it is a shallow guard). Break-it-once: drop the trai
   near misses PowerShell 7 rejects, refused fail-closed.
 - F14 (MiMo M3): `docs/commands.md` "(and every other command that reads piped input)" → "(and every other command that
   reads piped text)".
+
+### F15 (controller, from the F12 report): image tags are not stream suffixes
+
+F12's `WindowsFileName` cuts at the first `:` on every OS, so with a `{{@file}}` token an image tag (`python:3.12`,
+`node:20`) reads as the interpreter `python`/`node` and is refused. Strip a `:stream` suffix only when the part before the
+first `:` ends in `.exe`, `.cmd`, `.bat` or `.com` (any case, after the drive prefix): `pwsh.exe::$DATA`, `x.cmd::$DATA`,
+`pwsh.exe:s` still normalise; `python:3.12`, `node:20`, `cmd:x` do not. Tests: `docker run -v {{@cfg.yaml}}:/c.yaml
+python:3.12 app` and the same with `node:20` are not refused by the `{{@file}}` check (they weren't before F12; if main
+has such a row already, it must still pass); the F11/F12 stream rows still refused. Break-it-once: cut at the first `:`
+again; the image-tag rows fail. Also F16 (minor): `StrictStdin`'s refusal message keeps its exact text (the brief fixes
+it), no change.
