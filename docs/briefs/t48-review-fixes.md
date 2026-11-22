@@ -116,8 +116,9 @@ still hand a value to `x.cmd`. Stop guessing which program starts it: on Windows
 character, **every word of the command (the raw words, as A20 keeps them, after `Trim()`) that `IsBatchTarget` accepts is
 a batch target**, whatever program or position it is in. The program walk for batch purposes (`ProgramPositions` and the
 F10 PowerShell rule) is no longer needed for this check; remove what only it used (keep what other checks use).
-Over-refusal (accepted): a batch file's name (or the word `cmd`) passed as plain data next to such a secret, e.g.
-`git commit -m "fix x.cmd" {{pw}}` is not affected (the word is `fix x.cmd`, not a batch name) but `tool x.cmd {{pw}}` is.
+Over-refusal (accepted): any word that `IsBatchTarget` accepts, passed as plain data next to such a secret, is refused
+too (`tool x.cmd {{pw}}`, `git commit -m "fix x.cmd" {{pw}}`, a word that is just `cmd`); the refusal message already
+says how to pass the secret another way.
 Tests: rows `["pwsh.exe.", "x.cmd", v]`, `["pwsh.exe ", "x.cmd", v]`, `["PowerShell.EXE.", "x.cmd", v]`,
 `["pwsh.exe::$DATA", "x.cmd", v]`, `["POWERS~1.EXE", "x.cmd", v]`, `["docker", "run", "img", "x.cmd", v]`,
 `["anytool", "--flag", "x.bat", v]` refused; the refusal's own examples still allowed (`TheRefusalsOwnExamples_AreNotRefused`),
