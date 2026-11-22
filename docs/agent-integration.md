@@ -38,6 +38,10 @@ a secret value:
 **PowerShell.** An agent whose shell is PowerShell quotes every argument that holds a token (`'{{name}}'`,
 `'{{@file}}'`): unquoted, PowerShell turns it into a script block and `run` finds no token.
 
+**Scripts.** A script reads a secret as `"$1"`, quoted (bash, zsh), or `$args[0]` from a PowerShell script run with
+`-File`; on Windows never a batch file, to which `run` refuses most generated values. Per shell, with what breaks
+each: [Passing secrets to scripts](scripts.md).
+
 `init` needs no sudo either, but AI agents shouldn't run it: creating a vault is the user's work
 (even with `--no-recovery`), and `init` prints the recovery private key once
 ([setup.md](setup.md#the-recovery-key)). The skill (`tswap prompt`) lists `init` among the

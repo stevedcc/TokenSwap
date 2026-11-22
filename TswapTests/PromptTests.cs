@@ -69,6 +69,19 @@ public class PromptTests
         Assert.DoesNotContain("drops a pair of braces", text);
     }
 
+    /// <summary>
+    /// Brief T47 Task 3: rule 3's script example says to read "$1" quoted and, on Windows, a PowerShell -File script,
+    /// never a batch file (batch files re-parse arguments).
+    /// </summary>
+    [Fact]
+    public void Prompt_ScriptExample_QuotesTheArgument_AndAvoidsBatchFiles()
+    {
+        var text = Prompt.GetText("tswap").ReplaceLineEndings(" ");
+
+        Assert.Contains("the script reads it as \"$1\", quoted", text);
+        Assert.Contains("never a batch file", text);
+    }
+
     [Fact]
     public void Template_ContainsKeyRules()
     {

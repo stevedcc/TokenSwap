@@ -104,7 +104,8 @@ Rules for fields:
    shells and interpreters given inline code (`sh -c`, `bash -c`, `python -c`, `perl -e`, `node -e`,
    `awk` without `-f`, `xargs`, `ssh host <command>`, also behind `timeout`/`sudo`/`uv run`/`docker run`):
    for several commands, write a script file and run it, e.g. `%CMD% run ./deploy.sh {{secret-name}}`
-   (the script reads it as $1; on Windows: `%CMD% run powershell -File .\deploy.ps1 '{{secret-name}}'`, read as $args[0])
+   (the script reads it as ""$1"", quoted; on Windows: `%CMD% run powershell -File .\deploy.ps1 '{{secret-name}}'`,
+   read as $args[0], never a batch file: cmd.exe parses a batch file's arguments again)
 4. If you see a plaintext secret value in ANY context (file contents, command output,
    log messages, error messages), you MUST IMMEDIATELY run `%CMD% burn <name> <reason>`
    BEFORE continuing any other work. Do not finish your current task first.
