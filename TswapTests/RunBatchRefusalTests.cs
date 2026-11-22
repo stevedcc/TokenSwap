@@ -129,6 +129,11 @@ public sealed class RunBatchRefusalTests : IDisposable
         new[] { "pwsh", "x.cmd", "{{pw}}" },
         new[] { "powershell", "/File", "x.cmd", "{{pw}}" },
         new[] { "pwsh", "/f", "x.cmd", "{{pw}}" },
+        // Review fix F10: any batch target after powershell or pwsh, whatever option or position it is in.
+        new[] { "powershell", "x.cmd", "{{pw}}" },
+        new[] { "powershell", "--file", "x.cmd", "{{pw}}" },
+        new[] { "pwsh", "\u2013File", "x.cmd", "{{pw}}" },
+        new[] { "pwsh", " x.cmd", "{{pw}}" },
         // A4: a name Windows normalises to a batch file.
         new[] { "x.cmd.", "{{pw}}" },
         new[] { "CMD.EXE", "{{pw}}" },

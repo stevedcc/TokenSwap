@@ -174,6 +174,18 @@ public sealed class BatchArgumentTests
         new[] { "powershell", "/fi", "x.cmd", "{{" + Name + "}}" },
         new[] { "pwsh", "/fil", "x.cmd", "{{" + Name + "}}" },
         new[] { "powershell", "/FILE", "x.cmd", "{{" + Name + "}}" },
+        // Review fix F10: after powershell or pwsh every word that is a batch target (after Trim()) counts, whatever
+        // option or position it is in. These three were allowed by T47 ruling 2 (on this branch only); F10 replaces
+        // that ruling and accepts the over-refusal of a batch file's name passed as a script's argument.
+        new[] { "powershell", "x.cmd", "{{" + Name + "}}" },
+        new[] { "pwsh", "./s.ps1", "x.cmd", "{{" + Name + "}}" },
+        new[] { "pwsh", "-File", "s.ps1", "x.cmd", "{{" + Name + "}}" },
+        new[] { "powershell", "--file", "x.cmd", "{{" + Name + "}}" },
+        new[] { "pwsh", "\u2013File", "x.cmd", "{{" + Name + "}}" },
+        new[] { "pwsh", " x.cmd", "{{" + Name + "}}" },
+        new[] { "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "x.cmd", "{{" + Name + "}}" },
+        new[] { "PowerShell.EXE", "\u2014file", "x.bat ", "{{" + Name + "}}" },
+        new[] { "pwsh", "-NoProfile", " cmd ", "{{" + Name + "}}" },
     };
 
     [Theory]
@@ -190,11 +202,9 @@ public sealed class BatchArgumentTests
         new[] { "wrapper.exe", "x.cmd", "{{" + Name + "}}" },
         // A batch file named as data to a program that isn't a wrapper.
         new[] { "tool.exe", "--script", "x.cmd", "{{" + Name + "}}" },
-        // Ruling 2: Windows PowerShell 5.1's positional argument is -Command (#401), not a script; pwsh's script is
-        // the first non-option argument, so a later x.cmd is that script's argument.
-        new[] { "powershell", "x.cmd", "{{" + Name + "}}" },
-        new[] { "pwsh", "./s.ps1", "x.cmd", "{{" + Name + "}}" },
-        new[] { "pwsh", "-File", "s.ps1", "x.cmd", "{{" + Name + "}}" },
+        // Review fix F10: the refusal's own way out, a PowerShell script by -File, in both editions.
+        new[] { "powershell", "-File", @".\deploy.ps1", "{{" + Name + "}}" },
+        new[] { "pwsh", "-File", "./deploy.ps1", "{{" + Name + "}}" },
     };
 
     [Theory]

@@ -358,8 +358,8 @@ public static class Validation
     /// Brief T47 (A13, A20): the refusal of a command line that hands a batch file (or cmd) a substituted text holding
     /// a character cmd.exe interprets (batch files re-parse arguments), or null. The walk visits every program word
     /// (<see cref="ProgramPositions"/>: argv[0], wrappers, find -exec) and tests the raw word with
-    /// <see cref="IsBatchTarget"/>; for <c>powershell</c> and <c>pwsh</c> also the script of <c>-File</c> (any
-    /// unambiguous prefix, any case). With a batch target, every substituted token counts (failing closed: a wrapper's
+    /// <see cref="IsBatchTarget"/>; after <c>powershell</c> or <c>pwsh</c> also every later word, trimmed (review fix
+    /// F10: in any option or position). With a batch target, every substituted token counts (failing closed: a wrapper's
     /// own arguments can reach it too). Names every refused token in argv order, never a value or which character.
     /// </summary>
     /// <remarks>
@@ -408,7 +408,7 @@ public static class Validation
     // The last component of a path, either separator.
     private static string FileNamePart(string path) => path[(path.LastIndexOfAny(['/', '\\']) + 1)..];
 
-    // The positions of the batch targets the walk reaches: program words, and PowerShell's script.
+    // The positions of the batch targets the walk reaches: program words, and every word after powershell or pwsh.
     private static IEnumerable<int> BatchTargets(IReadOnlyList<string> argv)
     {
         foreach (var i in ProgramPositions(argv))
@@ -416,49 +416,18 @@ public static class Validation
             if (IsBatchTarget(argv[i]))
                 yield return i;
             var program = ProgramName(argv[i]);
-            var pwsh = program.Equals("pwsh", StringComparison.OrdinalIgnoreCase);
-            if (!pwsh && !program.Equals("powershell", StringComparison.OrdinalIgnoreCase))
+            if (!program.Equals("pwsh", StringComparison.OrdinalIgnoreCase) && !program.Equals("powershell", StringComparison.OrdinalIgnoreCase))
                 continue;
-            if (PowerShellScript(argv, i + 1, pwsh) is { } script && IsBatchTarget(argv[script]))
-                yield return script;
+            // Review fix F10 (replaces T47 ruling 2's -File/positional walk): PowerShell's host reads options in more
+            // spellings than a walk can follow (--file, the Unicode dashes, padding, any prefix; Windows PowerShell
+            // 5.1's positional -Command, #401), so after powershell or pwsh every word that is a batch target once
+            // trimmed counts, whatever option or position it is in. Failing closed: a batch file's name passed as a
+            // plain argument to a PowerShell script is refused too.
+            for (var j = i + 1; j < argv.Count; j++)
+                if (IsBatchTarget(argv[j].Trim()))
+                    yield return j;
         }
     }
-
-    /// <summary>
-    /// Brief T47 (A13, A21; controller ruling 2): the position of the script PowerShell runs, or null. Both editions:
-    /// the argument after <c>-File</c> or <c>/File</c>. pwsh only, whose first positional argument is <c>-File</c>'s
-    /// (Windows PowerShell 5.1's is <c>-Command</c>'s, #401): the first argument that isn't an option, where one that
-    /// follows an option may be that option's value, so a batch target there still counts (failing closed: a value is
-    /// rarely a .cmd).
-    /// </summary>
-    private static int? PowerShellScript(IReadOnlyList<string> argv, int from, bool pwsh)
-    {
-        var afterOption = false;
-        for (var j = from; j < argv.Count; j++)
-        {
-            var arg = argv[j];
-            if (IsPowerShellFile(arg))
-                return j + 1 < argv.Count ? j + 1 : null;
-            if (!pwsh)
-                continue;
-            if (IsBatchTarget(arg))
-                return j;
-            if (arg.StartsWith('-') || arg.StartsWith('/'))
-            {
-                afterOption = true;
-                continue;
-            }
-            if (!afterOption)
-                return j; // the script, not a batch file; what follows is its arguments
-            afterOption = false;
-        }
-        return null;
-    }
-
-    // Brief T47 (A13, A21; ruling 2): -File or /File by PowerShell's unambiguous-prefix rule, as IsPowerShellInline:
-    // -f, -fi, -fil, -file (and the same with /), any case.
-    private static bool IsPowerShellFile(string arg) =>
-        arg.Length >= 2 && arg[0] is '-' or '/' && "file".StartsWith(arg[1..].ToLowerInvariant(), StringComparison.Ordinal);
 
     private static string FileTokenWayOut(string word) =>
         $"With a {{{{@file}}}} token no word of the command may be '{word}': rename the file if that is its name, " +
