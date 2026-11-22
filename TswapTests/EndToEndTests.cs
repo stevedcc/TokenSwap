@@ -1941,7 +1941,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     /// </summary>
     /// <remarks>
     /// <para>Git Bash is started by its full path: CreateProcess searches System32 before PATH, where <c>bash.exe</c> is
-    /// WSL's launcher. Without Git Bash on PATH the legs are left out with a line saying why (never an early return).
+    /// WSL's launcher. Without Git Bash on PATH the test fails with a message saying so (review fix F7).
     /// <c>max-length</c> (65,536 characters) is left out: a Windows command line holds at most 32,767.</para>
     /// <para>Break-it-once (the controller's, on Windows CI): a <c>capture.sh</c> that runs the value, so the ampersand
     /// batch values must create <c>marker.txt</c>:</para>
@@ -1995,8 +1995,8 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     /// failure (marker.txt, no out.txt, an altered value), naming case and leg. With <paramref name="viaEnv"/> the value
     /// goes in <c>--env PW</c> to <c>capture-env.sh</c> (<c>"$PW"</c>), else as an argument to <c>capture.sh</c>
     /// (<c>"$1"</c>). An empty <c>abcXdef-value-2</c> in the work folder gives a glob something to match. Without Git
-    /// Bash on PATH no leg runs (a line says why). <c>max-length</c> is always left out, with a line: a Windows command
-    /// line holds at most 32,767 characters.
+    /// Bash on PATH it fails with a message saying so (review fix F7). <c>max-length</c> is always left out, with a line:
+    /// a Windows command line holds at most 32,767 characters.
     /// </summary>
     private List<string> RunGitBashCases(IEnumerable<EvilValues.Case> cases, bool viaEnv)
     {
@@ -2012,12 +2012,10 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         Assert.True(otherExit == 0, otherErr);
 
         var tag = viaEnv ? "T47 git bash env" : "T47 git bash";
+        // Review fix F7: without Git Bash the test fails (it is on every GitHub Windows runner), never passes empty.
         var bash = FindGitBash();
-        List<string> legs = [];
-        if (bash is null)
-            _output.WriteLine($"{tag}: no Git Bash (a bash.exe under a \\Git\\ folder) on PATH, its legs are not run");
-        else
-            legs = WindowsLegs(tag);
+        Assert.True(bash is not null, $"{tag}: no Git Bash (a bash.exe under a \\Git\\ folder) on PATH: it is on every GitHub Windows runner");
+        var legs = WindowsLegs(tag);
         _output.WriteLine($"{tag}: max-length is left out (a Windows command line holds at most 32,767 characters)");
         // Brief T48: ingest reads stdin as UTF-8 on Windows too, so the non-ASCII values run here as well.
         var named = IngestEach(cases.Where(c => c.Name != "max-length"), "g");
