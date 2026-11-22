@@ -353,7 +353,8 @@ public sealed class EvilValuesTests : IDisposable
         Assert.True(exit == 0, $"{caseName}: run failed: {err}");
         Assert.True(pty.Argv is ["tool", _], $"{caseName}: argv isn't [tool, the copy's path]");
         Assert.True(copy is not null, $"{caseName}: the child never read the filled copy");
-        Assert.True(DecodeFilledLine(caseName, copy!) == GetValue(caseName), $"{caseName}: the filled copy decodes to another value than get's");
+        // Review fix F4: against the value this test stored, not get's.
+        Assert.True(DecodeFilledLine(caseName, copy!) == stored, $"{caseName}: the filled copy decodes to another value than the stored one");
         AssertNoValueIn(caseName, stored, "run's stdout", stdout);
         AssertNoValueIn(caseName, stored, "run's stderr", err);
     }
