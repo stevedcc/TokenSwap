@@ -258,7 +258,8 @@ public sealed partial class RunCommand : ICliCommand
 
                 // Brief T47: batch files re-parse arguments. cmd.exe parses a batch file's command line by its own
                 // rules, so on Windows no substituted value or filled copy's path holding a character it interprets
-                // goes to a batch file (or cmd), wherever the walk finds one; --env values never reach the command line.
+                // goes to a batch file (or cmd) named anywhere in the command (review fix F11); --env values never reach
+                // the command line.
                 // The given name is checked: neither start path resolves PATHEXT (Validation.BatchArgumentRefusal's
                 // remarks); if one ever does, resolve the name the same way here first, or this fails open.
                 if (windows && Validation.BatchArgumentRefusal(argv,

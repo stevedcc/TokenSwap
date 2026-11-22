@@ -356,11 +356,9 @@ public static class Validation
 
     /// <summary>
     /// Brief T47 (A13, A20): the refusal of a command line that hands a batch file (or cmd) a substituted text holding
-    /// a character cmd.exe interprets (batch files re-parse arguments), or null. The walk visits every program word
-    /// (<see cref="ProgramPositions"/>: argv[0], wrappers, find -exec) and tests the raw word with
-    /// <see cref="IsBatchTarget"/>; after <c>powershell</c> or <c>pwsh</c> also every later word, trimmed (review fix
-    /// F10: in any option or position). With a batch target, every substituted token counts (failing closed: a wrapper's
-    /// own arguments can reach it too). Names every refused token in argv order, never a value or which character.
+    /// a character cmd.exe interprets (batch files re-parse arguments), or null. Review fix F11: every word of the
+    /// command, raw and trimmed, is tested with <see cref="IsBatchTarget"/>, whatever program or position it is in.
+    /// With a batch target, every substituted token counts (failing closed: any program's arguments can reach it). Names every refused token in argv order, never a value or which character.
     /// </summary>
     /// <remarks>
     /// The given name is checked, not one resolved through PATH and PATHEXT: neither of run's start paths (RedactingPty's
@@ -408,26 +406,12 @@ public static class Validation
     // The last component of a path, either separator.
     private static string FileNamePart(string path) => path[(path.LastIndexOfAny(['/', '\\']) + 1)..];
 
-    // The positions of the batch targets the walk reaches: program words, and every word after powershell or pwsh.
-    private static IEnumerable<int> BatchTargets(IReadOnlyList<string> argv)
-    {
-        foreach (var i in ProgramPositions(argv))
-        {
-            if (IsBatchTarget(argv[i]))
-                yield return i;
-            var program = ProgramName(argv[i]);
-            if (!program.Equals("pwsh", StringComparison.OrdinalIgnoreCase) && !program.Equals("powershell", StringComparison.OrdinalIgnoreCase))
-                continue;
-            // Review fix F10 (replaces T47 ruling 2's -File/positional walk): PowerShell's host reads options in more
-            // spellings than a walk can follow (--file, the Unicode dashes, padding, any prefix; Windows PowerShell
-            // 5.1's positional -Command, #401), so after powershell or pwsh every word that is a batch target once
-            // trimmed counts, whatever option or position it is in. Failing closed: a batch file's name passed as a
-            // plain argument to a PowerShell script is refused too.
-            for (var j = i + 1; j < argv.Count; j++)
-                if (IsBatchTarget(argv[j].Trim()))
-                    yield return j;
-        }
-    }
+    // Review fix F11 (replaces the program walk and F10's PowerShell rule): every word of the command, raw and
+    // trimmed, that is a batch target, whatever program or position it is in. Which program starts a word can't be
+    // told from the text (Windows normalises "pwsh.exe.", "pwsh.exe::$DATA", 8.3 names; an unknown wrapper runs its
+    // arguments), so failing closed: a batch file's name passed as plain data next to such a secret is refused too.
+    private static IEnumerable<int> BatchTargets(IReadOnlyList<string> argv) =>
+        Enumerable.Range(0, argv.Count).Where(i => IsBatchTarget(argv[i].Trim()));
 
     private static string FileTokenWayOut(string word) =>
         $"With a {{{{@file}}}} token no word of the command may be '{word}': rename the file if that is its name, " +

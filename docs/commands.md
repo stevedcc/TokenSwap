@@ -528,10 +528,10 @@ Print tswap's version (also: --version)
 
 On Windows, `run` refuses to pass a secret to a batch file (`.cmd`, `.bat`) or to `cmd` when its value holds one of
 `"` `&` `|` `<` `>` `^` `%` `!` `(` `)` or a line break: cmd.exe parses a batch file's arguments again, so such a value
-can run as a command, and tswap's generated values often hold these characters. It checks every program the
-command starts that it knows (`timeout`, `find -exec`, `powershell -File`, `pwsh <script>`), and a `{{@file}}` copy whose name
-or temporary folder holds one; a program it doesn't know is out of its reach. The message names the secret, never the value. Use a PowerShell
-script (`run powershell -File .\deploy.ps1 '{{name}}'`), or pass the value with `--env` (below) and read it in the
+can run as a command, and tswap's generated values often hold these characters. A batch file named anywhere in the
+command counts, whatever program or position it is in (`timeout 5 deploy.cmd`, `pwsh deploy.cmd`, `wrapper.exe
+deploy.cmd`, also a batch file's name passed as plain data), and so does a `{{@file}}` copy whose name or temporary
+folder holds one. The message names the secret, never the value. Use a PowerShell script (`run powershell -File .\deploy.ps1 '{{name}}'`), or pass the value with `--env` (below) and read it in the
 batch file with `setlocal EnableDelayedExpansion` as `!PW!`: [Passing secrets to scripts](scripts.md#cmd-and-batch-files).
 
 ## `run --env`

@@ -100,13 +100,14 @@ On Windows, `run` refuses to pass a secret to a batch file (`.cmd`, `.bat`) or t
 a character cmd.exe interprets: one of `"` `&` `|` `<` `>` `^` `%` `!` `(` `)` or a line break. A batch file's
 arguments are parsed again when it starts, and again by every `%1` inside the script; a value with such a character
 can run as a command. tswap's generated values often contain them (`create` uses `! @ # $ % ^ & * ( ) - _ = +`), and
-a value without a space or a quote reaches cmd.exe without any quotes at all. The check looks at every program the
-command starts (`timeout 5 deploy.cmd`, `find . -exec deploy.cmd ...`), at any batch file named after `powershell` or
-`pwsh`, in any option or position (`powershell -File deploy.cmd`, `pwsh deploy.cmd`, also a batch file's name passed
-to a PowerShell script), at the filled copy of a `{{@file}}` (whose name may hold `&` or `%`; when the temporary
-folder's path holds one, the refusal says so: set `TMP` and `TEMP` to a folder without them), and names the secret,
-never the value. A program it doesn't know runs a batch file out of its sight (`wrapper.exe deploy.cmd {{db-pw}}`):
-don't.
+a value without a space or a quote reaches cmd.exe without any quotes at all. A batch file named anywhere in the
+command counts, whatever program or position it is in (`timeout 5 deploy.cmd`, `find . -exec deploy.cmd ...`,
+`powershell -File deploy.cmd`, `pwsh deploy.cmd`, `wrapper.exe deploy.cmd`), so a batch file's name passed as plain
+data next to such a secret (`tool x.cmd {{db-pw}}`, a word that is just `cmd`) is refused too. The check also looks
+at the filled copy of a `{{@file}}` (whose name may hold `&` or `%`; when the temporary folder's path holds one, the
+refusal says so: set `TMP` and `TEMP` to a folder without them), and names the secret, never the value. A program
+that starts a batch file whose name isn't in the command (one from its own configuration) is out of its sight:
+don't give such a program a secret with these characters.
 
 The way: pass the value in the environment, and read it with delayed expansion.
 

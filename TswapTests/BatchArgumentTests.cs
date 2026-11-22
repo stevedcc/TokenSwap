@@ -186,6 +186,19 @@ public sealed class BatchArgumentTests
         new[] { "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "x.cmd", "{{" + Name + "}}" },
         new[] { "PowerShell.EXE", "\u2014file", "x.bat ", "{{" + Name + "}}" },
         new[] { "pwsh", "-NoProfile", " cmd ", "{{" + Name + "}}" },
+        // Review fix F11: every word of the command that is a batch target (after Trim()) counts, whatever program
+        // or position it is in: a program word Windows normalises (trailing dots, spaces, a stream, an 8.3 name), an
+        // unknown wrapper, a batch file's name as plain data. The last two were allowed by T47 task 1 (A1's "out of
+        // reach", on this branch only); F11 closes that boundary.
+        new[] { "pwsh.exe.", "x.cmd", "{{" + Name + "}}" },
+        new[] { "pwsh.exe ", "x.cmd", "{{" + Name + "}}" },
+        new[] { "PowerShell.EXE.", "x.cmd", "{{" + Name + "}}" },
+        new[] { "pwsh.exe::$DATA", "x.cmd", "{{" + Name + "}}" },
+        new[] { "POWERS~1.EXE", "x.cmd", "{{" + Name + "}}" },
+        new[] { "docker", "run", "img", "x.cmd", "{{" + Name + "}}" },
+        new[] { "anytool", "--flag", "x.bat", "{{" + Name + "}}" },
+        new[] { "wrapper.exe", "x.cmd", "{{" + Name + "}}" },
+        new[] { "tool.exe", "--script", "x.cmd", "{{" + Name + "}}" },
     };
 
     [Theory]
@@ -198,10 +211,6 @@ public sealed class BatchArgumentTests
         new[] { "powershell", "-File", "x.ps1", "{{" + Name + "}}" },
         new[] { "pwsh", "-f", "x.ps1", "{{" + Name + "}}" },
         new[] { "timeout", "5", "x.exe", "{{" + Name + "}}" },
-        // A1: an unknown wrapper is out of reach, as for every other check.
-        new[] { "wrapper.exe", "x.cmd", "{{" + Name + "}}" },
-        // A batch file named as data to a program that isn't a wrapper.
-        new[] { "tool.exe", "--script", "x.cmd", "{{" + Name + "}}" },
         // Review fix F10: the refusal's own way out, a PowerShell script by -File, in both editions.
         new[] { "powershell", "-File", @".\deploy.ps1", "{{" + Name + "}}" },
         new[] { "pwsh", "-File", "./deploy.ps1", "{{" + Name + "}}" },
