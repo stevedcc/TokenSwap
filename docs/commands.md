@@ -239,6 +239,12 @@ mask it ([what `run` masks](security-model.md#what-run-masks)). The line names t
 reason only, never the value, its length or which whitespace, and the exit code doesn't change.
 (`ingest` trims trailing whitespace, and refuses an input of whitespace only.)
 
+`ingest` (and every other command that reads piped input) reads stdin as UTF-8 on every OS; a leading UTF-8 BOM is
+ignored, and a UTF-16 or UTF-32 BOM switches to that encoding (Windows PowerShell 5.1 sends UTF-16 when
+`$OutputEncoding` is Unicode); input that isn't valid in the encoding in force is refused and nothing is stored.
+Windows PowerShell 5.1 pipes text to programs as ASCII by default (é arrives as `?`, which tswap can't detect): set
+`$OutputEncoding = [System.Text.UTF8Encoding]::new($false)` first, or use PowerShell 7, which pipes UTF-8.
+
 `add`, `ingest`, `ingest --rotate`, `create` and `rotate` also print one warning line on stderr after
 their success line (in `add`, after the whitespace warning) when the value they store is shorter than
 8 characters: for `add` the typed or piped value (also when it was already stored), for `ingest` the

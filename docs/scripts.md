@@ -49,10 +49,10 @@ program (such as tswap) starts it with by its own rules. Through `run`'s argumen
 expands braces (`{{x}}` arrives as `x`) and globs (`abc*def` can match a file), so the script's `"$1"` can be a
 different value ([#402](https://github.com/stevedcc/TokenSwap/issues/402) tracks the fix). Pass secrets to a Git
 Bash script in the environment instead and read them as `"$PW"`: `tswap run --env PW={{db-pw}} --
-"C:\Program Files\Git\bin\bash.exe" ./deploy.sh`. That way is tested with every ASCII test value. Start Git Bash by its
-full path, as there: a bare `bash` can start WSL's `bash.exe` in System32 instead. MSYS2's path conversion doesn't
-apply when tswap starts Git Bash; it applies when the script passes the value on to a Windows `.exe`, and that is
-where `MSYS_NO_PATHCONV=1` (or `MSYS2_ARG_CONV_EXCL='*'`) belongs. Tested by
+"C:\Program Files\Git\bin\bash.exe" ./deploy.sh`. That way is tested with every test value that fits on a Windows
+command line. Start Git Bash by its full path, as there: a bare `bash` can start WSL's `bash.exe` in System32
+instead. MSYS2's path conversion doesn't apply when tswap starts Git Bash; it applies when the script passes the value
+on to a Windows `.exe`, and that is where `MSYS_NO_PATHCONV=1` (or `MSYS2_ARG_CONV_EXCL='*'`) belongs. Tested by
 `EndToEndTests.Run_GitBashScript_EnvValue_EvilValues_ArriveExactly_Windows` (the environment) and
 `EndToEndTests.Run_GitBashScript_EvilValues_ArriveExactly_Windows` (arguments).
 
