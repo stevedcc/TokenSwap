@@ -245,6 +245,25 @@ public sealed class BatchArgumentTests
         Assert.DoesNotContain("Jo (Work)", message);
     }
 
+    /// <summary>
+    /// Review fix F6 (ruling 3): a copy whose name and temporary folder both hold a character of the set, and no secret:
+    /// the folder sentence, then "Rename the file.", and never the folder's path.
+    /// </summary>
+    [Fact]
+    public void AFileTokenCopy_WhoseNameAndFolderBothHoldACharacterOfTheSet_NamesBoth()
+    {
+        var folder = Path.Combine("C:", "Users", "Jo (Work)", "AppData", "Local", "Temp", "tswap-files");
+        var copy = Path.Combine(folder, "a&b.yaml");
+        var message = Validation.BatchArgumentRefusal(["x.cmd", copy], [new SubstitutedToken("a&b.yaml", 1, copy, IsFile: true)]);
+
+        Assert.Equal(
+            "Refused: tswap won't pass the copy of 'a&b.yaml' to a batch file: the temporary folder's path (%TEMP%) " +
+            "contains characters cmd.exe interprets (one of \" & | < > ^ % ! ( ) or a line break). Set TMP and TEMP to a " +
+            "folder without them, or use a PowerShell script. Rename the file.",
+            message);
+        Assert.DoesNotContain("Jo (Work)", message);
+    }
+
     [Fact]
     public void AMixedRefusal_WithTheTemporaryFolderToBlame_SaysSo()
     {
