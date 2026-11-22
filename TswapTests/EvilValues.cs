@@ -134,6 +134,19 @@ public static class EvilValues
         new("eight-characters", "Qz7kP2mW", "length"),
     ];
 
+    /// <summary>
+    /// Task 3 (A6, A9): the values that inject through a Windows batch file's launch ("BatBadBut", CVE-2024-24576), used
+    /// by the E2E batch test only. Each case's command would write <c>marker.txt</c> if cmd.exe ran it.
+    /// </summary>
+    public static readonly IReadOnlyList<Case> BatchCases =
+    [
+        new("batch-quote-ampersand", "\"&echo INJECTED>marker.txt&\"", "batch"),
+        new("batch-quote-spaced", "a\" & echo INJECTED>marker.txt & \"", "batch"),
+        new("batch-percent-path", "%PATH%", "batch"),
+        new("batch-caret-ampersand", "^&echo INJECTED>marker.txt", "batch"),
+        new("batch-unbalanced-quote", "a\"&echo INJECTED>marker.txt", "batch"),
+    ];
+
     /// <summary>The corpus as <c>(caseName, value)</c> rows.</summary>
     public static TheoryData<string, string> All
     {

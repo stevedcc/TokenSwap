@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using TswapCore;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace TswapTests;
 
@@ -25,9 +26,11 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     private readonly string _tempDir;
     private readonly string _testKeyHex;
     private readonly string _binaryPath;
+    private readonly ITestOutputHelper _output;
 
-    public EndToEndTests(TswapBinaryFixture binary)
+    public EndToEndTests(TswapBinaryFixture binary, ITestOutputHelper output)
     {
+        _output = output;
         _tempDir = Path.Combine(Path.GetTempPath(), "tswap-prog-test-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(_tempDir);
 
@@ -57,6 +60,29 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         psi.Environment["TSWAP_TEST_SUDO_BYPASS"] = "1";
         psi.Environment["TSWAP_CONFIG_DIR"] = _tempDir;
         return psi;
+    }
+
+    /// <summary>Brief T46 (A13): <see cref="MakePsi(bool)"/> with tswap (and so its child) started in <paramref name="workingDirectory"/>.</summary>
+    private ProcessStartInfo MakePsi(DirectoryInfo workingDirectory, bool redirectStdin = false)
+    {
+        var psi = MakePsi(redirectStdin);
+        psi.WorkingDirectory = workingDirectory.FullName;
+        return psi;
+    }
+
+    /// <summary>Brief T46 (A13): <see cref="RunTswap"/> started in <paramref name="workingDirectory"/>.</summary>
+    private (int exitCode, string stdout, string stderr) RunTswapIn(DirectoryInfo workingDirectory, params ReadOnlySpan<string> args)
+    {
+        var psi = MakePsi(workingDirectory);
+        foreach (var arg in args)
+            psi.ArgumentList.Add(arg);
+
+        using var process = Process.Start(psi)!;
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+
+        return (process.ExitCode, stdout, stderr);
     }
 
     private (int exitCode, string stdout, string stderr) RunTswap(params ReadOnlySpan<string> args)
@@ -1434,6 +1460,129 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         Assert.False(output.Contains("←["), $"an escape sequence was printed as text. {dump}");
     }
 
+    // --- Brief T46 Task 3 (#392): Windows batch files, "BatBadBut" (CVE-2024-24576) ---
+
+    /// <summary>
+    /// Brief T46 Task 3 (A6, A9, A10, A12): <c>tswap run &lt;batch&gt; {{name}}</c> with each of
+    /// <see cref="EvilValues.BatchCases"/>, through two legs: the redirected harness (tswap's stdout a pipe, so its child
+    /// starts through .NET's process start, FallbackPty) and an outer pseudo console (tswap's stdout a console, so
+    /// RedactingPty's WindowsPty builds the child's command line). Two batch files:
+    /// <list type="bullet">
+    /// <item><c>inert.cmd</c> and its twin <c>inert.bat</c> (<c>@exit /b 0</c>) never expand an argument, so a
+    /// <c>marker.txt</c> can only come from how the batch was launched. Invariant (batch-inert): <c>marker.txt</c> never
+    /// exists, whether tswap ran the batch or refused it.</item>
+    /// <item><c>capture.cmd</c>, for the values without <c>"</c> only (no batch can capture a quote-bearing argument
+    /// safely): reads <c>%~1</c> with delayed expansion off, then prints it with delayed expansion on, which parses no
+    /// character of the expanded text. Invariant (batch-capture): <c>out.txt</c> holds exactly the value, or tswap refused
+    /// the run with a message naming batch files; an altered value (e.g. <c>%PATH%</c> expanded at launch) fails.</item>
+    /// </list>
+    /// tswap starts in the test's work folder, the batch files' folder (A6), so a marker lands where the test looks;
+    /// the test process's own folder is checked too. Every failure names the case, the leg and the batch, and whether
+    /// <c>marker.txt</c> appeared; the outcome of every run (ran, refused) goes to the test output for the report.
+    /// </summary>
+    /// <remarks>
+    /// Break-it-once (the controller's, on Windows CI; A6, A9): in place of the tswap run, start the batch with the
+    /// vulnerable wrapping, outside tswap (wrapper quotes added, embedded quotes not escaped):
+    /// <code>
+    /// using var p = Process.Start(new ProcessStartInfo("cmd.exe", "/c inert.cmd \"" + value + "\"")
+    ///     { WorkingDirectory = work.FullName, UseShellExecute = false })!;   // A9: Process.Start("cmd.exe", "/c inert.cmd \"" + value + "\"")
+    /// p.WaitForExit();
+    /// var (exit, output) = (p.ExitCode, "");
+    /// </code>
+    /// With it the two quote-bearing values (<c>batch-quote-ampersand</c>, <c>batch-quote-spaced</c>) must create
+    /// <c>marker.txt</c>: that proves the detector works on the runner. A marker from <c>batch-caret-ampersand</c> would be
+    /// a stray redirection at launch (cmd.exe reading <c>&gt;marker.txt</c> as a redirection of the batch's own output):
+    /// the same invariant fails, by another mechanism.
+    /// </remarks>
+    [WindowsFact("batch files and cmd.exe's argument parsing exist only on Windows (BatBadBut, CVE-2024-24576)")]
+    public void Run_BatchFile_EvilValues_NeverInject_Windows()
+    {
+        var work = Directory.CreateDirectory(Path.Combine(_tempDir, "work"));
+        var inertCmd = Path.Combine(work.FullName, "inert.cmd");
+        var inertBat = Path.Combine(work.FullName, "inert.bat");
+        var capture = Path.Combine(work.FullName, "capture.cmd");
+        File.WriteAllText(inertCmd, "@exit /b 0\r\n");
+        File.WriteAllText(inertBat, "@exit /b 0\r\n");
+        File.WriteAllText(capture,
+            "@echo off\r\nsetlocal DisableDelayedExpansion\r\nset \"arg=%~1\"\r\nsetlocal EnableDelayedExpansion\r\n>\"%~dp0out.txt\" echo(!arg!\r\n");
+        var outFile = Path.Combine(work.FullName, "out.txt");
+        // Anywhere under the test folder, and in the test process's folder (where a launch that ignored the working
+        // directory would put it).
+        (string Folder, SearchOption Depth)[] markerPlaces =
+            [(_tempDir, SearchOption.AllDirectories), (Environment.CurrentDirectory, SearchOption.TopDirectoryOnly)];
+        IEnumerable<string> Markers() =>
+            markerPlaces.SelectMany(place => Directory.EnumerateFiles(place.Folder, "marker.txt", place.Depth));
+        Assert.Empty(Markers());
+        void RemoveMarkers()
+        {
+            foreach (var marker in Markers().ToList())
+                File.Delete(marker);
+        }
+
+        var (initExit, _, initErr) = RunTswap("init", "--yubikey", "--no-recovery");
+        Assert.True(initExit == 0, $"init failed: {initErr}");
+
+        // A12: the ConPTY leg only where ConPTY exists (Windows 10 1809+).
+        List<string> legs = ["redirected"];
+        if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 17763))
+            legs.Add("conpty");
+        else
+            _output.WriteLine("T46 batch: no ConPTY (before Windows 10 1809), the conpty leg is not run");
+
+        List<string> failures = [];
+        var index = 0;
+        foreach (var c in EvilValues.BatchCases)
+        {
+            // A secret per case (A11: 'b1'… holds no part of any batch value).
+            var name = $"b{++index}";
+            var (ingestExit, _, ingestErr) = RunTswapWithStdin(c.Value, "ingest", name);
+            Assert.True(ingestExit == 0, $"{c.Name}: ingest failed: {ingestErr}");
+
+            List<string> batches = [inertCmd, inertBat];
+            if (!c.Value.Contains('"'))
+                batches.Add(capture);
+            foreach (var leg in legs)
+            foreach (var batch in batches)
+            {
+                RemoveMarkers();
+                File.Delete(outFile);
+                var where = $"{c.Name} [{leg} leg, {Path.GetFileName(batch)}]";
+
+                int exit;
+                string output;
+                if (leg == "redirected")
+                {
+                    var (e, stdout, stderr) = RunTswapIn(work, "run", batch, "{{" + name + "}}");
+                    (exit, output) = (e, stdout + stderr);
+                }
+                else
+                    (exit, output) = RunTswapInConPty(work, waitForOutput: $"Found tokens: {name}", "-v", "run", batch, "{{" + name + "}}");
+
+                var marker = Markers().Any();
+                var refusedForBatch = exit != 0 && output.Contains("batch", StringComparison.OrdinalIgnoreCase);
+                var outcome = exit == 0 ? "ran" : refusedForBatch ? "refused, naming batch files" : $"exit {exit}";
+                if (marker)
+                    failures.Add($"{where}: marker.txt APPEARED (an injection; {outcome})");
+                if (batch == capture)
+                {
+                    if (File.Exists(outFile))
+                    {
+                        var captured = File.ReadAllText(outFile);
+                        outcome += captured == c.Value + "\r\n" ? ", out.txt holds the value exactly" : ", out.txt holds an ALTERED value";
+                        if (captured != c.Value + "\r\n")
+                            failures.Add($"{where}: out.txt holds an altered value ({captured.Length} chars, expected {c.Value.Length + 2}); marker.txt {(marker ? "appeared" : "did not appear")}");
+                    }
+                    else if (!refusedForBatch)
+                        failures.Add($"{where}: neither out.txt nor a refusal naming batch files (exit {exit}); marker.txt {(marker ? "appeared" : "did not appear")}");
+                }
+                _output.WriteLine($"T46 batch: {where}: {outcome}; marker.txt {(marker ? "APPEARED" : "absent")}");
+            }
+        }
+        RemoveMarkers();
+
+        Assert.True(failures.Count == 0, string.Join("\n", failures));
+    }
+
     // --- ConPTY P/Invoke helpers (used by Run_CompoundCommand_RedactedOutput_WindowsConPty) ---
 
     [StructLayout(LayoutKind.Sequential)]
@@ -1514,7 +1663,11 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     /// setting them on this process (inherited by the child); safe because the suite
     /// runs with parallelism disabled.
     /// </summary>
-    private (int exitCode, string output) RunTswapInConPty(string waitForOutput, params string[] args)
+    private (int exitCode, string output) RunTswapInConPty(string waitForOutput, params string[] args) =>
+        RunTswapInConPty(workingDirectory: null, waitForOutput, args);
+
+    /// <summary>Brief T46 (A13): <see cref="RunTswapInConPty(string, string[])"/> with tswap started in <paramref name="workingDirectory"/>.</summary>
+    private (int exitCode, string output) RunTswapInConPty(DirectoryInfo? workingDirectory, string waitForOutput, params string[] args)
     {
         const uint EXTENDED_STARTUPINFO_PRESENT        = 0x00080000;
         const int  PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE = 0x00020016;
@@ -1582,7 +1735,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
             SetEnv("TSWAP_CONFIG_DIR", _tempDir);
 
             if (!CreateProcess(null, cmdLine, IntPtr.Zero, IntPtr.Zero, false,
-                    EXTENDED_STARTUPINFO_PRESENT, IntPtr.Zero, null, ref six, out var pi))
+                    EXTENDED_STARTUPINFO_PRESENT, IntPtr.Zero, workingDirectory?.FullName, ref six, out var pi))
                 throw new Exception($"CreateProcess failed ({Marshal.GetLastWin32Error()})");
             hProcess = pi.hProcess;
             CloseHandle(pi.hThread);

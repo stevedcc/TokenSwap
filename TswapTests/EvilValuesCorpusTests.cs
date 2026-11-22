@@ -20,6 +20,17 @@ public sealed class EvilValuesCorpusTests
     }
 
     [Fact]
+    public void BatchCases_AreTheBriefsValues()
+    {
+        // Task 3's four values and A9's unbalanced quote, verbatim; names unique and apart from the corpus's.
+        Assert.Equal(
+            ["\"&echo INJECTED>marker.txt&\"", "a\" & echo INJECTED>marker.txt & \"", "%PATH%", "^&echo INJECTED>marker.txt", "a\"&echo INJECTED>marker.txt"],
+            BatchCases.Select(c => c.Value).ToArray());
+        Assert.Empty(BatchCases.Select(c => c.Name).Intersect(Cases.Select(c => c.Name)));
+        Assert.Equal(BatchCases.Count, BatchCases.Select(c => c.Name).Distinct().Count());
+    }
+
+    [Fact]
     public void Corpus_HasTheBriefsShapes()
     {
         // Thirteen shell characters, each inside a 16-character value, then all of them in one value.
@@ -77,7 +88,7 @@ public sealed class EvilValuesCorpusTests
             .ToList();
         foreach (var ((caseName, invariant), (number, line)) in KnownFindings)
         {
-            Assert.Contains(Cases, c => c.Name == caseName);
+            Assert.Contains(invariant is BatchInert or BatchCapture ? BatchCases : Cases, c => c.Name == caseName);
             Assert.Contains(invariant, Invariants);
             var name = FindingFactName(caseName, invariant, number);
             var fact = Assert.Single(facts, f => f.Name == name).Fact!;
