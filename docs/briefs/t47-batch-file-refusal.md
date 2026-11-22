@@ -35,8 +35,9 @@ public static string? BatchArgumentRefusal(string program, IReadOnlyList<(string
 - Then returns a refusal when **any** substituted value contains one of `"` `&` `|` `<` `>` `^` `%` `!`, CR or LF.
   The message names the **secret** (never the value, never which character):
   `Refused: tswap won't pass secret '<name>' to a batch file. cmd.exe parses a batch file's arguments again, and the
-  value contains characters it interprets (one of " & | < > ^ % ! or a line break). Run a PowerShell script instead:
-  'run powershell -File .\script.ps1 {{<name>}}' (the script reads it as $args[0]).`
+  value contains characters it interprets (one of " & | < > ^ % ! or a line break; tswap's generated values often do).
+  Run a PowerShell script instead ('run powershell -File .\script.ps1 {{<name>}}', read as $args[0]), or pass it in the
+  environment ('run --env PW={{<name>}} script.cmd', read with setlocal EnableDelayedExpansion as !PW!).`
   It must contain the words "batch file" (T46's test recognises a refusal by "batch").
 - Pure and platform-independent, so its unit tests run on every OS.
 
@@ -79,6 +80,20 @@ runners), on both legs (redirected and ConPTY, as T46's test does), for every T4
 quote and shell-character cases. Assert: `out.txt` holds exactly the value, and `marker.txt` never appears anywhere the
 T46 test looks. Each failure names case, leg and host. If either PowerShell re-parses a value, that's a finding to report
 at once: the refusal's advice would then be wrong, and the controller decides before the brief goes on.
+
+## Task 2c: generated values and the unquoted case (owner question, 2026-11-22)
+
+`create`'s `Charset` includes `! @ # $ % ^ & * ( ) - _ = +`, and .NET (like WindowsPty's `QuoteWindowsArg`) quotes an
+argument only when it holds a space, a tab or a quote. So a value like `aB3&xY9` reaches `cmd.exe` **unquoted**, and
+the text after `&` runs as a command. T46's batch cases all contain a space or a quote; add one without either,
+`x&echo.>marker.txt`, to `EvilValues.BatchCases`, so T46's test (and the refusal) cover it, and note in the report what
+it does today (expected: `marker.txt` appears without the fix).
+
+The refusal's way out names both paths: a PowerShell script with `-File` (Task 2b proves it), or, for an existing batch
+script, `--env`: `run --env PW={{name}} script.cmd`, read inside the script with `setlocal EnableDelayedExpansion` and
+`!PW!` (delayed expansion never parses the value as command text). Add a Windows E2E case for that pattern
+(`capture-env.cmd`: `@echo off`, `setlocal EnableDelayedExpansion`, `>"%~dp0out.txt" echo(!PW!`): `out.txt` holds the
+value exactly and `marker.txt` never appears, for every T46 batch case.
 
 ## Task 3: docs
 
