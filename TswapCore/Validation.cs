@@ -1004,7 +1004,8 @@ public static class Validation
     // Basename without a Windows executable extension: /bin/sh → sh, cmd.exe → cmd.
     /// <summary>
     /// Brief T47 (A4), review fix F12: the last component of <paramref name="path"/> as Windows names the file it
-    /// starts: a drive prefix (<c>C:</c>) dropped, either separator, a <c>:stream</c> suffix dropped, and trailing dots
+    /// starts: a drive prefix (<c>C:</c>) dropped, either separator, a <c>:stream</c> suffix dropped (F15: only after
+    /// a name ending in .exe, .cmd, .bat or .com), and trailing dots
     /// and spaces dropped (<c>pwsh.exe.</c>, <c>pwsh.exe </c>, <c>pwsh.exe::$DATA</c> are <c>pwsh.exe</c>). Shared by
     /// <see cref="IsBatchTarget"/> and <see cref="ProgramName"/>, on every OS (fail closed).
     /// </summary>
@@ -1013,10 +1014,16 @@ public static class Validation
         var name = path.Length >= 2 && path[1] == ':' && char.IsAsciiLetter(path[0]) ? path[2..] : path;
         name = name.Replace('\\', '/');
         name = name[(name.LastIndexOf('/') + 1)..];
-        if (name.IndexOf(':') is var colon and >= 0)
+        // Review fix F15: a ':stream' suffix only on a name that is a program file before its first ':', so an image
+        // tag (python:3.12, node:20) keeps its ':' and is not read as the interpreter.
+        if (name.IndexOf(':') is var colon and >= 0 && HasProgramExtension(name[..colon]))
             name = name[..colon];
         return name.TrimEnd('.', ' ');
     }
+
+    private static bool HasProgramExtension(string name) =>
+        name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase)
+        || name.EndsWith(".bat", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".com", StringComparison.OrdinalIgnoreCase);
 
     private static string ProgramName(string path)
     {

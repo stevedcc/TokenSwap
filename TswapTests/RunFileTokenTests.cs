@@ -825,6 +825,24 @@ public sealed class RunFileTokenTests : IDisposable
         Assert.Equal(Apply.ApplySecrets(ValuesYaml, Db()), seenCopy);
     }
 
+    // Review fix F15: a container image tag is not a :stream suffix, so python:3.12 or node:20 next to a {{@file}}
+    // token is an image, not the interpreter (F12 had cut every word at its first ':').
+    [Theory]
+    [InlineData("python:3.12")]
+    [InlineData("node:20")]
+    public void RunFileToken_ImageTagIsNotAnInterpreter_Allowed(string image)
+    {
+        WriteFile("cfg.yaml", ValuesYaml);
+
+        var (exit, _, err) = Run("run", "docker", "run", "-v", "{{@cfg.yaml}}:/c.yaml", image, "app");
+
+        Assert.Null(Validation.GetFileTokenRefusal(["docker", "run", "-v", "{{@cfg.yaml}}:/c.yaml", image, "app"]));
+        Assert.True(exit == 0, err);
+        Assert.Equal(1, _pty.Starts);
+        Assert.Equal(["docker", "run", "-v"], _pty.Argv![..3]);
+        Assert.Equal(image, _pty.Argv[4]);
+    }
+
     // 'install' copies files as the program, but as an argument it is Helm's headline subcommand, so
     // it is refused only as the program (owner decision 2026-11-07: helm install has to work).
     [Fact]

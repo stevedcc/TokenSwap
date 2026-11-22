@@ -146,6 +146,8 @@ public sealed class BatchArgumentTests
     [InlineData("xcmd")]
     [InlineData(@"C:\cmd.d\tool.exe")]
     [InlineData("cmdlet")]
+    // Review fix F15: only a name ending in .exe, .cmd, .bat or .com before its first ':' has a :stream suffix.
+    [InlineData("cmd:x")]
     public void IsBatchTarget_False(string program) => Assert.False(Validation.IsBatchTarget(program));
 
     // ── A1, A5, A13, A20, A21: every program word of the walk, and PowerShell's -File script ─────────
