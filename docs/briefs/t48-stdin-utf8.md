@@ -141,9 +141,9 @@ These replace the brief text they name; where they conflict with it, they win.
   #293 typeahead discard). The source guard bans **static `System.Console` input access** only: in every file under
   `TswapCli/` except the shared reader's file and `SystemConsole.cs`, the regex `(?<![.\w])Console\.(ReadLine|Read|In)\b`
   (not preceded by `.` or a word character, so `ctx.Console.In`, `this.Console.ReadLine()` and `Console.InputEncoding`
-  don't match) must match only where the identifier `Console` is the `IConsole` property, which the guard can't tell
-  apart textually; so the guard also allows exactly the two `CommandContext.cs` lines by their content (trimmed, listed
-  in the test) and nothing else. The four `ctx.Console.In` uses (`IngestCommand`, `BrokerCommand`, `SlotCommand` twice)
+  don't match) must not match. A bare `Console.` inside `CommandContext` is the `IConsole` property, which a text check
+  can't tell apart from `System.Console`, so the guard allows exactly the two `CommandContext.cs` lines by their content
+  (trimmed, listed in the test) and nothing else. The four `ctx.Console.In` uses (`IngestCommand`, `BrokerCommand`, `SlotCommand` twice)
   don't match. `System.Console.ReadLine(`, `System.Console.In` and `System.Console.Read(` are banned everywhere outside
   those two files too. Break-it-once: add `var x = System.Console.ReadLine();` (or a bare `Console.ReadLine()` in a
   `TswapCli/Commands/` file with no `Console` property in scope); the guard must fail.
