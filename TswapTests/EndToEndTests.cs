@@ -1554,16 +1554,22 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
 
                 int exit;
                 string output;
+                string refusalStream; // review fix F2: stderr on the redirected leg, the one combined stream on ConPTY
                 if (leg == "redirected")
                 {
                     var (e, stdout, stderr) = RunTswapIn(work, "run", batch, "{{" + name + "}}");
-                    (exit, output) = (e, stdout + stderr);
+                    (exit, output, refusalStream) = (e, stdout + stderr, stderr);
                 }
                 else
+                {
                     (exit, output) = RunTswapInConPty(work, waitForOutput: $"Found tokens: {name}", "-v", "run", batch, "{{" + name + "}}");
+                    refusalStream = output;
+                }
 
                 var marker = Markers().Any();
-                var refusedForBatch = exit != 0 && output.Contains("batch", StringComparison.OrdinalIgnoreCase);
+                // F2: tswap's own refusal, not cmd's "... operable program or batch file." (which says "batch" too).
+                var refusedForBatch = exit != 0 && refusalStream.Contains("Refused: tswap won't pass", StringComparison.Ordinal)
+                                      && refusalStream.Contains("to a batch file", StringComparison.Ordinal);
                 var outcome = exit == 0 ? "ran" : refusedForBatch ? "refused, naming batch files" : $"exit {exit}";
                 if (marker)
                     failures.Add($"{where}: marker.txt APPEARED (an injection; {outcome})");
