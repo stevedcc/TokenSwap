@@ -310,11 +310,12 @@ public class InlineCodeBlockTests
     /// F9 (replaces F1's <c>PowerShellTooShortPrefix_SpeltWithASlash_BehavesAsItsDashForm</c>, which said
     /// <c>-co</c>/<c>/co</c> were allowed): PowerShell's host strips surrounding whitespace and any run of <c>-</c>,
     /// <c>/</c>, U+2013, U+2014 and U+2015, and takes any prefix of a parameter's name, so every such spelling of
-    /// -Command, -EncodedCommand and -CommandWithArgs is refused, and the refusal names the spelling given.
+    /// -Command, -EncodedCommand and -CommandWithArgs is refused, and the refusal names the spelling given. F13:
+    /// <c>-/cwa</c> and <c>---ec</c> are near misses PowerShell 7 rejects; they are refused fail-closed.
     /// </summary>
     [Theory]
     [MemberData(nameof(PowerShellInlineSpellings))]
-    public void PowerShellInlineParameter_InAnySpellingPowerShellAccepts_IsRefused(string program, string flag)
+    public void PowerShellInlineParameter_InAnySpellingPowerShellAccepts_OrANearMiss_IsRefused(string program, string flag)
     {
         var blocked = Validation.GetBlockedInvocation([program, flag, "Write-Output {{x}}"]);
 
