@@ -229,6 +229,37 @@ public sealed class BatchArgumentTests
             message);
     }
 
+    /// <summary>Controller ruling 3: the character is in the temporary folder's path, not the file's name.</summary>
+    [Fact]
+    public void AFileTokenCopy_InATemporaryFolderWithACharacterOfTheSet_NamesTheFolder_NeverItsPath()
+    {
+        var folder = Path.Combine("C:", "Users", "Jo (Work)", "AppData", "Local", "Temp", "tswap-files");
+        var copy = Path.Combine(folder, "values.yaml");
+        var message = Validation.BatchArgumentRefusal(["x.cmd", copy], [new SubstitutedToken("values.yaml", 1, copy, IsFile: true)]);
+
+        Assert.Equal(
+            "Refused: tswap won't pass the copy of 'values.yaml' to a batch file: the temporary folder's path (%TEMP%) " +
+            "contains characters cmd.exe interprets (one of \" & | < > ^ % ! ( ) or a line break). Set TMP and TEMP to a " +
+            "folder without them, or use a PowerShell script.",
+            message);
+        Assert.DoesNotContain("Jo (Work)", message);
+    }
+
+    [Fact]
+    public void AMixedRefusal_WithTheTemporaryFolderToBlame_SaysSo()
+    {
+        var amp = EvilValues.Get("ampersand").Value;
+        var copy = Path.Combine("tmp&x", "values.yaml");
+        var message = Validation.BatchArgumentRefusal(["x.cmd", copy, amp],
+            [new SubstitutedToken("values.yaml", 1, copy, IsFile: true), new SubstitutedToken(Name, 2, amp)]);
+
+        Assert.NotNull(message);
+        Assert.StartsWith($"Refused: tswap won't pass secret(s) '{{{{@values.yaml}}}}', '{Name}' to a batch file.", message);
+        Assert.EndsWith(" The temporary folder's path (%TEMP%) contains such characters too: set TMP and TEMP to a folder without them.", message);
+        Assert.DoesNotContain("Rename the file.", message);
+        Assert.DoesNotContain("tmp&x", message);
+    }
+
     [Fact]
     public void AFileTokenPath_WithoutThoseCharacters_IsAllowed()
     {

@@ -33,7 +33,9 @@ public sealed class RunBatchRefusalTests : IDisposable
 
     private void Secret(string name, string value) => _m.Ok(value, "ingest", name);
 
-    private (int Exit, string Out, string Err) Run(OSPlatform os, params string[] args)
+    private (int Exit, string Out, string Err) Run(OSPlatform os, params string[] args) => RunWithTempRoot(os, _temp, args);
+
+    private (int Exit, string Out, string Err) RunWithTempRoot(OSPlatform os, string tempRoot, params string[] args)
     {
         _m.Os = os;
         var console = new FakeConsole("");
@@ -41,7 +43,7 @@ public sealed class RunBatchRefusalTests : IDisposable
         var env = FilledFilesEnvironment.FromSystem() with
         {
             XdgRuntimeDir = null,
-            TempRoot = _temp,
+            TempRoot = tempRoot,
             CurrentDirectory = _m.Dir,
             RegisterSignals = _ => new Nothing(),
         };
@@ -197,6 +199,29 @@ public sealed class RunBatchRefusalTests : IDisposable
         }
         Assert.Equal(["deploy.cmd"], _pty.Argv!);
         Assert.Equal(Amp, _pty.Options!.Environment!["PW"]);
+    }
+
+    /// <summary>
+    /// Controller ruling 3: a temporary folder (the filled-files environment's temp root) whose path holds a character
+    /// of the set refuses a {{@file}} for a batch file, naming %TEMP%, never the path.
+    /// </summary>
+    [Fact]
+    public void AFileToken_InATemporaryFolderWithACharacterOfTheSet_IsRefused_NamingTemp()
+    {
+        Secret("pw", Allowed);
+        File.WriteAllText(_m.PathOf("values.yaml"), "password: \"\"  # tswap: pw\n");
+        var root = Directory.CreateDirectory(Path.Combine(_temp, "t&mp")).FullName;
+
+        var (exit, _, err) = RunWithTempRoot(OSPlatform.Windows, root, "x.cmd", "{{@values.yaml}}");
+
+        Assert.True(exit == 1, err);
+        Assert.Equal(0, _pty.Starts);
+        Assert.Contains("Refused: tswap won't pass the copy of 'values.yaml' to a batch file: the temporary folder's path (%TEMP%) contains characters cmd.exe interprets", err);
+        Assert.Contains("Set TMP and TEMP to a folder without them, or use a PowerShell script.", err);
+        Assert.DoesNotContain("Rename the file.", err);
+        Assert.DoesNotContain(_temp, err);
+        Assert.DoesNotContain("t&mp", err);
+        Assert.Empty(Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories));
     }
 
     [Fact]

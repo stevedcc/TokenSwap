@@ -379,10 +379,20 @@ public static class Validation
         if (refused.Count == 0)
             return null;
 
+        // Controller ruling 3: a copy's path is the temporary folder and the source's base name; say which holds the
+        // character, and never print the folder's path.
+        var files = refused.Where(t => t.IsFile).ToList();
+        var nameToBlame = files.Any(t => FileNamePart(t.Value).AsSpan().ContainsAny(BatchCharacters));
+        var folderToBlame = files.Any(t => t.Value[..^FileNamePart(t.Value).Length].AsSpan().ContainsAny(BatchCharacters));
         var secrets = refused.Where(t => !t.IsFile).ToList();
         if (secrets.Count == 0)
-            return $"Refused: tswap won't pass the copy of {string.Join(", ", refused.Select(t => $"'{Printable(t.Name)}'"))} " +
-                   $"to a batch file: its name contains characters cmd.exe interprets ({BatchCharacterList}). Rename the file.";
+        {
+            var copies = $"Refused: tswap won't pass the copy of {string.Join(", ", refused.Select(t => $"'{Printable(t.Name)}'"))} to a batch file: ";
+            return folderToBlame
+                ? copies + $"the temporary folder's path (%TEMP%) contains characters cmd.exe interprets ({BatchCharacterList}). " +
+                  "Set TMP and TEMP to a folder without them, or use a PowerShell script." + (nameToBlame ? " Rename the file." : "")
+                : copies + $"its name contains characters cmd.exe interprets ({BatchCharacterList}). Rename the file.";
+        }
 
         var names = string.Join(", ", refused.Select(t => t.IsFile ? $"'{{{{@{Printable(t.Name)}}}}}'" : $"'{t.Name}'"));
         var first = secrets[0].Name;
@@ -391,8 +401,12 @@ public static class Validation
             $"and their values contain characters it interprets ({BatchCharacterList}; tswap's generated values often do). " +
             $"Use a PowerShell script ('run powershell -File .\\script.ps1 {{{{{first}}}}}', read as $args[0]), or the " +
             $"environment ('run --env PW={{{{{first}}}}} deploy.cmd', read with setlocal EnableDelayedExpansion as !PW!).";
-        return secrets.Count < refused.Count ? message + " Rename the file." : message;
+        return message + (nameToBlame ? " Rename the file." : "") +
+               (folderToBlame ? " The temporary folder's path (%TEMP%) contains such characters too: set TMP and TEMP to a folder without them." : "");
     }
+
+    // The last component of a path, either separator.
+    private static string FileNamePart(string path) => path[(path.LastIndexOfAny(['/', '\\']) + 1)..];
 
     // The positions of the batch targets the walk reaches: program words, and PowerShell's script.
     private static IEnumerable<int> BatchTargets(IReadOnlyList<string> argv)

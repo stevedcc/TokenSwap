@@ -89,7 +89,8 @@ arguments are parsed again when it starts, and again by every `%1` inside the sc
 can run as a command. tswap's generated values often contain them (`create` uses `! @ # $ % ^ & * ( ) - _ = +`), and
 a value without a space or a quote reaches cmd.exe without any quotes at all. The check looks at every program the
 command starts (`timeout 5 deploy.cmd`, `find . -exec deploy.cmd ...`, `powershell -File deploy.cmd`, `pwsh deploy.cmd`), at the
-filled copy of a `{{@file}}` (whose name may hold `&` or `%`), and names the secret, never the value. A program it
+filled copy of a `{{@file}}` (whose name may hold `&` or `%`; when the temporary folder's path holds one, the refusal
+says so: set `TMP` and `TEMP` to a folder without them), and names the secret, never the value. A program it
 doesn't know runs a batch file out of its sight (`wrapper.exe deploy.cmd {{db-pw}}`): don't.
 
 The way: pass the value in the environment, and read it with delayed expansion.
