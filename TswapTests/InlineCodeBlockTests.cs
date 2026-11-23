@@ -464,7 +464,7 @@ public class InlineCodeBlockTests
         // redaction masks it.
         ["-File", "{{pw}}"],
         // What follows the script is the script's arguments, whatever they look like.
-        ["-File", @".\x.ps1", "Write-Host", "-NoExit", "-", "{{pw}}"],
+        ["-File", @".\x.ps1", "Write-Host", "-NoExit", "x", "{{pw}}"],
     ];
 
     private static readonly (string[] Tail, string Kind)[] WindowsPowerShellRefusedTails =
@@ -489,6 +489,11 @@ public class InlineCodeBlockTests
         (["-File", "-", "{{pw}}"], StdinKind),
         (["/f", "-", "{{pw}}"], StdinKind),
         (["-File", "/dev/stdin", "{{pw}}"], StdinKind),
+        // Review fix H1: a stdin path anywhere after PowerShell is refused, fail closed. Accepted over-refusal: a script
+        // argument that is literally '-' or a stdin path (the controller's ruling on the T49 rows).
+        (["-File", @".\x.ps1", "-"], StdinKind),
+        (["-File", @".\x.ps1", "Write-Host", "-NoExit", "-", "{{pw}}"], StdinKind),
+        (["-File", @".\x.ps1", " /dev/STDIN "], StdinKind),
         (["-NoExit", "-File", @".\x.ps1", "{{pw}}"], NoScriptKind),
         (["-noe", "-File", @".\x.ps1", "{{pw}}"], NoScriptKind),
         (["-File"], NoScriptKind),
@@ -644,7 +649,7 @@ public class InlineCodeBlockTests
     [InlineData("pwsh", "-NoProfile", "./x.ps1", "{{pw}}")]
     [InlineData("pwsh", "-ExecutionPolicy", "Bypass", "./x.ps1", "{{pw}}")]
     [InlineData("pwsh.exe", "\u2013File", "./x.ps1", "{{pw}}")]
-    [InlineData("pwsh", "./x.ps1", "-NoExit", "-", "{{pw}}")]
+    [InlineData("pwsh", "./x.ps1", "-NoExit", "x", "{{pw}}")]
     // Review fix G1: a '/' path is pwsh's positional script, not a parameter.
     [InlineData("pwsh", "/opt/x.ps1", "{{pw}}")]
     [InlineData("pwsh", "/opt/x.ps1", "-pw={{pw}}")]
@@ -664,6 +669,13 @@ public class InlineCodeBlockTests
     [InlineData(StdinKind, "pwsh", "/proc/self/fd/0", "{{pw}}")]
     [InlineData(StdinKind, "pwsh", "-NoProfile", "/dev/stdin", "{{pw}}")]
     [InlineData(StdinKind, "pwsh", "/dev/STDIN", "{{pw}}")]
+    // Review fix H1: any stdin path after pwsh, whatever parameter pwsh reads before it (-i is -Interactive, not
+    // -InputFormat; -s is -ServerMode), and a script argument that is literally '-' (accepted over-refusal).
+    [InlineData(StdinKind, "pwsh", "-i", "/dev/stdin", "{{pw}}")]
+    [InlineData(StdinKind, "pwsh", "-s", "/dev/fd/0", "{{pw}}")]
+    [InlineData(StdinKind, "pwsh", "-ep", "Bypass", "/dev/stdin", "{{pw}}")]
+    [InlineData(StdinKind, "pwsh", "./x.ps1", "-NoExit", "-", "{{pw}}")]
+    [InlineData(StdinKind, "pwsh", "-File", "./x.ps1", " - ")]
     [InlineData(NoScriptKind, "pwsh")]
     [InlineData(NoScriptKind, "pwsh", "-NoProfile")]
     [InlineData(NoScriptKind, "pwsh", "-NoExit", "-File", "./x.ps1", "{{pw}}")]

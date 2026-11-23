@@ -683,6 +683,11 @@ public static class Validation
             var flag = args.FirstOrDefault(IsPowerShellInline);
             if (flag is not null)
                 return new(program, InlineReason(program, flag));
+            // Review fix H1: a stdin path anywhere after PowerShell is refused, whatever parameter comes before it
+            // (pwsh reads -i as -Interactive, not -InputFormat), fail closed; a script argument that is literally '-'
+            // is refused too (accepted over-refusal).
+            if (args.Any(a => StdinScripts.Contains(a.Trim())))
+                return PowerShellStdin(program);
             return program.Equals("powershell", StringComparison.OrdinalIgnoreCase)
                 ? CheckWindowsPowerShell(program, args) : CheckPwsh(program, args);
         }
@@ -1084,10 +1089,11 @@ public static class Validation
         if (at >= args.Count)
             return PowerShellNoScript(program);
         var script = args[at];
-        return StdinScripts.Contains(script) || script.Trim().Length == 0
-            ? new(program, $"'{program} -File -' reads code from stdin, which can transform and print secrets past redaction. {WayOut}")
-            : null;
+        return StdinScripts.Contains(script) || script.Trim().Length == 0 ? PowerShellStdin(program) : null;
     }
+
+    private static BlockedInvocation PowerShellStdin(string program) =>
+        new(program, $"'{program} -File -' reads code from stdin, which can transform and print secrets past redaction. {WayOut}");
 
     private static BlockedInvocation PowerShellNoScript(string program) =>
         new(program, $"'{program}' with no script (or -NoExit) reads code from stdin, which can transform and print secrets past redaction. {WayOut}");
