@@ -659,12 +659,24 @@ public static class Validation
             return CheckSsh(args);
 
         if (program.Equals("deno", StringComparison.OrdinalIgnoreCase))
-            return args.FirstOrDefault(a => !a.StartsWith('-')) is "eval" or "repl"
-                ? new(program, InlineReason(program, "eval")) : null;
+        {
+            var sub = args.FindIndex(a => !a.StartsWith('-'));
+            if (sub < 0)
+                return null;
+            if (args[sub] is "eval" or "repl")
+                return new(program, InlineReason(program, "eval"));
+            // Review fix G2: 'deno run -' (or another stdin path) reads the script from stdin. The script is the first
+            // word after 'run' that is a stdin path or no option.
+            var script = args.Skip(sub + 1).FirstOrDefault(a => StdinScripts.Contains(a) || !a.StartsWith('-'));
+            return args[sub] == "run" && script is not null && StdinScripts.Contains(script)
+                ? new(program, $"'{program} run -' reads code from stdin, which can transform and print secrets past redaction. {WayOut}")
+                : null;
+        }
 
-        if (program.Equals("cmd", StringComparison.OrdinalIgnoreCase)
-            && args.Any(a => a.Equals("/c", StringComparison.OrdinalIgnoreCase) || a.Equals("/k", StringComparison.OrdinalIgnoreCase)))
-            return new(program, InlineReason(program, "/c"));
+        if (program.Equals("cmd", StringComparison.OrdinalIgnoreCase))
+            // Review fix G2: with /c or /k cmd runs inline code; without them it starts a shell reading stdin.
+            return args.Any(a => a.Equals("/c", StringComparison.OrdinalIgnoreCase) || a.Equals("/k", StringComparison.OrdinalIgnoreCase))
+                ? new(program, InlineReason(program, "/c")) : NoCommandShell(program);
 
         if (program.Equals("pwsh", StringComparison.OrdinalIgnoreCase) || program.Equals("powershell", StringComparison.OrdinalIgnoreCase))
         {

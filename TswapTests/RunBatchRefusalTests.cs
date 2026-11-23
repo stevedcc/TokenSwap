@@ -141,7 +141,7 @@ public sealed class RunBatchRefusalTests : IDisposable
         new[] { "x.cmd.", "{{pw}}" },
         // Review fix F17: a stream suffix after a trimmed program name.
         new[] { "x.cmd.:s", "{{pw}}" },
-        new[] { "CMD.EXE", "{{pw}}" },
+        // Review fix G2: 'CMD.EXE {{pw}}' moved to BareCmd_IsRefusedByTheCmdRule.
     };
 
     [Theory]
@@ -176,6 +176,25 @@ public sealed class RunBatchRefusalTests : IDisposable
         Assert.True(exit == 1, $"exit {exit}: {stderr}");
         Assert.Equal(0, _pty.Starts);
         Assert.Contains(reason, stderr);
+        Assert.DoesNotContain("to a batch file", stderr);
+        Assert.DoesNotContain(Amp, stderr + stdout);
+    }
+
+    /// <summary>
+    /// Review fix G2 (moved from <see cref="ABatchTargetBehindAWrapper_IsRefused"/>): cmd without /c or /k is a shell
+    /// reading stdin, refused before substitution, ahead of the batch check: exit 1, the child never starts, the value
+    /// is never printed, the refusal names cmd.
+    /// </summary>
+    [Fact]
+    public void BareCmd_IsRefusedByTheCmdRule()
+    {
+        Secret("pw", Amp);
+
+        var (exit, stdout, stderr) = Run(OSPlatform.Windows, "CMD.EXE", "{{pw}}");
+
+        Assert.True(exit == 1, $"exit {exit}: {stderr}");
+        Assert.Equal(0, _pty.Starts);
+        Assert.Contains("'CMD' with no command starts a shell reading stdin", stderr);
         Assert.DoesNotContain("to a batch file", stderr);
         Assert.DoesNotContain(Amp, stderr + stdout);
     }

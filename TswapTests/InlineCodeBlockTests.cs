@@ -590,6 +590,46 @@ public class InlineCodeBlockTests
         Assert.DoesNotContain("a\"b", blocked.Reason);
     }
 
+    // ── Review fix G2: cmd without /c or /k is a shell reading stdin; deno run - reads its script from stdin ──
+
+    [Theory]
+    [InlineData("cmd")]
+    [InlineData("cmd", "/q")]
+    [InlineData("cmd.exe")]
+    [InlineData("CMD.EXE", "{{pw}}")]
+    public void Cmd_WithoutSlashCOrK_IsRefusedAsAShellReadingStdin(params string[] argv)
+    {
+        var blocked = Validation.GetBlockedInvocation(argv);
+
+        Assert.NotNull(blocked);
+        Assert.Equal(argv[0].StartsWith("CMD", StringComparison.Ordinal) ? "CMD" : "cmd", blocked!.Program);
+        Assert.Equal(
+            $"'{blocked.Program}' with no command starts a shell reading stdin, which can transform and print secrets past redaction. {UnixWayOut}",
+            blocked.Reason);
+    }
+
+    [Fact]
+    public void Cmd_BehindAWrapper_WithoutSlashCOrK_IsRefused()
+    {
+        var blocked = Validation.GetBlockedInvocation(["timeout", "5", "cmd"]);
+
+        Assert.Equal(
+            $"'timeout' runs 'cmd': 'cmd' with no command starts a shell reading stdin, which can transform and print secrets past redaction. {UnixWayOut}",
+            blocked?.Reason);
+    }
+
+    [Theory]
+    [InlineData("deno", "run", "-", "{{pw}}")]
+    [InlineData("deno", "run", "--allow-net", "/dev/stdin", "{{pw}}")]
+    public void DenoRun_ScriptFromStdin_IsRefused(params string[] argv)
+    {
+        var blocked = Validation.GetBlockedInvocation(argv);
+
+        Assert.Equal(
+            $"'deno run -' reads code from stdin, which can transform and print secrets past redaction. {UnixWayOut}",
+            blocked?.Reason);
+    }
+
     // ── Brief T49 A2, A7: pwsh reads a plain first argument as a script file, but not stdin ────────────
 
     /// <summary>
