@@ -994,7 +994,8 @@ public sealed class RunFileTokenTests : IDisposable
     [InlineData("node x.js {{@f}}", "'node'")]
     [InlineData("php x.php {{@f}}", "'php'")]
     [InlineData("pwsh x.ps1 {{@f}}", "'pwsh'")]
-    [InlineData("powershell x.ps1 {{@f}}", "'powershell'")]
+    [InlineData("powershell x.ps1 {{@f}}", "'powershell'")] // brief T49: now refused by the -File rule first
+    [InlineData("powershell -File x.ps1 {{@f}}", "'powershell'")] // T49 lets it through; the file-token rule refuses
     [InlineData("cmd x.bat {{@f}}", "'cmd'")]
     [InlineData("lua x.lua {{@f}}", "'lua'")]
     [InlineData("gawk -f x.awk {{@f}}", "'gawk'")]

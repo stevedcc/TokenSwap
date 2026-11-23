@@ -371,7 +371,8 @@ public class InlineCodeBlockTests
     /// <summary>
     /// F9: parameters that only share a first letter or a few with an inline one are not inline
     /// code: -ExecutionPolicy (<c>-ex</c>), -ConfigurationName (<c>-config</c>), -NoProfile (<c>-nop</c>), -File
-    /// (<c>-f</c>). (Windows PowerShell 5.1 reading a positional word as -Command is #401, not this check.)
+    /// (<c>-f</c>). Brief T49 (#401, A3): for <c>powershell</c> only the <c>-File</c> and <c>-f</c> rows stay here; the
+    /// others are refused by T49's rule (<see cref="PowerShellOtherParameter_WithoutFile_IsRefusedByThe51Rule"/>).
     /// </summary>
     [Theory]
     [InlineData("-ExecutionPolicy")]
@@ -386,8 +387,244 @@ public class InlineCodeBlockTests
     [InlineData("\u2013File")]
     public void PowerShellOtherParameter_IsNotInline(string flag)
     {
-        foreach (var program in new[] { "powershell", "pwsh" })
-            Assert.Null(Validation.GetBlockedInvocation([program, flag, "deploy.ps1", "{{x}}"]));
+        Assert.Null(Validation.GetBlockedInvocation(["pwsh", flag, "deploy.ps1", "{{x}}"]));
+    }
+
+    [Theory]
+    [InlineData("-File")]
+    [InlineData("-f")]
+    public void PowerShellFileParameter_IsNotInline_ForWindowsPowerShell(string flag)
+    {
+        Assert.Null(Validation.GetBlockedInvocation(["powershell", flag, "deploy.ps1", "{{x}}"]));
+    }
+
+    /// <summary>
+    /// Brief T49 (A3): the rows of <see cref="PowerShellOtherParameter_IsNotInline"/> other than <c>-File</c>/<c>-f</c>,
+    /// for <c>powershell</c>: no <c>-File</c> before the first plain word (or an untrusted spelling), so Windows
+    /// PowerShell 5.1 would run a word as -Command. Refused by T49's rule, not the inline check.
+    /// </summary>
+    [Theory]
+    [InlineData("-ExecutionPolicy", PositionalKind)]
+    [InlineData("-ex", PositionalKind)]
+    [InlineData("-ConfigurationName", PositionalKind)]
+    [InlineData("-config", UntrustedKind)]
+    [InlineData("--configurationname", UntrustedKind)]
+    [InlineData("-NoProfile", PositionalKind)]
+    [InlineData("-nop", PositionalKind)]
+    [InlineData("\u2013File", UntrustedKind)]
+    public void PowerShellOtherParameter_WithoutFile_IsRefusedByThe51Rule(string flag, string kind)
+    {
+        var blocked = Validation.GetBlockedInvocation(["powershell", flag, "deploy.ps1", "{{x}}"]);
+
+        Assert.NotNull(blocked);
+        Assert.Equal("powershell", blocked!.Program);
+        Assert.Equal(ExpectedReason(kind, "powershell"), blocked.Reason);
+    }
+
+    // ── Brief T49 (#401): Windows PowerShell 5.1 runs its first plain argument as -Command ─────────────
+
+    private const string PositionalKind = "positional";
+    private const string UntrustedKind = "untrusted";
+    private const string StdinKind = "stdin";
+    private const string NoScriptKind = "no-script";
+
+    private const string UnixWayOut =
+        "Put the commands in a script file and run that instead, e.g. 'run ./script.sh {{secret}}' " +
+        "(the script reads the value as $1).";
+
+    private static string ExpectedReason(string kind, string program) => kind switch
+    {
+        PositionalKind => $"'{program}' without -File runs its first argument as code (Windows PowerShell 5.1 reads it as -Command), which can transform and print secrets past redaction. {UnixWayOut}",
+        UntrustedKind => $"'{program}': a parameter spelling tswap doesn't trust (it trusts one - or / before Windows PowerShell 5.1's full parameter names and its common short forms), and 5.1 would read it as -Command, which can transform and print secrets past redaction. {UnixWayOut}",
+        StdinKind => $"'{program} -File -' reads code from stdin, which can transform and print secrets past redaction. {UnixWayOut}",
+        NoScriptKind => $"'{program}' with no script (or -NoExit) reads code from stdin, which can transform and print secrets past redaction. {UnixWayOut}",
+        _ => throw new ArgumentOutOfRangeException(nameof(kind)),
+    };
+
+    // The spellings A5 names, and the program name each normalises to (as InlineReason names it, A9).
+    private static readonly (string Word, string Name)[] WindowsPowerShellSpellings =
+        [("powershell", "powershell"), ("PowerShell.EXE", "PowerShell"), ("powershell.exe.", "powershell")];
+
+    private static readonly string[][] WindowsPowerShellAllowedTails =
+    [
+        ["-File", @".\deploy.ps1", "{{pw}}"],
+        ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", @".\deploy.ps1", "{{pw}}"],
+        ["/f", @".\x.ps1", "{{pw}}"],
+        ["-ep", "Bypass", "-File", @".\x.ps1", "{{pw}}"],
+        ["-nop", "-noni", "-w", "Hidden", "-ex", "Bypass", "-f", @".\x.ps1", "{{pw}}"],
+        // A1: every full name of the table and the remaining short forms, in either case, with '-' or '/'.
+        ["-PSConsoleFile", "x.psc1", "-Version", "2.0", "-NoLogo", "-Sta", "-Mta", "-NoProfile", "-NonInteractive",
+         "-InputFormat", "Text", "-OutputFormat", "Text", "-WindowStyle", "Hidden", "-ConfigurationName", "x",
+         "-ExecutionPolicy", "Bypass", "-File", @".\x.ps1", "{{pw}}"],
+        ["/NOLOGO", "-nol", "-if", "Text", "/of", "Text", "/FILE", @".\x.ps1", "{{pw}}"],
+        // A5: a token as the script path is intended: the value is a path, PowerShell's error echoes it and output
+        // redaction masks it.
+        ["-File", "{{pw}}"],
+        // What follows the script is the script's arguments, whatever they look like.
+        ["-File", @".\x.ps1", "Write-Host", "-NoExit", "-", "{{pw}}"],
+    ];
+
+    private static readonly (string[] Tail, string Kind)[] WindowsPowerShellRefusedTails =
+    [
+        (["{{pw}}"], PositionalKind),
+        (["Write-Host", "{{pw}}"], PositionalKind),
+        (["-NoProfile", "Write-Host", "{{pw}}"], PositionalKind),
+        (["-ExecutionPolicy", "Bypass", @".\x.ps1", "{{pw}}"], PositionalKind),
+        (["\u2014File", @".\x.ps1", "{{pw}}"], UntrustedKind),
+        (["--File", @".\x.ps1", "{{pw}}"], UntrustedKind),
+        (["-Foo", @".\x.ps1", "{{pw}}"], UntrustedKind),
+        // A1: prefixes other than the listed short forms, and deliberately unlisted parameters, fail closed.
+        (["-m", "-File", @".\x.ps1", "{{pw}}"], UntrustedKind),
+        (["-s", "-File", @".\x.ps1", "{{pw}}"], UntrustedKind),
+        (["-NoProf", "-File", @".\x.ps1", "{{pw}}"], UntrustedKind),
+        (["-Fi", @".\x.ps1", "{{pw}}"], UntrustedKind),
+        (["-Help"], UntrustedKind),
+        (["-?"], UntrustedKind),
+        (["/?"], UntrustedKind),
+        (["-EncodedArguments", "eA==", "-File", @".\x.ps1", "{{pw}}"], UntrustedKind),
+        // A2: stdin is not a script; -NoExit keeps reading stdin; -File with nothing after it; no -File at all.
+        (["-File", "-", "{{pw}}"], StdinKind),
+        (["/f", "-", "{{pw}}"], StdinKind),
+        (["-File", "/dev/stdin", "{{pw}}"], StdinKind),
+        (["-NoExit", "-File", @".\x.ps1", "{{pw}}"], NoScriptKind),
+        (["-noe", "-File", @".\x.ps1", "{{pw}}"], NoScriptKind),
+        (["-File"], NoScriptKind),
+        (["-NoProfile"], NoScriptKind),
+        ([], NoScriptKind),
+    ];
+
+    public static TheoryData<string[]> WindowsPowerShellAllowed()
+    {
+        var data = new TheoryData<string[]>();
+        foreach (var (word, _) in WindowsPowerShellSpellings)
+        foreach (var tail in WindowsPowerShellAllowedTails)
+            data.Add([word, .. tail]);
+        foreach (var (word, _) in WindowsPowerShellSpellings)
+            data.Add(["timeout", "5", word, "-File", @".\x.ps1", "{{pw}}"]);
+        return data;
+    }
+
+    public static TheoryData<string[], string, string> WindowsPowerShellRefused()
+    {
+        var data = new TheoryData<string[], string, string>();
+        foreach (var (word, name) in WindowsPowerShellSpellings)
+        foreach (var (tail, kind) in WindowsPowerShellRefusedTails)
+            data.Add([word, .. tail], name, kind);
+        foreach (var (word, name) in WindowsPowerShellSpellings)
+            data.Add(["timeout", "5", word, "{{pw}}"], name, PositionalKind);
+        return data;
+    }
+
+    /// <summary>
+    /// Brief T49 Task 1: <c>powershell</c> with <c>-File</c> before anything positional (after its own options, in a
+    /// spelling tswap trusts) runs a script; the script's arguments are its own.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(WindowsPowerShellAllowed))]
+    public void WindowsPowerShell_WithFileFirst_IsAllowed(string[] argv)
+    {
+        Assert.Null(Validation.GetBlockedInvocation(argv));
+    }
+
+    /// <summary>
+    /// Brief T49 Task 1, A1, A2, A8, A10: Windows PowerShell 5.1 reads its first plain argument as -Command, so
+    /// <c>powershell</c> without <c>-File</c> first is refused, as are a spelling tswap doesn't trust, a script from
+    /// stdin, <c>-NoExit</c> and no script at all; each with its exact reason, naming the normalised program (A9).
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(WindowsPowerShellRefused))]
+    public void WindowsPowerShell_WithoutFileFirst_IsRefused(string[] argv, string program, string kind)
+    {
+        var blocked = Validation.GetBlockedInvocation(argv);
+        var expected = ExpectedReason(kind, program);
+        if (argv[0] == "timeout")
+            expected = $"'timeout' runs '{program}': {expected}"; // a wrapper names what it runs, as for every refusal
+
+        Assert.NotNull(blocked);
+        Assert.Equal(program, blocked!.Program);
+        Assert.Equal(expected, blocked.Reason);
+    }
+
+    /// <summary>A4: the positional reason, written out once in full for <c>powershell</c>.</summary>
+    [Fact]
+    public void WindowsPowerShell_PositionalRefusal_HasTheExactReason()
+    {
+        var blocked = Validation.GetBlockedInvocation(["powershell", "Write-Host", "{{pw}}"]);
+
+        Assert.Equal(
+            "'powershell' without -File runs its first argument as code (Windows PowerShell 5.1 reads it as -Command), " +
+            "which can transform and print secrets past redaction. Put the commands in a script file and run that " +
+            "instead, e.g. 'run ./script.sh {{secret}}' (the script reads the value as $1).",
+            blocked?.Reason);
+    }
+
+    /// <summary>
+    /// The walk also runs after substitution, so a refusal never repeats a word: with a value in every position a
+    /// refusal can stop at (the program's first word, a parameter's spelling, a parameter's value, the script), the
+    /// value is never in the reason.
+    /// </summary>
+    [Theory]
+    [InlineData("powershell", "{v}")]
+    [InlineData("powershell", "Write-Host", "{v}")]
+    [InlineData("powershell", "-{v}", "-File", "x.ps1")]
+    [InlineData("powershell", "/{v}", "-File", "x.ps1")]
+    [InlineData("powershell", "\u2014{v}")]
+    [InlineData("powershell", "-ExecutionPolicy", "{v}")]
+    [InlineData("powershell", "-NoExit", "-File", "{v}")]
+    [InlineData("powershell", "-File", "-", "{v}")]
+    [InlineData("pwsh", "-ExecutionPolicy", "{v}")]
+    [InlineData("pwsh", "-File", "-", "{v}")]
+    [InlineData("pwsh", "-NoExit", "{v}")]
+    public void PowerShellRefusal_NeverContainsTheValue(params string[] template)
+    {
+        const string value = "a\"b$c&d'e";
+        var argv = template.Select(w => w.Replace("{v}", value)).ToArray();
+
+        var blocked = Validation.GetBlockedInvocation(argv);
+
+        Assert.NotNull(blocked);
+        Assert.DoesNotContain(value, blocked!.Reason);
+        Assert.DoesNotContain("a\"b", blocked.Reason);
+    }
+
+    // ── Brief T49 A2, A7: pwsh reads a plain first argument as a script file, but not stdin ────────────
+
+    /// <summary>
+    /// PowerShell 7's first positional argument is -File (a script path), so <c>pwsh {{pw}}</c> and
+    /// <c>pwsh Write-Host {{pw}}</c> are intended to pass T49's rule: the word is a script file's name, not code.
+    /// </summary>
+    [Theory]
+    [InlineData("pwsh", "{{pw}}")]
+    [InlineData("pwsh", "Write-Host", "{{pw}}")]
+    [InlineData("pwsh", "./x.ps1", "{{pw}}")]
+    [InlineData("pwsh", "-NoProfile", "-File", "./x.ps1", "{{pw}}")]
+    [InlineData("pwsh", "-NoProfile", "./x.ps1", "{{pw}}")]
+    [InlineData("pwsh", "-ExecutionPolicy", "Bypass", "./x.ps1", "{{pw}}")]
+    [InlineData("pwsh.exe", "\u2013File", "./x.ps1", "{{pw}}")]
+    [InlineData("pwsh", "./x.ps1", "-NoExit", "-", "{{pw}}")]
+    public void Pwsh_PositionalScript_IsAllowed(params string[] argv)
+    {
+        Assert.Null(Validation.GetBlockedInvocation(argv));
+    }
+
+    [Theory]
+    [InlineData(StdinKind, "pwsh", "-File", "-", "{{pw}}")]
+    [InlineData(StdinKind, "pwsh", "--file", "-", "{{pw}}")]
+    [InlineData(StdinKind, "pwsh", "-f", "/dev/stdin", "{{pw}}")]
+    [InlineData(StdinKind, "pwsh", "-", "{{pw}}")]
+    [InlineData(NoScriptKind, "pwsh")]
+    [InlineData(NoScriptKind, "pwsh", "-NoProfile")]
+    [InlineData(NoScriptKind, "pwsh", "-NoExit", "-File", "./x.ps1", "{{pw}}")]
+    [InlineData(NoScriptKind, "pwsh", "-noe", "./x.ps1", "{{pw}}")]
+    [InlineData(NoScriptKind, "pwsh", "-File")]
+    [InlineData(NoScriptKind, "pwsh.exe.", "-ExecutionPolicy", "Bypass")]
+    public void Pwsh_ReadingStdin_IsRefused(string kind, params string[] argv)
+    {
+        var blocked = Validation.GetBlockedInvocation(argv);
+
+        Assert.NotNull(blocked);
+        Assert.Equal("pwsh", blocked!.Program);
+        Assert.Equal(ExpectedReason(kind, "pwsh"), blocked.Reason);
     }
 
     /// <summary>

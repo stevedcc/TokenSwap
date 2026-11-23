@@ -129,9 +129,8 @@ public sealed class RunBatchRefusalTests : IDisposable
         new[] { "pwsh", "x.cmd", "{{pw}}" },
         new[] { "powershell", "/File", "x.cmd", "{{pw}}" },
         new[] { "pwsh", "/f", "x.cmd", "{{pw}}" },
-        // Review fix F10: any batch target after powershell or pwsh, whatever option or position it is in.
-        new[] { "powershell", "x.cmd", "{{pw}}" },
-        new[] { "powershell", "--file", "x.cmd", "{{pw}}" },
+        // Review fix F10: any batch target after powershell or pwsh, whatever option or position it is in. (Brief T49:
+        // 'powershell x.cmd' and 'powershell --file x.cmd' moved to ABatchTargetAfterPowerShellWithoutFile_IsRefusedByT49.)
         new[] { "pwsh", "\u2013File", "x.cmd", "{{pw}}" },
         new[] { "pwsh", " x.cmd", "{{pw}}" },
         // Review fix F11: any word of the command that is a batch target.
@@ -152,6 +151,33 @@ public sealed class RunBatchRefusalTests : IDisposable
         Secret("pw", Amp);
 
         AssertRefused(Run(OSPlatform.Windows, command), Amp, "pw");
+    }
+
+    public static TheoryData<string[], string> PowerShellWithoutFileBatchCommands => new()
+    {
+        { new[] { "powershell", "x.cmd", "{{pw}}" }, "'powershell' without -File runs its first argument as code" },
+        { new[] { "powershell", "--file", "x.cmd", "{{pw}}" }, "'powershell': a parameter spelling tswap doesn't trust" },
+    };
+
+    /// <summary>
+    /// Brief T49 (A3; moved from <see cref="ABatchTargetBehindAWrapper_IsRefused"/>): without a trusted <c>-File</c>
+    /// first, Windows PowerShell 5.1 runs its first argument as -Command, and T49's check runs before substitution,
+    /// ahead of the batch check: exit 1, the child never starts, the value is never printed, the refusal names
+    /// <c>powershell</c>.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(PowerShellWithoutFileBatchCommands))]
+    public void ABatchTargetAfterPowerShellWithoutFile_IsRefusedByT49(string[] command, string reason)
+    {
+        Secret("pw", Amp);
+
+        var (exit, stdout, stderr) = Run(OSPlatform.Windows, command);
+
+        Assert.True(exit == 1, $"exit {exit}: {stderr}");
+        Assert.Equal(0, _pty.Starts);
+        Assert.Contains(reason, stderr);
+        Assert.DoesNotContain("to a batch file", stderr);
+        Assert.DoesNotContain(Amp, stderr + stdout);
     }
 
     public static TheoryData<string[]> PowerShellSlashCommandBatchCommands => new()

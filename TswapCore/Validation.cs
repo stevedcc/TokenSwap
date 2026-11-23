@@ -668,7 +668,10 @@ public static class Validation
         if (program.Equals("pwsh", StringComparison.OrdinalIgnoreCase) || program.Equals("powershell", StringComparison.OrdinalIgnoreCase))
         {
             var flag = args.FirstOrDefault(IsPowerShellInline);
-            return flag is not null ? new(program, InlineReason(program, flag)) : null;
+            if (flag is not null)
+                return new(program, InlineReason(program, flag));
+            return program.Equals("powershell", StringComparison.OrdinalIgnoreCase)
+                ? CheckWindowsPowerShell(program, args) : CheckPwsh(program, args);
         }
 
         if (PythonName.IsMatch(program))
@@ -950,6 +953,119 @@ public static class Validation
             || "command".StartsWith(key, StringComparison.Ordinal)
             || "encodedcommand".StartsWith(key, StringComparison.Ordinal)
             || "commandwithargs".StartsWith(key, StringComparison.Ordinal));
+
+    /// <summary>
+    /// Brief T49 (#401, A1): Windows PowerShell 5.1's own parameters as tswap trusts them, after exactly one leading
+    /// <c>-</c> or <c>/</c> (case-insensitive): the full names, and the widely used short forms only. 5.1's parser is
+    /// closed source and its docs document no abbreviations, so any other prefix, alias or spelling (a Unicode dash,
+    /// <c>--</c>) is not a 5.1 parameter here (fail closed). <c>-Help</c>, <c>-?</c>, <c>/?</c> and
+    /// <c>-EncodedArguments</c> are deliberately left out, so they are refused too. The value says whether the
+    /// parameter takes the next word as its value.
+    /// </summary>
+    private static readonly Dictionary<string, (string Name, bool Valued)> WindowsPowerShellParameters =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["PSConsoleFile"] = ("PSConsoleFile", true),
+            ["Version"] = ("Version", true),
+            ["NoLogo"] = ("NoLogo", false),
+            ["nol"] = ("NoLogo", false),
+            ["NoExit"] = ("NoExit", false),
+            ["noe"] = ("NoExit", false),
+            ["Sta"] = ("Sta", false),
+            ["Mta"] = ("Mta", false),
+            ["NoProfile"] = ("NoProfile", false),
+            ["nop"] = ("NoProfile", false),
+            ["NonInteractive"] = ("NonInteractive", false),
+            ["noni"] = ("NonInteractive", false),
+            ["InputFormat"] = ("InputFormat", true),
+            ["if"] = ("InputFormat", true),
+            ["OutputFormat"] = ("OutputFormat", true),
+            ["of"] = ("OutputFormat", true),
+            ["WindowStyle"] = ("WindowStyle", true),
+            ["w"] = ("WindowStyle", true),
+            ["ConfigurationName"] = ("ConfigurationName", true),
+            ["ExecutionPolicy"] = ("ExecutionPolicy", true),
+            ["ep"] = ("ExecutionPolicy", true),
+            ["ex"] = ("ExecutionPolicy", true),
+            ["File"] = ("File", true),
+            ["f"] = ("File", true),
+        };
+
+    // pwsh parameters that take the next word as a value (CommandLineParameterParser), by full name; a key that is a
+    // prefix of one of them, or one of the aliases, consumes the next word (fail closed: an ambiguous prefix such as
+    // -i, which pwsh reads as -Interactive, then needs a script after the word it consumed).
+    private static readonly string[] PwshValuedParameters =
+    [
+        "configurationname", "configurationfile", "custompipename", "encodedarguments", "executionpolicy",
+        "inputformat", "outputformat", "settingsfile", "windowstyle", "workingdirectory",
+    ];
+
+    private static readonly string[] PwshValuedAliases = ["ep", "if", "of", "wd"];
+
+    /// <summary>
+    /// Brief T49 (#401): Windows PowerShell 5.1 reads its first argument that is not one of its own parameters as
+    /// -Command. Its parameters are walked (each valued one consumes the next word, A1's strict spellings only); the
+    /// first other word decides: the word after a <c>-File</c> is the script (allowed, unless it is stdin), anything
+    /// else is refused, as is <c>-NoExit</c> before the script and the end of the words with no script. No reason
+    /// repeats a word: the walk also runs after substitution, so the word could be a secret's value.
+    /// </summary>
+    private static BlockedInvocation? CheckWindowsPowerShell(string program, List<string> args)
+    {
+        for (var i = 0; i < args.Count; i++)
+        {
+            var word = args[i];
+            if (word.Length < 2 || word[0] is not ('-' or '/')
+                || !WindowsPowerShellParameters.TryGetValue(word[1..], out var parameter))
+            {
+                return word.Length > 0 && word[0] is '-' or '/' or '\u2013' or '\u2014' or '\u2015'
+                    ? new(program, $"'{program}': a parameter spelling tswap doesn't trust (it trusts one - or / before Windows PowerShell 5.1's full parameter names and its common short forms), and 5.1 would read it as -Command, which can transform and print secrets past redaction. {WayOut}")
+                    : new(program, $"'{program}' without -File runs its first argument as code (Windows PowerShell 5.1 reads it as -Command), which can transform and print secrets past redaction. {WayOut}");
+            }
+            if (parameter.Name == "NoExit")
+                return PowerShellNoScript(program);
+            if (parameter.Name == "File")
+                return PowerShellScript(program, args, i + 1);
+            if (parameter.Valued)
+                i++;
+        }
+        return PowerShellNoScript(program);
+    }
+
+    /// <summary>
+    /// Brief T49 (A2, A7): PowerShell 7 reads a plain first argument as the script file (-File), so only the stdin
+    /// shapes are refused: a script from stdin, <c>-NoExit</c> before the script, and no script at all. Its parameters
+    /// are read with <see cref="PowerShellParameterKey"/> (any spelling pwsh accepts).
+    /// </summary>
+    private static BlockedInvocation? CheckPwsh(string program, List<string> args)
+    {
+        for (var i = 0; i < args.Count; i++)
+        {
+            var key = PowerShellParameterKey(args[i]);
+            if (key is null)
+                return PowerShellScript(program, args, i);
+            if ("file".StartsWith(key, StringComparison.Ordinal))
+                return PowerShellScript(program, args, i + 1);
+            if (key.Length >= 3 && "noexit".StartsWith(key, StringComparison.Ordinal))
+                return PowerShellNoScript(program);
+            if (PwshValuedAliases.Contains(key) || PwshValuedParameters.Any(p => p.StartsWith(key, StringComparison.Ordinal)))
+                i++;
+        }
+        return PowerShellNoScript(program);
+    }
+
+    // The script word at args[at]: missing is no script; stdin (or empty, fail closed) reads code from stdin.
+    private static BlockedInvocation? PowerShellScript(string program, List<string> args, int at)
+    {
+        if (at >= args.Count)
+            return PowerShellNoScript(program);
+        var script = args[at];
+        return StdinScripts.Contains(script) || script.Trim().Length == 0
+            ? new(program, $"'{program} -File -' reads code from stdin, which can transform and print secrets past redaction. {WayOut}")
+            : null;
+    }
+
+    private static BlockedInvocation PowerShellNoScript(string program) =>
+        new(program, $"'{program}' with no script (or -NoExit) reads code from stdin, which can transform and print secrets past redaction. {WayOut}");
 
     // ssh host [command]: a remote command is remote shell code.
     private static BlockedInvocation? CheckSsh(List<string> args)
