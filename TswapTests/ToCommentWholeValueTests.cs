@@ -24,6 +24,7 @@ public sealed class ToCommentWholeValueTests
         var (oracle, oracleChanges) = PlaintextRedactOracle.ToComment(content, db);
         Assert.Equal(report.Content, oracle);
         Assert.Equal(report.Changes, oracleChanges);
+        ToCommentRoundTrip.Check(report.Changes, db); // Task 2's guard
         return report;
     }
 

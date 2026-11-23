@@ -58,7 +58,9 @@ public class RedactEngineTests(Xunit.Abstractions.ITestOutputHelper output)
         // Before T50: the oracle then matched "tswap" inside the inserted marker and rewrote it to
         // 'k: ""  # ""  # tswap: s2: s1'; since T50b it keeps a match holding inserted text as it is.
         Assert.Equal("k: \"\"  # tswap: s1", PlaintextRedactOracle.ToComment("k: abcdefgh", db).Content);
-        Assert.Equal("k: \"\"  # tswap: s1", Redact.ToComment("k: abcdefgh", db).Content);
+        var (content, changes) = Redact.ToComment("k: abcdefgh", db);
+        Assert.Equal("k: \"\"  # tswap: s1", content);
+        ToCommentRoundTrip.Check(changes, db); // brief T50b Task 2
     }
 
     [Fact]
@@ -70,7 +72,9 @@ public class RedactEngineTests(Xunit.Abstractions.ITestOutputHelper output)
         // the text before it ends in '.'), so neither engine changes the line.
         var db = Db(("a", S("alpha12")), ("b", S("beta2.")));
         Assert.Equal("k: beta2.alpha12", PlaintextRedactOracle.ToComment("k: beta2.alpha12", db).Content);
-        Assert.Equal("k: beta2.alpha12", Redact.ToComment("k: beta2.alpha12", db).Content);
+        var (content, changes) = Redact.ToComment("k: beta2.alpha12", db);
+        Assert.Equal("k: beta2.alpha12", content);
+        ToCommentRoundTrip.Check(changes, db); // brief T50b Task 2
     }
 
     [Fact]

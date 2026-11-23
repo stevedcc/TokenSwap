@@ -31,6 +31,7 @@ public class RedactBehaviourPinTests
     {
         var (actual, actualChanges) = Redact.ToComment(content, db);
         var (oracle, oracleChanges) = PlaintextRedactOracle.ToComment(content, db);
+        ToCommentRoundTrip.Check(actualChanges, db); // brief T50b Task 2
         Assert.Equal(expected, actual);
         Assert.Equal(expected, oracle);
         Assert.Equal(changes, actualChanges);

@@ -30,9 +30,33 @@ public sealed class ToCommentBlockScalarTests
     private static SecretsDb Db(params (string Name, string Value)[] secrets) =>
         new(secrets.ToDictionary(s => s.Name, s => new Secret(s.Value, TestTime.Fixed, TestTime.Fixed, null, null)));
 
+    /// <summary>Brief T50b Task 2: <c>Redact.ToComment</c>, every marker it wrote checked to fill back (<see cref="ToCommentRoundTrip"/>).</summary>
+    private static (string Content, IReadOnlyList<LineDiff> Changes) ToComment(string content, SecretsDb db)
+    {
+        var result = Redact.ToComment(content, db);
+        ToCommentRoundTrip.Check(result.Changes, db);
+        return result;
+    }
+
+    /// <summary>Brief T50b Task 2: <c>Redact.ToCommentReporting</c>, its markers checked to fill back.</summary>
+    private static (string Content, IReadOnlyList<LineDiff> Changes, IReadOnlyList<UnreplacedLine> Unreplaced) ToCommentReporting(string content, SecretsDb db)
+    {
+        var result = Redact.ToCommentReporting(content, db);
+        ToCommentRoundTrip.Check(result.Changes, db);
+        return result;
+    }
+
+    /// <summary>Brief T50b Task 2: <c>Redact.ToCommentReport</c>, its markers checked to fill back.</summary>
+    private static ToCommentReport ToCommentReport(string content, SecretsDb db)
+    {
+        var report = Redact.ToCommentReport(content, db);
+        ToCommentRoundTrip.Check(report.Changes, db);
+        return report;
+    }
+
     private static void AssertUnchanged(string content, SecretsDb db)
     {
-        var (result, changes) = Redact.ToComment(content, db);
+        var (result, changes) = ToComment(content, db);
         Assert.Empty(changes);
         Assert.Equal(content.Replace("\r\n", "\n"), result);
     }
@@ -49,7 +73,7 @@ public sealed class ToCommentBlockScalarTests
         var db = Db(("pem", storedWithTrailingLf ? Pem + "\n" : Pem));
         var content = "tls:\n  key: |\n" + Block() + "\nother: x\n";
 
-        var (result, changes) = Redact.ToComment(content, db);
+        var (result, changes) = ToComment(content, db);
 
         Assert.Equal("tls:\n  key: \"\"  # tswap: pem\nother: x\n", result);
         LineDiff[] expected =
@@ -69,7 +93,7 @@ public sealed class ToCommentBlockScalarTests
     {
         var content = "key: |-\n" + Block() + "next: 1\n";
 
-        var (result, _) = Redact.ToComment(content, Db(("pem", Pem)));
+        var (result, _) = ToComment(content, Db(("pem", Pem)));
 
         Assert.Equal("key: \"\"  # tswap: pem\nnext: 1\n", result);
     }
@@ -88,7 +112,7 @@ public sealed class ToCommentBlockScalarTests
     {
         var content = "key: |+\n" + Block() + "next: 1\n";
 
-        var (result, _) = Redact.ToComment(content, Db(("pem", storedWithTrailingLf ? Pem + "\n" : Pem)));
+        var (result, _) = ToComment(content, Db(("pem", storedWithTrailingLf ? Pem + "\n" : Pem)));
 
         Assert.Equal("key: \"\"  # tswap: pem\nnext: 1\n", result);
     }
@@ -101,7 +125,7 @@ public sealed class ToCommentBlockScalarTests
         // '|+' keeps every trailing LF; a blank line's spaces are dropped, so both files give one result.
         var content = "key: |+\n" + Block() + blank + "\n" + blank + "\nnext: 1\n";
 
-        var (result, changes) = Redact.ToComment(content, Db(("pem", Pem + "\n\n\n")));
+        var (result, changes) = ToComment(content, Db(("pem", Pem + "\n\n\n")));
 
         Assert.Equal("key: \"\"  # tswap: pem\nnext: 1\n", result);
         Assert.Equal(1 + PemLines.Length + 2, changes.Count);
@@ -154,7 +178,7 @@ public sealed class ToCommentBlockScalarTests
         var b64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(Pem));
         var content = "key: |\n    " + b64 + "\nnext: 1\n";
 
-        var (result, _) = Redact.ToComment(content, Db(("pem", Pem)));
+        var (result, _) = ToComment(content, Db(("pem", Pem)));
 
         Assert.DoesNotContain("key: \"\"", result);
         Assert.StartsWith("key: |\n", result);
@@ -169,7 +193,7 @@ public sealed class ToCommentBlockScalarTests
     /// <summary>Brief T22: <paramref name="content"/> comes back as it was, with no change and exactly <paramref name="unreplaced"/>.</summary>
     private static void AssertLeft(string content, SecretsDb db, params UnreplacedLine[] unreplaced)
     {
-        var (result, changes, left) = Redact.ToCommentReporting(content, db);
+        var (result, changes, left) = ToCommentReporting(content, db);
         Assert.Equal(content, result);
         Assert.Empty(changes);
         Assert.Equal(unreplaced, left);
@@ -187,7 +211,7 @@ public sealed class ToCommentBlockScalarTests
     public void PlainValueInAScriptBlock_StillReplaced()
     {
         // A plain value: the marker's '#' is a shell comment and run fills the plain value back.
-        var (result, changes, unreplaced) = Redact.ToCommentReporting("script: |\n  export TOKEN=" + Tok + "\nnext: 1\n", Db(("tok", Tok)));
+        var (result, changes, unreplaced) = ToCommentReporting("script: |\n  export TOKEN=" + Tok + "\nnext: 1\n", Db(("tok", Tok)));
 
         Assert.Equal("script: |\n  export TOKEN=\"\"  # tswap: tok\nnext: 1\n", result);
         LineDiff[] expected = [new(2, "  export TOKEN=" + Tok, "  export TOKEN=\"\"  # tswap: tok")];
@@ -201,7 +225,7 @@ public sealed class ToCommentBlockScalarTests
         var scriptLine = "  echo " + B64(Tok) + " | base64 -d";
         var content = "script: |\n" + scriptLine + "\ntoken: " + Tok + "\n";
 
-        var (result, changes, unreplaced) = Redact.ToCommentReporting(content, Db(("tok", Tok)));
+        var (result, changes, unreplaced) = ToCommentReporting(content, Db(("tok", Tok)));
 
         Assert.Equal("script: |\n" + scriptLine + "\ntoken: \"\"  # tswap: tok\n", result);
         LineDiff[] expected = [new(3, "token: " + Tok, "token: \"\"  # tswap: tok")];
@@ -266,7 +290,7 @@ public sealed class ToCommentBlockScalarTests
         var contentLine = "            echo " + B64(Tok);
         var content = "steps:\n        - command: |\n" + contentLine + "\n          token: " + B64(Tok) + "\n";
 
-        var (result, changes, unreplaced) = Redact.ToCommentReporting(content, Db(("tok", Tok)));
+        var (result, changes, unreplaced) = ToCommentReporting(content, Db(("tok", Tok)));
 
         Assert.Equal("steps:\n        - command: |\n" + contentLine + "\n          token: \"\"  # tswap: tok\n", result);
         LineDiff[] expected = [new(4, "          token: " + B64(Tok), "          token: \"\"  # tswap: tok")];
@@ -282,18 +306,18 @@ public sealed class ToCommentBlockScalarTests
         // Brief T50b (owner decision 1): the marker tocomment wrote there before ('    ""  # tswap: pem', nothing
         // before it) was one apply can never fill; now the line is left and the value reported as skipped.
         var content = "key: \"|\"\n    " + B64(Pem) + "\n";
-        var (result, changes, unreplaced) = Redact.ToCommentReporting(content, Db(("pem", Pem)));
+        var (result, changes, unreplaced) = ToCommentReporting(content, Db(("pem", Pem)));
 
         Assert.Equal(content, result);
         Assert.Empty(changes);
         Assert.Empty(unreplaced);
-        Assert.Equal(new[] { new SkippedValue(2, 2, "pem", SkippedReason.NotWholeValue) }, Redact.ToCommentReport(content, Db(("pem", Pem))).Skipped);
+        Assert.Equal(new[] { new SkippedValue(2, 2, "pem", SkippedReason.NotWholeValue) }, ToCommentReport(content, Db(("pem", Pem))).Skipped);
     }
 
     [Fact]
     public void BlockEndsAtNodeColumn()
     {
-        var (result, changes, unreplaced) = Redact.ToCommentReporting(
+        var (result, changes, unreplaced) = ToCommentReporting(
             "parent:\n  key: |\n    text\n  other: " + B64(Tok) + "\n", Db(("tok", Tok)));
 
         Assert.Equal("parent:\n  key: |\n    text\n  other: \"\"  # tswap: tok\n", result);
@@ -316,7 +340,7 @@ public sealed class ToCommentBlockScalarTests
         // block content holding another value's base64, so it is not removed.
         var content = "script: |\n  export A=" + Tok + "\n    " + B64(Other) + "\n";
 
-        var (result, changes, unreplaced) = Redact.ToCommentReporting(content, Db(("tok", Tok), ("other", Other)));
+        var (result, changes, unreplaced) = ToCommentReporting(content, Db(("tok", Tok), ("other", Other)));
 
         Assert.Equal("script: |\n  export A=\"\"  # tswap: tok\n    " + B64(Other) + "\n", result);
         LineDiff[] expected = [new(2, "  export A=" + Tok, "  export A=\"\"  # tswap: tok")];
@@ -333,7 +357,7 @@ public sealed class ToCommentBlockScalarTests
         const string looksLikeBase64 = "    YWJjZGVmZ2hpamtsbW5vcA==";
         var content = "script: |\n  export A=" + Tok + "\n    " + B64(Other) + "\n" + looksLikeBase64 + "\n";
 
-        var (result, changes, unreplaced) = Redact.ToCommentReporting(content, Db(("tok", Tok), ("other", Other)));
+        var (result, changes, unreplaced) = ToCommentReporting(content, Db(("tok", Tok), ("other", Other)));
 
         Assert.Equal("script: |\n  export A=\"\"  # tswap: tok\n    " + B64(Other) + "\n" + looksLikeBase64 + "\n", result);
         LineDiff[] expected = [new(2, "  export A=" + Tok, "  export A=\"\"  # tswap: tok")];
@@ -393,10 +417,10 @@ public sealed class ToCommentBlockScalarTests
         var db = new SecretsDb(new Dictionary<string, Secret>
         {
             ["pem"] = new Secret("a-new-value-after-rotation", TestTime.Fixed, TestTime.Fixed, null, null) { PreviousValue = Pem },
-        });
+        }) { KeepsPreviousValues = true }; // brief T50b: a db that keeps the previous value it holds (input, not assertion)
         var content = "key: |\n" + Block();
 
-        var (result, _) = Redact.ToComment(content, db);
+        var (result, _) = ToComment(content, db);
 
         Assert.Equal("key: \"\"  # tswap: pem:previous\n", result);
     }
@@ -406,7 +430,7 @@ public sealed class ToCommentBlockScalarTests
     {
         var content = "a: 1\nkey: |\n" + Block().TrimEnd('\n');
 
-        var (result, changes) = Redact.ToComment(content, Db(("pem", Pem)));
+        var (result, changes) = ToComment(content, Db(("pem", Pem)));
 
         Assert.Equal("a: 1\nkey: \"\"  # tswap: pem", result);
         Assert.Equal(1 + PemLines.Length, changes.Count);
@@ -418,7 +442,7 @@ public sealed class ToCommentBlockScalarTests
         const string cert = "-----BEGIN CERTIFICATE-----\nMIIDdzCCAl+gAwIBAgIEAgAAuTANBgkqhkiG\n-----END CERTIFICATE-----";
         var content = "tls:\n  key: |\n" + Block("    ") + "  crt: |\n" + string.Concat(cert.Split('\n').Select(l => "    " + l + "\n")) + "name: app\n";
 
-        var (result, _) = Redact.ToComment(content, Db(("pem", Pem), ("crt", cert)));
+        var (result, _) = ToComment(content, Db(("pem", Pem), ("crt", cert)));
 
         Assert.Equal("tls:\n  key: \"\"  # tswap: pem\n  crt: \"\"  # tswap: crt\nname: app\n", result);
     }
@@ -428,7 +452,7 @@ public sealed class ToCommentBlockScalarTests
     {
         var content = ("tls:\n  key: |\n" + Block() + "other: x\n").Replace("\n", "\r\n");
 
-        var (result, _) = Redact.ToComment(content, Db(("pem", Pem)));
+        var (result, _) = ToComment(content, Db(("pem", Pem)));
 
         Assert.Equal("tls:\n  key: \"\"  # tswap: pem\nother: x\n", result);
     }
@@ -439,7 +463,7 @@ public sealed class ToCommentBlockScalarTests
         var db = Db(("pem", Pem));
         var content = "tls:\n  key: |\n" + Block() + "other: x\n";
 
-        var (commented, _) = Redact.ToComment(content, db);
+        var (commented, _) = ToComment(content, db);
         var filled = Apply.ApplySecrets(commented, db);
 
         var line = filled.Split('\n')[1];
