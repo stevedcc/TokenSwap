@@ -82,4 +82,37 @@ public class PlatformFactTests
         foreach (var (attribute, requirement) in all)
             Assert.Equal(PlatformFacts.SkipReason(requirement, PlatformFacts.Current, "w"), attribute.Skip);
     }
+
+    [Theory]
+    [InlineData(10, 0, 17763, -1)]
+    [InlineData(10, 0, 26100, -1)]
+    [InlineData(10, 0, 20348, 1)]
+    public void ConPtySkipReason_Windows10_1809OrLater_IsNull(int major, int minor, int build, int revision)
+    {
+        var version = revision < 0 ? new Version(major, minor, build) : new Version(major, minor, build, revision);
+
+        Assert.Null(PlatformFacts.ConPtySkipReason(version));
+    }
+
+    [Theory]
+    [InlineData(10, 0, 17134)]
+    [InlineData(10, 0, 14393)]
+    [InlineData(6, 3, 9600)]
+    public void ConPtySkipReason_BeforeWindows10_1809_NamesTheVersion(int major, int minor, int build)
+    {
+        var version = new Version(major, minor, build);
+
+        Assert.Equal(
+            $"Needs ConPTY (Windows 10 1809, build 17763, or later); this Windows is {major}.{minor}.{build}.",
+            PlatformFacts.ConPtySkipReason(version));
+    }
+
+    [Fact]
+    public void WindowsConPtyFact_OnThisMachine_SkipsOffWindowsAndBeforeConPty()
+    {
+        var expected = PlatformFacts.SkipReason(PlatformRequirement.Windows, PlatformFacts.Current, "w")
+            ?? (PlatformFacts.Current is TestPlatform.Windows ? PlatformFacts.ConPtySkipReason(Environment.OSVersion.Version) : null);
+
+        Assert.Equal(expected, new WindowsConPtyFactAttribute("w").Skip);
+    }
 }

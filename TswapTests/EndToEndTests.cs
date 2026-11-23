@@ -353,14 +353,14 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         Assert.Equal(0, exit);
     }
 
-    [Fact]
+    [UnixFact("ls and a /tmp path are POSIX-only")]
     public void Run_SecretRedactedFromErrorOutput()
     {
         RunTswap("init", "--yubikey", "--no-recovery");
         RunTswapWithStdin("abc123xyz", "ingest", "my-pass");
 
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
-            return; // ls + /tmp path is POSIX-only
+            throw new UnreachableException("[UnixFact] runs this test only on Linux and macOS");
 
         // ls on a nonexistent path that includes the secret — ls will echo the path in its
         // error message. The test harness redirects stdout, so tswap uses FallbackPty, which
@@ -402,11 +402,11 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     /// its argv. The script checks its own <c>/proc/$$/cmdline</c> for <c>$X</c> and prints only
     /// value-free markers: a value in argv would show up masked in the output, not raw.
     /// </summary>
-    [Fact]
+    [LinuxFact("/proc/<pid>/cmdline is Linux's")]
     public void RunEnv_ValueNotInArgv()
     {
         if (!OperatingSystem.IsLinux())
-            return; // /proc/<pid>/cmdline is Linux's
+            throw new UnreachableException("[LinuxFact] runs this test only on Linux");
         RunTswap("init", "--yubikey", "--no-recovery");
         RunTswapWithStdin("s3cr3t-env-value", "ingest", "my-secret");
         var script = Path.Combine(_tempDir, "argv-check.sh");
@@ -467,8 +467,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         // inline `sh -c` code); tswap execs sh directly with the script and the secret as $1.
         var childScript = Path.Combine(_tempDir, "print3.sh");
         File.WriteAllText(childScript, "echo before\necho \"$1\"\necho after\n");
-        if (RunTswapUnderOuterPty($"run sh \"{childScript}\" {{{{my-secret}}}}") is not var (exitCode, output))
-            return; // openpty not available on this platform; skip test
+        var (exitCode, output) = RunTswapUnderOuterPty($"run sh \"{childScript}\" {{{{my-secret}}}}");
         Assert.Equal(0, exitCode);
         Assert.Contains("before",               output);
         Assert.Contains("after",                output);
@@ -479,19 +478,17 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     /// <summary>
     /// Runs the tswap binary with <paramref name="tswapArgs"/> (a bash-quoted argument string) under
     /// an outer PTY, so isatty(0/1/2) is true and <c>PtyRunnerFactory.Create()</c> picks
-    /// LinuxPty/MacOSPty. Returns tswap's exit code and everything it wrote to the terminal, or null
-    /// where openpty isn't available. With <paramref name="reply"/>, its text is typed into the terminal
+    /// LinuxPty/MacOSPty. Returns tswap's exit code and everything it wrote to the terminal; fails the test
+    /// where openpty isn't available (#362). With <paramref name="reply"/>, its text is typed into the terminal
     /// once (and only once) the output contains <c>WhenSeen</c>: input is sent only after a prompt shows.
     /// </summary>
-    private (int ExitCode, string Output)? RunTswapUnderOuterPty(string tswapArgs, (string WhenSeen, string Type)? reply = null)
+    private (int ExitCode, string Output) RunTswapUnderOuterPty(string tswapArgs, (string WhenSeen, string Type)? reply = null)
     {
         // Open an outer PTY pair. tswap will inherit the slave as its fds so
         // isatty(0/1/2) returns true and PtyRunnerFactory.Create() picks LinuxPty/MacOSPty.
         var nameBuf = new byte[256];
         int masterFd = -1, slaveFd = -1;
         int ptyRet = OpenPty(ref masterFd, ref slaveFd, nameBuf);
-        if (ptyRet == int.MinValue)
-            return null; // openpty not available on this platform
         if (ptyRet < 0)
             throw new Exception($"openpty failed (errno {Marshal.GetLastPInvokeError()})");
 
@@ -518,8 +515,9 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         // Read from the outer PTY master until the child has exited and the master is drained (the parent holds a
         // slave fd, so EOF/EIO is not the normal end, #234). poll() with a 500 ms timeout bounds each read attempt so the test can never hang
         // indefinitely if tswap or dotnet stalls; the 60 s deadline kills the child process.
-        // try/finally ensures masterFd and slaveFd are closed on all exit paths (assertion
-        // failure, exception from PtyRead, etc.) so the test never leaks file descriptors.
+        // try/finally (opened before Process.Start, as in EnrolOnPty.Run) kills and reaps the child, then closes
+        // masterFd and slaveFd, on every exit path (a throw from Start or PtyRead included), so the test never leaks
+        // a process or a file descriptor.
         const int EINTR  = 4;
         // EAGAIN differs by OS: Linux=11, macOS=35. Retry rather than treating as EIO
         // to match the production UnixPty loop and avoid spurious breaks on O_NONBLOCK fds.
@@ -528,9 +526,10 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         var sb       = new StringBuilder();
         var buf      = new byte[4096];
         var deadline = DateTime.UtcNow.AddSeconds(60);
-        using var process = Process.Start(psi)!;
+        Process? process = null;
         try
         {
+            process = Process.Start(psi)!;
             // The parent keeps its copy of the slave open until it is done (#234). On macOS CI the master reported
             // EOF (revents POLLIN|POLLHUP) tens of ms after start, before tswap printed anything; why is not proven
             // (#210 found that a 1 s delay before the child opens the slave does not reproduce it). The master
@@ -572,18 +571,27 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
                 if (readErrno == EINTR || readErrno == eagain) continue; // interrupted or O_NONBLOCK: retry
                 break; // EIO or other terminal error
             }
+            if (!process.WaitForExit(TimeSpan.FromSeconds(5)))
+            {
+                process.Kill(entireProcessTree: true);
+                process.WaitForExit();
+            }
+            return (process.ExitCode, sb.ToString());
         }
         finally
         {
+            if (process is not null)
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                    process.WaitForExit(TimeSpan.FromSeconds(10));
+                }
+                process.Dispose();
+            }
             if (masterFd != -1) { PtyClose(masterFd); masterFd = -1; }
             if (slaveFd  != -1) { PtyClose(slaveFd);  slaveFd  = -1; }
         }
-        if (!process.WaitForExit(TimeSpan.FromSeconds(5)))
-        {
-            process.Kill(entireProcessTree: true);
-            process.WaitForExit();
-        }
-        return (process.ExitCode, sb.ToString());
     }
 
     /// <summary>
@@ -600,8 +608,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         var childScript = Path.Combine(_tempDir, "print-other.sh");
         File.WriteAllText(childScript, "echo \"got $1\"\necho \"log other-vault-value-42 end\"\n");
 
-        if (RunTswapUnderOuterPty($"run sh \"{childScript}\" {{{{my-secret}}}}") is not var (exitCode, output))
-            return; // openpty not available on this platform; skip test
+        var (exitCode, output) = RunTswapUnderOuterPty($"run sh \"{childScript}\" {{{{my-secret}}}}");
         Assert.Equal(0, exitCode);
         Assert.DoesNotContain("other-vault-value-42", output);
         Assert.DoesNotContain("s3cr3t", output);
@@ -624,8 +631,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         var prompt = Path.Combine(_tempDir, "prompt.sh");
         File.WriteAllText(prompt, "printf 'Continue? [y/N] '\nread x\necho \"answer-$x\"\n");
 
-        if (RunTswapUnderOuterPty($"run sh \"{prompt}\" {{{{token}}}}", ("Continue? [y/N] ", "y\n")) is not var (exitCode, output))
-            return; // openpty not available on this platform; skip test
+        var (exitCode, output) = RunTswapUnderOuterPty($"run sh \"{prompt}\" {{{{token}}}}", ("Continue? [y/N] ", "y\n"));
         Assert.Contains("answer-y", output);
         Assert.Equal(0, exitCode);
     }
@@ -641,8 +647,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         RunTswap("init", "--yubikey", "--no-recovery");
         RunTswapWithStdin("s3cr3t", "ingest", "my-secret");
 
-        if (RunTswapUnderOuterPty("run tswap-test-no-such-command {{my-secret}}") is not var (exitCode, output))
-            return; // openpty not available on this platform; skip test
+        var (exitCode, output) = RunTswapUnderOuterPty("run tswap-test-no-such-command {{my-secret}}");
         Assert.Equal(127, exitCode);
         Assert.Contains("redactingpty: exec failed (command not found or not executable)", output);
         Assert.DoesNotContain("s3cr3t", output);
@@ -778,17 +783,34 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     [DllImport("libc", EntryPoint = "poll", SetLastError = true)]
     private static extern int PtyPoll(ref TestPollFd fds, uint nfds, int timeout);
 
-    // Returns the openpty result (< 0 on failure), or int.MinValue if openpty is not
-    // available on this platform (neither libc nor libutil exports the symbol).
+    /// <summary>
+    /// Opens a pseudo-terminal pair through <see cref="OpenPtyThrough"/>: returns openpty's result (&lt; 0 on failure)
+    /// and fails the test where neither libc nor libutil exports openpty (#362).
+    /// </summary>
     private static int OpenPty(ref int masterFd, ref int slaveFd, byte[] nameBuf)
     {
-        try { return openpty_libc(ref masterFd, ref slaveFd, nameBuf, IntPtr.Zero, IntPtr.Zero); }
-        catch (DllNotFoundException) { }
-        catch (EntryPointNotFoundException) { } // openpty not exported by libc on this platform
-        try { return openpty_libutil(ref masterFd, ref slaveFd, nameBuf, IntPtr.Zero, IntPtr.Zero); }
-        catch (DllNotFoundException) { }
-        catch (EntryPointNotFoundException) { } // libutil not present or openpty not exported
-        return int.MinValue; // sentinel: openpty not available on this platform
+        int master = masterFd, slave = slaveFd;
+        var ret = OpenPtyThrough(
+            () => openpty_libc(ref master, ref slave, nameBuf, IntPtr.Zero, IntPtr.Zero),
+            () => openpty_libutil(ref master, ref slave, nameBuf, IntPtr.Zero, IntPtr.Zero));
+        masterFd = master;
+        slaveFd = slave;
+        return ret;
+    }
+
+    /// <summary>
+    /// The probe order behind <see cref="OpenPty"/> (#362): <paramref name="libc"/>, then <paramref name="libutil"/> when
+    /// libc lacks the library or the symbol. On Linux and macOS openpty always exists, so finding it in neither fails the
+    /// test (<see cref="OpenPtyUnavailable"/>) instead of letting it pass without asserting. A returned value, a failure
+    /// (&lt; 0) included, is returned; any other exception propagates.
+    /// </summary>
+    internal static int OpenPtyThrough(Func<int> libc, Func<int> libutil)
+    {
+        try { return libc(); }
+        catch (Exception e) when (e is DllNotFoundException or EntryPointNotFoundException) { }
+        try { return libutil(); }
+        catch (Exception e) when (e is DllNotFoundException or EntryPointNotFoundException) { }
+        throw OpenPtyUnavailable();
     }
 
     // Starts tswap with a PTY so ReadPassword enters interactive mode, then sends
@@ -799,14 +821,14 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     // Early sends (before TreatControlCAsInput=true is set) generate SIGINT with no
     // foreground pgid, which is silently dropped; the process keeps running and more
     // output arrives, resetting the quiescent timer for another attempt.
-    // Returns (exitCode, output, loopEnd); (-2, "", "") if openpty is unavailable on this platform.
+    // Returns (exitCode, output, loopEnd); fails the test if openpty is unavailable (#362).
     // loopEnd says why the read loop ended (for failure messages; macOS flake, #210).
+    // As in EnrolOnPty.Run, the finally kills and reaps the child on every path before the fds close.
     private (int exitCode, string output, string loopEnd) RunTswapWithPtyCtrlC(string waitForPrompt, params IEnumerable<string> args)
     {
         var nameBuf = new byte[256];
         int masterFd = -1, slaveFd = -1;
         int ptyRet = OpenPty(ref masterFd, ref slaveFd, nameBuf);
-        if (ptyRet == int.MinValue) return (-2, "", "");
         if (ptyRet < 0) throw new Exception($"openpty failed (errno {Marshal.GetLastPInvokeError()})");
 
         var slavePath = Encoding.ASCII.GetString(nameBuf, 0,
@@ -851,10 +873,11 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
             if (written == 1) lastCtrlCAt = DateTime.UtcNow;
         }
 
-        // Open the try/finally before Process.Start so fd cleanup runs even if Start throws.
+        // Open the try/finally before Process.Start so the cleanup runs even if Start throws.
+        Process? process = null;
         try
         {
-            using var process = Process.Start(psi)!;
+            process = Process.Start(psi)!;
             // The parent keeps its copy of the slave open until it is done (#234). On macOS CI the master reported
             // EOF (revents POLLIN|POLLHUP) tens of ms after start, before tswap printed anything; why is not proven
             // (#210 found that a 1 s delay before the child opens the slave does not reproduce it). The master
@@ -922,6 +945,15 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         }
         finally
         {
+            if (process is not null)
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                    process.WaitForExit(TimeSpan.FromSeconds(10));
+                }
+                process.Dispose();
+            }
             if (masterFd != -1) { PtyClose(masterFd); masterFd = -1; }
             if (slaveFd  != -1) { PtyClose(slaveFd);  slaveFd  = -1; }
         }
@@ -964,7 +996,8 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
                 }
                 init.WaitForExit(); // the exit is known; this only lets the two reads finish
                 Assert.True(Task.WaitAll([stdout, stderr], TimeSpan.FromSeconds(10)), "the host's init output wasn't read to its end");
-                Assert.Equal(0, init.ExitCode);
+                if (init.ExitCode != 0)
+                    Assert.Fail($"the host's init exited {init.ExitCode}\nstdout:\n{stdout.Result}\nstderr:\n{stderr.Result}");
             }
 
             // ProcessSshTransport's two shapes (BuildArgv, EndSession): 'ssh -T|-t [-o ControlMaster=auto -o ControlPath=<p>
@@ -1025,15 +1058,13 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
 
         /// <summary>
         /// Runs <c>slot enrol</c> on the joining side with its stdin, stdout and stderr on a new pseudo-terminal's slave,
-        /// and hands <paramref name="drive"/> a session on the master. Null where openpty isn't available.
+        /// and hands <paramref name="drive"/> a session on the master. Fails the test where openpty isn't available (#362).
         /// </summary>
-        public (int ExitCode, string Output, bool Killed)? Run(Action<PtyDriver> drive)
+        public (int ExitCode, string Output, bool Killed) Run(Action<PtyDriver> drive)
         {
             var nameBuf = new byte[256];
             int masterFd = -1, slaveFd = -1;
             int ptyRet = OpenPty(ref masterFd, ref slaveFd, nameBuf);
-            if (ptyRet == int.MinValue)
-                return null;
             if (ptyRet < 0)
                 throw new Exception($"openpty failed (errno {Marshal.GetLastPInvokeError()})");
             var slavePath = Encoding.ASCII.GetString(nameBuf, 0, Array.IndexOf(nameBuf, (byte)0) is int z and >= 0 ? z : nameBuf.Length);
@@ -1174,8 +1205,9 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     private static extern int PtyGetAttr(int fd, [Out] byte[] termios);
 
     /// <summary>
-    /// Review round 3 (1): these tests run on Linux and macOS only ([UnixFact]), where openpty must exist; its absence
-    /// (neither libc nor libutil exports it, <see cref="OpenPty"/>'s sentinel) is a failure, never a silent pass.
+    /// Review round 3 (1), #362: the PTY tests run on Linux and macOS only ([UnixFact], [LinuxFact]), where openpty must
+    /// exist; its absence (neither libc nor libutil exports it, found by <see cref="OpenPtyThrough"/>) is a failure, never
+    /// a silent pass.
     /// </summary>
     private static Exception OpenPtyUnavailable()
     {
@@ -1207,14 +1239,13 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         enrol.SetUp();
         var hostKeyring = File.ReadAllBytes(enrol.HostKeyringPath);
 
-        if (enrol.Run(pty =>
-            {
-                pty.WaitFor(EnterGatePrompt);
-                pty.WaitForKeyRead();
-                pty.Type("\x03");
-                pty.WaitFor("wasn't confirmed");
-            }) is not var (exitCode, output, killed))
-            throw OpenPtyUnavailable();
+        var (exitCode, output, killed) = enrol.Run(pty =>
+        {
+            pty.WaitFor(EnterGatePrompt);
+            pty.WaitForKeyRead();
+            pty.Type("\x03");
+            pty.WaitFor("wasn't confirmed");
+        });
 
         AssertTheRequestIsKept(enrol, hostKeyring, exitCode, output, killed);
     }
@@ -1226,14 +1257,13 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         enrol.SetUp();
         var hostKeyring = File.ReadAllBytes(enrol.HostKeyringPath);
 
-        if (enrol.Run(pty =>
-            {
-                pty.WaitFor(EnterGatePrompt);
-                pty.WaitForKeyRead();
-                pty.Type("\x04");
-                pty.WaitFor("wasn't confirmed");
-            }) is not var (exitCode, output, killed))
-            throw OpenPtyUnavailable();
+        var (exitCode, output, killed) = enrol.Run(pty =>
+        {
+            pty.WaitFor(EnterGatePrompt);
+            pty.WaitForKeyRead();
+            pty.Type("\x04");
+            pty.WaitFor("wasn't confirmed");
+        });
 
         AssertTheRequestIsKept(enrol, hostKeyring, exitCode, output, killed);
     }
@@ -1247,20 +1277,19 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         var hostKeyring = File.ReadAllBytes(enrol.HostKeyringPath);
         var afterGate = "";
 
-        if (enrol.Run(pty =>
-            {
-                pty.WaitFor(EnterGatePrompt);
-                var before = pty.Output.Length;
-                pty.WaitForKeyRead();
-                pty.Type("zq7x\r");
-                pty.WaitFor("Nothing was typed in, just press Enter");
-                pty.WaitFor(EnterGatePrompt, times: 2);
-                afterGate = pty.Output[before..];
-                pty.WaitForKeyRead();
-                pty.Type("\x03");
-                pty.WaitFor("wasn't confirmed");
-            }) is not var (exitCode, output, killed))
-            throw OpenPtyUnavailable();
+        var (exitCode, output, killed) = enrol.Run(pty =>
+        {
+            pty.WaitFor(EnterGatePrompt);
+            var before = pty.Output.Length;
+            pty.WaitForKeyRead();
+            pty.Type("zq7x\r");
+            pty.WaitFor("Nothing was typed in, just press Enter");
+            pty.WaitFor(EnterGatePrompt, times: 2);
+            afterGate = pty.Output[before..];
+            pty.WaitForKeyRead();
+            pty.Type("\x03");
+            pty.WaitFor("wasn't confirmed");
+        });
 
         Assert.Contains("(what you typed was not shown or used).", afterGate);
         Assert.DoesNotContain("zq7x", output);
@@ -1280,8 +1309,6 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
 
         var (exitCode, output, loopEnd) = RunTswapWithPtyCtrlC("Secret value for", "add", "ctrlc-secret");
 
-        if (exitCode == -2) return; // openpty not available on this platform
-
         Assert.True(exitCode == 130, $"Expected exit 130, got {exitCode}. PTY output: [{output}]. Read loop: {loopEnd}");
         Assert.True(output.Contains("Cancelled"), $"Expected 'Cancelled' in PTY output: [{output}]. Read loop: {loopEnd}");
     }
@@ -1294,8 +1321,6 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         var exportPath = Path.Combine(_tempDir, "ctrlc-export.enc");
 
         var (exitCode, output, loopEnd) = RunTswapWithPtyCtrlC("Export passphrase:", "export", exportPath);
-
-        if (exitCode == -2) return; // openpty not available on this platform
 
         Assert.True(exitCode == 130, $"Expected exit 130, got {exitCode}. PTY output: [{output}]. Read loop: {loopEnd}");
         Assert.True(output.Contains("Cancelled"), $"Expected 'Cancelled' in PTY output: [{output}]. Read loop: {loopEnd}");
@@ -1312,8 +1337,6 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
 
         var (exitCode, output, loopEnd) = RunTswapWithPtyCtrlC("Import passphrase:", "import", exportPath);
 
-        if (exitCode == -2) return; // openpty not available on this platform
-
         Assert.True(exitCode == 130, $"Expected exit 130, got {exitCode}. PTY output: [{output}]. Read loop: {loopEnd}");
         Assert.True(output.Contains("Cancelled"), $"Expected 'Cancelled' in PTY output: [{output}]. Read loop: {loopEnd}");
     }
@@ -1326,12 +1349,14 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     /// tswap's stdio is a genuine console (IsOutputRedirected == false) and
     /// PtyRunnerFactory selects WindowsPty for the child it spawns. Output is captured
     /// from the outer ConPTY pipe — it carries VT sequences, so assertions use
-    /// substring checks on the rendered text.
+    /// substring checks on the rendered text. Skipped off Windows and before Windows 10 1809
+    /// (no ConPTY there) by [WindowsConPtyFact].
     /// </summary>
-    [Fact]
+    [WindowsConPtyFact]
     public void Run_CompoundCommand_RedactedOutput_WindowsConPty()
     {
-        if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 17763)) return; // ConPTY requires Win10 1809+
+        if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 17763))
+            throw new UnreachableException("[WindowsConPtyFact] runs this test only on Windows 10 1809 or later");
 
         RunTswap("init", "--yubikey", "--no-recovery");
         RunTswapWithStdin("s3cr3t-conpty-value", "ingest", "my-secret");
@@ -1373,14 +1398,15 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     /// <summary>
     /// Brief T35 Task 3 (#348.2, #294.4): tswap's glyphs reach a console as themselves. Before the change tswap
     /// wrote the OEM code page's best fit, which the outer pseudo console renders as '?' and 'V'. Windows only
-    /// (CI); returns early elsewhere, as <see cref="Run_CompoundCommand_RedactedOutput_WindowsConPty"/> does.
+    /// (CI): skipped off Windows and before Windows 10 1809 by [WindowsConPtyFact].
     /// Two captures, each waiting for an ASCII sentinel printed before and after the change (A8); short fragments
     /// only, since ConPTY may wrap long lines, and no banner wording (A18).
     /// </summary>
-    [Fact]
+    [WindowsConPtyFact]
     public void Glyphs_ReachTheConsole_WindowsConPty()
     {
-        if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 17763)) return; // ConPTY requires Win10 1809+
+        if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 17763))
+            throw new UnreachableException("[WindowsConPtyFact] runs this test only on Windows 10 1809 or later");
 
         // A refused run (no token, nothing is opened): the error line's ❌.
         var (refusedExit, refused) = RunTswapInConPty(waitForOutput: "No {{tokens}}", "run", "tool", "{x}");
@@ -1402,21 +1428,23 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     /// <summary>
     /// Brief T35 Task 3 (#355, A4): a secret value with non-ASCII characters is redacted on the ConPTY path.
     /// RedactingPty's WindowsPty decodes ConPTY's UTF-8 with Console.OutputEncoding; before the change that was the
-    /// OEM code page, so the value didn't match and its bytes reached the console. Windows only (CI).
+    /// OEM code page, so the value didn't match and its bytes reached the console. Windows only (CI): skipped off
+    /// Windows and before Windows 10 1809 by [WindowsConPtyFact].
     /// </summary>
-    [Fact]
+    [WindowsConPtyFact]
     public void NonAsciiValue_Redacted_WindowsConPty()
     {
-        if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 17763)) return; // ConPTY requires Win10 1809+
+        if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 17763))
+            throw new UnreachableException("[WindowsConPtyFact] runs this test only on Windows 10 1809 or later");
 
         const string value = "pässwört-conpty";
         RunTswap("init", "--yubikey", "--no-recovery");
         RunTswapWithStdin(value, "ingest", "umlaut");
         // A16: the stored value is the one typed ('ä' and 'ö' exist in code pages 437, 850 and 1252); if this fails,
-        // the ingest leg is what to fix, not the redaction.
-        var get = RunTswap("get", "umlaut");
+        // the ingest leg is what to fix, not the redaction. get's stdout is read as UTF-8 since T52.
+        var get = RunTswapStdoutBytes("get", "umlaut");
         Assert.True(get.exitCode == 0, get.stderr);
-        Assert.Equal(value, get.stdout.Trim());
+        Assert.Equal(value, Encoding.UTF8.GetString(get.stdout).Trim());
 
         // A13: print3.ps1 as the existing ConPTY test writes it; its trailing sleep is existing child behaviour (a
         // child that exits at once can render as a blank session), not a test wait.
@@ -1438,13 +1466,15 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     /// Brief T35 Task 4 (#349): the child's pseudo console sets the window title to the child's path (OSC 0); on a
     /// Windows console run drops it, so it reaches the outer capture neither as text (VT off) nor re-emitted by the
     /// outer pseudo console (VT on). No ESC printed as the '←' glyph either (A3; the outer pseudo console's own
-    /// start-up sequences are in every capture, so those fragments can't be asserted). Windows only (CI). If the
+    /// start-up sequences are in every capture, so those fragments can't be asserted). Windows only (CI): skipped off
+    /// Windows and before Windows 10 1809 by [WindowsConPtyFact]. If the
     /// outer pseudo console turns out to emit a title naming pwsh by itself, report the dump; never loosen this.
     /// </summary>
-    [Fact]
+    [WindowsConPtyFact]
     public void Run_NoChildTitle_WindowsConPty()
     {
-        if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 17763)) return; // ConPTY requires Win10 1809+
+        if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 17763))
+            throw new UnreachableException("[WindowsConPtyFact] runs this test only on Windows 10 1809 or later");
 
         RunTswap("init", "--yubikey", "--no-recovery");
         RunTswapWithStdin("s3cr3t-title-value", "ingest", "my-secret");
@@ -1753,7 +1783,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         Assert.True(failures.Count == 0, string.Join("\n", failures));
     }
 
-    /// <summary>A program on PATH (no extension search: these tests are Unix-only), or null.</summary>
+    /// <summary>A program on PATH by its full file name (no extension search; T52 passes "pwsh.exe"), or null.</summary>
     private static string? FindOnPath(string program) =>
         (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
             .Select(dir => Path.Combine(dir, program))
@@ -1848,6 +1878,30 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     }
 
     /// <summary>
+    /// Brief T52: tswap's stdout as the bytes it wrote (copied from <see cref="Process.StandardOutput"/>'s base stream,
+    /// no decoder involved); stderr read as text, started first so neither pipe can fill and block the other.
+    /// </summary>
+    private (int exitCode, byte[] stdout, string stderr) RunTswapStdoutBytes(params ReadOnlySpan<string> args)
+    {
+        var psi = MakePsi();
+        foreach (var arg in args)
+            psi.ArgumentList.Add(arg);
+
+        using var process = Process.Start(psi)!;
+        var stderrTask = process.StandardError.ReadToEndAsync();
+        using var stdout = new MemoryStream();
+        process.StandardOutput.BaseStream.CopyTo(stdout);
+        process.WaitForExit();
+        return (process.ExitCode, stdout.ToArray(), stderrTask.Result);
+    }
+
+    /// <summary>Brief T52: a byte comparison's failure text: the two lengths and the first differing offset, never the bytes.</summary>
+    private static string? ByteDifference(byte[] expected, byte[] actual) =>
+        expected.AsSpan().SequenceEqual(actual)
+            ? null
+            : $"expected {expected.Length} bytes, got {actual.Length}, first difference at byte {expected.AsSpan().CommonPrefixLength(actual)}";
+
+    /// <summary>
     /// Brief T48 Task 2: invalid UTF-8 piped into <c>ingest</c> (an invalid continuation byte) is refused with the fixed
     /// message, exit code 1, and nothing is stored. On every OS: before, Linux and macOS stored U+FFFD.
     /// </summary>
@@ -1874,7 +1928,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     /// <c>kubectl … | jq … | tswap ingest</c> delivers it), is stored exactly: <c>tswap run &lt;Git Bash&gt; ./capture.sh
     /// {{name}}</c> (<c>printf '%s' "$1" &gt; out.txt</c>) writes it, trimmed at the end as ingest does. Before, Windows
     /// decoded stdin with the console code page (437 on the runner): <c>café-value</c> arrived as <c>caf├⌐-value</c>.
-    /// No <c>tswap get</c> check (A12/A20 withdrawn): get's redirected stdout on Windows is the console code page (T35 A1).
+    /// The `get` side is `Get_RedirectedStdout_IsUtf8_EveryNonAsciiCorpusValue_Windows` (T52).
     /// </summary>
     /// <remarks>
     /// Break-it-once (the controller's, on Windows CI): <c>SystemConsole.In</c> back to <c>Console.In</c>; the test must
@@ -1917,6 +1971,149 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         }
 
         Assert.True(failures.Count == 0, $"{failures.Count} failure(s):\n" + string.Join("\n", failures));
+    }
+
+    /// <summary>
+    /// Brief T52 (#403): every non-ASCII corpus value, ingested as raw UTF-8, comes out of <c>tswap get</c> with stdout
+    /// redirected (a pipe) as its UTF-8 bytes and CRLF, whatever the console code page (437 on the runner). Before,
+    /// 15 of 16 came out in the code page or as <c>?</c>.
+    /// </summary>
+    /// <remarks>
+    /// Break-it-once (the controller's, on Windows CI): in <c>Program.cs</c> pass <c>false</c> instead of
+    /// <c>CommandRegistry.PrintsSecretValues(args)</c>; this test fails for 15 or 16 cases.
+    /// </remarks>
+    [WindowsFact("get's redirected stdout was the console code page on Windows only")]
+    public void Get_RedirectedStdout_IsUtf8_EveryNonAsciiCorpusValue_Windows()
+    {
+        var (initExit, _, initErr) = RunTswap("init", "--yubikey", "--no-recovery");
+        Assert.True(initExit == 0, $"init failed: {initErr}");
+
+        var utf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+        var cases = EvilValues.Cases.Where(c => c.Value.Any(ch => ch > '\x7F')).ToList();
+        Assert.NotEmpty(cases);
+        List<string> failures = [];
+        foreach (var (c, i) in cases.Select((c, i) => (c, i)))
+        {
+            var name = $"g{i + 1}";
+            Assert.True(EvilValues.NameIsSafeFor(name, c.Value), $"{c.Name}: the name {name} holds part of the value");
+            var (ingestExit, _, ingestErr) = RunTswapWithStdinBytes(utf8.GetBytes(c.Value), "ingest", name);
+            if (ingestExit != 0)
+            {
+                failures.Add($"{c.Name}: ingest failed (exit {ingestExit}): {ingestErr}");
+                continue;
+            }
+
+            var (getExit, stdout, _) = RunTswapStdoutBytes("get", name);
+            var expected = utf8.GetBytes(c.Value.TrimEnd() + "\r\n");
+            if (getExit != 0)
+                failures.Add($"{c.Name}: get exit {getExit}");
+            else if (ByteDifference(expected, stdout) is { } difference)
+                failures.Add($"{c.Name}: {difference}");
+            _output.WriteLine($"T52 get utf-8: {c.Name}: ingest exit {ingestExit}, get exit {getExit}, {stdout.Length} bytes");
+        }
+
+        Assert.True(failures.Count == 0, $"{failures.Count} failure(s):\n" + string.Join("\n", failures));
+    }
+
+    /// <summary>
+    /// Brief T52 (#403): <c>tswap apply</c> with stdout redirected writes the whole filled file as UTF-8, the template's
+    /// own non-ASCII text included (one encoding for the stream).
+    /// </summary>
+    /// <remarks>Break-it-once (controller, Windows CI): as <see cref="Get_RedirectedStdout_IsUtf8_EveryNonAsciiCorpusValue_Windows"/>.</remarks>
+    [WindowsFact("apply's redirected stdout was the console code page on Windows only")]
+    public void Apply_RedirectedStdout_IsUtf8_Windows()
+    {
+        const string value = "café-Grüße-а-🔒"; // the 'а' is Cyrillic U+0430
+        var utf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+        var (initExit, _, initErr) = RunTswap("init", "--yubikey", "--no-recovery");
+        Assert.True(initExit == 0, $"init failed: {initErr}");
+        var (ingestExit, _, ingestErr) = RunTswapWithStdinBytes(utf8.GetBytes(value), "ingest", "a1");
+        Assert.True(ingestExit == 0, $"ingest failed (exit {ingestExit}): {ingestErr}");
+        var template = Path.Combine(_tempDir, "t52-apply.yaml");
+        File.WriteAllText(template, "# Grüße\npassword: \"\"  # tswap: a1\n", utf8);
+
+        var (exit, stdout, stderr) = RunTswapStdoutBytes("apply", template);
+
+        Assert.True(exit == 0, $"apply exit {exit}: {stderr}");
+        var expected = utf8.GetBytes("# Grüße\npassword: \"" + value + "\"  # tswap: a1\n");
+        Assert.True(ByteDifference(expected, stdout) is null, $"apply's stdout: {ByteDifference(expected, stdout)}");
+    }
+
+    /// <summary>
+    /// Brief T52 (#403), the docs line's proof: PowerShell (Windows PowerShell 5.1 and PowerShell 7) decodes a native
+    /// program's output with <c>[Console]::OutputEncoding</c>, the OEM code page by default; with it set to UTF-8 first,
+    /// <c>$v = &amp; tswap get p1</c> holds the value exactly. It proves the documented PowerShell advice only, not
+    /// tswap's own switch: setting <c>[Console]::OutputEncoding</c> sets the code page of the console the shell shares
+    /// with tswap, so tswap writes UTF-8 here even without T52. The byte tests
+    /// (<see cref="Get_RedirectedStdout_IsUtf8_EveryNonAsciiCorpusValue_Windows"/>,
+    /// <see cref="Apply_RedirectedStdout_IsUtf8_Windows"/>) prove the switch.
+    /// </summary>
+    /// <remarks>
+    /// <c>CreateNoWindow = false</c>: Windows PowerShell 5.1 (.NET Framework) raises an error setting
+    /// <c>Console.OutputEncoding</c> without a console, and the documented case is a console window anyway.
+    /// Break-it-once (controller, Windows CI 45195812049): removing the <c>[Console]::OutputEncoding</c> line from
+    /// <c>capture.ps1</c> failed both shells (the runner's 437).
+    /// </remarks>
+    [WindowsFact("Windows PowerShell 5.1 and the [Console]::OutputEncoding advice are about Windows consoles")]
+    public void Get_CapturedInPowerShell_WithUtf8ConsoleEncoding_IsExact_Windows()
+    {
+        const string value = "café-Grüße-а-🔒"; // the 'а' is Cyrillic U+0430
+        var utf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+        var (initExit, _, initErr) = RunTswap("init", "--yubikey", "--no-recovery");
+        Assert.True(initExit == 0, $"init failed: {initErr}");
+        var (ingestExit, _, ingestErr) = RunTswapWithStdinBytes(utf8.GetBytes(value), "ingest", "p1");
+        Assert.True(ingestExit == 0, $"ingest failed (exit {ingestExit}): {ingestErr}");
+        var capture = Path.Combine(_tempDir, "capture.ps1");
+        File.WriteAllText(capture,
+            "param($tswap, $name, $out)\r\n" +
+            "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)\r\n" +
+            "$v = & $tswap get $name\r\n" +
+            "[System.IO.File]::WriteAllText($out, $v, [System.Text.UTF8Encoding]::new($false))\r\n",
+            Encoding.ASCII);
+
+        List<string> failures = [];
+        foreach (var shell in new[] { "powershell.exe", "pwsh.exe" })
+        {
+            var shellPath = FindOnPath(shell);
+            if (shellPath is null)
+            {
+                failures.Add($"{shell}: not on PATH (both are on every GitHub Windows runner)");
+                continue;
+            }
+
+            var outFile = Path.Combine(_tempDir, $"t52-{Path.GetFileNameWithoutExtension(shell)}.txt");
+            // The shell and the tswap it starts share one console, on CI too (only the test host's is separate); on a
+            // developer machine that console may be the test host's, whose code page may already be 65001.
+            var psi = new ProcessStartInfo
+            {
+                FileName = shellPath,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = false,
+            };
+            foreach (var (key, envValue) in MakePsi().Environment)
+                if (key.StartsWith("TSWAP_", StringComparison.Ordinal))
+                    psi.Environment[key] = envValue;
+            foreach (var arg in new[] { "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", capture, _binaryPath, "p1", outFile })
+                psi.ArgumentList.Add(arg);
+
+            using var process = Process.Start(psi)!;
+            var stdoutTask = process.StandardOutput.ReadToEndAsync();
+            var stderr = process.StandardError.ReadToEnd();
+            process.WaitForExit();
+            _ = stdoutTask.Result;
+
+            if (process.ExitCode != 0)
+                failures.Add($"{shell}: exit {process.ExitCode}: {stderr}");
+            else if (!File.Exists(outFile))
+                failures.Add($"{shell}: no out file (exit 0): {stderr}");
+            else if (File.ReadAllText(outFile, Encoding.UTF8) is var captured && captured != value)
+                failures.Add($"{shell}: captured value ALTERED ({captured.Length} chars, expected {value.Length})");
+            _output.WriteLine($"T52 powershell capture: {shell}: exit {process.ExitCode}");
+        }
+
+        Assert.True(failures.Count == 0, string.Join("\n", failures));
     }
 
     /// <summary>

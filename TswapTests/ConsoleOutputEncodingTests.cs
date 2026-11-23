@@ -36,6 +36,15 @@ public sealed class ConsoleOutputEncodingTests
         }
 
         public void Flush() => Calls.Add("flush");
+
+        /// <summary>Brief T52 (A5): counted here, not in <see cref="Calls"/>.</summary>
+        public int OpenStandardOutputCalls { get; private set; }
+
+        public Stream OpenStandardOutput()
+        {
+            OpenStandardOutputCalls++;
+            return new MemoryStream();
+        }
     }
 
     /// <summary>Off Windows only <see cref="IsWindows"/> may be read.</summary>
@@ -52,6 +61,8 @@ public sealed class ConsoleOutputEncodingTests
         }
 
         public void Flush() => throw new InvalidOperationException("Flush");
+
+        public Stream OpenStandardOutput() => throw new InvalidOperationException("OpenStandardOutput");
     }
 
     [Fact]
