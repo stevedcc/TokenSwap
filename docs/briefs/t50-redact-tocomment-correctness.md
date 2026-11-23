@@ -454,3 +454,36 @@ must fail; (b) accept `=` in check (a): the `TOKEN=` row must fail.
   marker (`ToCommentBlockScalarTests`, `RedactBehaviourPinTests`, `ToCommentDryRunPinTests`, `RedactEngineTests`'
   tocomment rows, Task 4/5's tables). Adding this call is an added assertion, not a changed one. If any existing pin
   then fails (a marker apply can't fill), stop and list it: that is another test that should never have passed.
+
+## Amendments (round 2; MiMo — GLM's session hit the Z.ai 5-hour limit)
+
+- **A16 (MiMo I-1): the mask run knows the escapes.** `Redact.RunEnd`'s matching-quote search skips `\\.` (backslash and
+  the next character) inside double quotes and `''` inside single quotes, so the run ends at the first unescaped quote.
+  A3's rows: `password: "aaaa\"bbbbbbbbbbbb"` → `password: "[POSSIBLE SECRET]"`; `password: 'it''s a long passphrase'` →
+  `password: '[POSSIBLE SECRET]'`. Break-it-once (b) also: search for the first quote character again; both rows fail.
+- **A17 (MiMo I-2): the rest of a line holding a multi-line occurrence goes through the line rules.** For a replaced
+  occurrence, line `a`'s text before the span and line `b`'s text after it; for a skipped occurrence, every part of
+  lines `a`..`b` outside the span: each other value found there is replaced where Task 4's rules allow, otherwise reported
+  as `SkippedValue`. Replaces A5 (which covered only line `b`'s after-text). Rows: `password: xyz123 token: line-one\nline-two`
+  → `xyz123` handled as today's line path would (replaced or warned), the multi-line value replaced or warned per Task 5;
+  `cmd: echo line-one\nline-two | tee x` with `tee` stored → `tee` warned.
+- **A18 (MiMo I-3): no silent multi-line value in block content.** A10 is narrowed: a multi-line value found inside
+  block-scalar content that T20 does not adopt is reported (`SkippedValue`, the same warning). Only lines T20 adopts (and
+  so removes) are exempt.
+- **A19 (MiMo I-4): `AssertRoundTrips` defined.** It runs `Apply` on the tocomment output with the vault, asserts apply
+  prints no "value appears already populated" warning, and for each replaced line asserts that the filled scalar,
+  decoded as `EvilValuesTests.DecodeFilledLine` decodes it, equals the value that line held (CRLF normalised to LF before
+  comparing). It checks fillability and value identity, never byte equality with the original file.
+- **A20 (MiMo I-5): Task 1's filter is the rule; A11's "dropped" claim is deleted.** Hits are kept and mapped as Task 1
+  says, including hits that start or end at an inserted `\r`. Row: a stored value **beginning** with `\r\n` (`\r\nline-one\r\nline-two`)
+  in an LF file is masked.
+- **A21 (MiMo M-1).** Task 4's sentence about joining `-`/`+` texts is replaced by A2 (each redacted separately).
+- **A22 (MiMo M-2).** One warning per occurrence (two occurrences of one token on one line = two warnings).
+- **A23 (MiMo M-3).** The whole-value gate is always evaluated on the original line, in the engine and the oracle alike.
+  Delete the sentence "Only one place on a line can satisfy both rules" from Owner decision 1.
+- **A24 (MiMo M-4).** Task 4's command test lives in `TswapTests/CommandTests.cs`, beside Task 3's.
+- **A25 (MiMo M-5).** Task 4's rationale says markers are *filled* by apply; it does not claim the file's YAML meaning is
+  unchanged for `user:authentik` or a double-quoted scalar with a raw line break.
+- **A26 (MiMo M-6).** When a replaced span starts at the `\n` of a `\r\n`, the `\r` before it is dropped too, so no stray
+  `\r` remains. Row: stored `\nline-two`, file `x: a\r\nline-two\r\n`.
+- **A27 (MiMo M-7).** In the cross-view dedupe, the raw view's hit wins a `(Start, Length)` tie.
