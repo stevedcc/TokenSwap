@@ -529,10 +529,71 @@ public static class Validation
     // ssh options that take a value; a non-option argument after the host is a remote command.
     private const string SshValued = "BbcDEeFIiJLlmOoPpQRSWw";
 
-    // Script paths that are really stdin. Review fix G1: compared ignoring case (fail closed: a case-insensitive file
-    // system, or /dev/STDIN given on purpose).
-    private static readonly HashSet<string> StdinScripts = new(StringComparer.OrdinalIgnoreCase)
-        { "-", "/dev/stdin", "/dev/fd/0", "/proc/self/fd/0" };
+    // Script paths that are really stdin, resolved (IsStdinScript). Review fix G1: compared ignoring case (fail closed:
+    // a case-insensitive file system, or /dev/STDIN given on purpose).
+    private static readonly HashSet<string> StdinPaths = new(StringComparer.OrdinalIgnoreCase)
+        { "/dev/stdin", "/dev/fd/0", "/proc/self/fd/0", "/proc/thread-self/fd/0" };
+
+    private static readonly Regex ProcPidStdin = new("^/proc/[0-9]+/fd/0$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// Review fix I1: whether <paramref name="word"/>, as a script path, is stdin: <c>-</c> (after trimming), or a path
+    /// that resolves to <c>/dev/stdin</c>, <c>/dev/fd/0</c>, <c>/proc/self/fd/0</c>, <c>/proc/thread-self/fd/0</c> or
+    /// <c>/proc/&lt;pid&gt;/fd/0</c>, ignoring case. The path is resolved as the kernel walks it (relative to the current
+    /// folder, repeated separators and <c>.</c>/<c>..</c> collapsed) with <see cref="Path.GetFullPath(string)"/>, so
+    /// <c>/dev/./stdin</c>, <c>//dev//stdin</c> and <c>../../dev/stdin</c> count; a word it can't resolve is no path. A
+    /// symbolic link to stdin under another name is not followed. Every stdin check of <see cref="GetBlockedInvocation"/>
+    /// uses this.
+    /// </summary>
+    public static bool IsStdinScript(string word)
+    {
+        var trimmed = word.Trim();
+        if (trimmed == "-")
+            return true;
+        if (trimmed.Length == 0)
+            return false;
+        string full;
+        if (OperatingSystem.IsWindows())
+        {
+            // Windows' GetFullPath maps /dev/stdin to a drive path; resolve a '/'-rooted word by the Unix rules
+            // instead, so the check is the same on every OS (fail closed). A relative word has no Unix
+            // folder to resolve against there.
+            if (trimmed[0] != '/')
+                return false;
+            full = ResolveUnixPath(trimmed);
+        }
+        else
+        {
+            try
+            {
+                full = Path.GetFullPath(trimmed);
+            }
+            catch (Exception e) when (e is ArgumentException or NotSupportedException or PathTooLongException)
+            {
+                return false;
+            }
+        }
+        return StdinPaths.Contains(full) || ProcPidStdin.IsMatch(full);
+    }
+
+    // '/'-rooted path, resolved as Path.GetFullPath does on Unix: empty and '.' segments dropped, '..' pops (not past /).
+    private static string ResolveUnixPath(string path)
+    {
+        List<string> parts = [];
+        foreach (var segment in path.Split('/'))
+        {
+            if (segment is "" or ".")
+                continue;
+            if (segment == "..")
+            {
+                if (parts.Count > 0)
+                    parts.RemoveAt(parts.Count - 1);
+                continue;
+            }
+            parts.Add(segment);
+        }
+        return "/" + string.Join('/', parts);
+    }
 
     private const string WayOut =
         "Put the commands in a script file and run that instead, e.g. 'run ./script.sh {{secret}}' " +
@@ -633,7 +694,7 @@ public static class Validation
                     }
                 }
             }
-            if (programFiles.Any(f => StdinScripts.Contains(f) || f.Length == 0))
+            if (programFiles.Any(f => IsStdinScript(f) || f.Length == 0))
                 return new(program, $"'{program} -f -' reads its program from stdin, which can transform and print secrets past redaction. Put the program in a file.");
             var fromFile = programFiles.Count > 0;
             return fromFile && !inlineSource ? null
@@ -667,8 +728,8 @@ public static class Validation
                 return new(program, InlineReason(program, "eval"));
             // Review fix G2: 'deno run -' (or another stdin path) reads the script from stdin. The script is the first
             // word after 'run' that is a stdin path or no option.
-            var script = args.Skip(sub + 1).FirstOrDefault(a => StdinScripts.Contains(a) || !a.StartsWith('-'));
-            return args[sub] == "run" && script is not null && StdinScripts.Contains(script)
+            var script = args.Skip(sub + 1).FirstOrDefault(a => IsStdinScript(a) || !a.StartsWith('-'));
+            return args[sub] == "run" && script is not null && IsStdinScript(script)
                 ? new(program, $"'{program} run -' reads code from stdin, which can transform and print secrets past redaction. {WayOut}")
                 : null;
         }
@@ -686,7 +747,7 @@ public static class Validation
             // Review fix H1: a stdin path anywhere after PowerShell is refused, whatever parameter comes before it
             // (pwsh reads -i as -Interactive, not -InputFormat), fail closed; a script argument that is literally '-'
             // is refused too (accepted over-refusal).
-            if (args.Any(a => StdinScripts.Contains(a.Trim())))
+            if (args.Any(IsStdinScript))
                 return PowerShellStdin(program);
             return program.Equals("powershell", StringComparison.OrdinalIgnoreCase)
                 ? CheckWindowsPowerShell(program, args) : CheckPwsh(program, args);
@@ -1089,7 +1150,7 @@ public static class Validation
         if (at >= args.Count)
             return PowerShellNoScript(program);
         var script = args[at];
-        return StdinScripts.Contains(script) || script.Trim().Length == 0 ? PowerShellStdin(program) : null;
+        return IsStdinScript(script) || script.Trim().Length == 0 ? PowerShellStdin(program) : null;
     }
 
     private static BlockedInvocation PowerShellStdin(string program) =>
@@ -1138,7 +1199,7 @@ public static class Validation
             var arg = args[i];
             if (arg == "--")
                 continue;
-            if (StdinScripts.Contains(arg))
+            if (IsStdinScript(arg))
                 return new(program, $"'{program} {arg}' reads code from stdin, which can transform and print secrets past redaction. {WayOut}");
             if (arg.StartsWith("--", StringComparison.Ordinal))
             {
@@ -1165,7 +1226,7 @@ public static class Validation
                         // The value is the script file: attached, or the next argument. Options
                         // after it can still carry inline code (expect -f s.exp -c '...').
                         var script = j < arg.Length - 1 ? arg[(j + 1)..] : (i + 1 < args.Count ? args[i + 1] : "");
-                        if (StdinScripts.Contains(script) || script.Length == 0)
+                        if (IsStdinScript(script) || script.Length == 0)
                             return new(program, $"'{program} {arg} {script}' reads code from stdin, which can transform and print secrets past redaction. {WayOut}");
                         var later = args.Skip(i + (j < arg.Length - 1 ? 1 : 2))
                             .FirstOrDefault(a => a.StartsWith('-') && !a.StartsWith("--", StringComparison.Ordinal) && a.Skip(1).Any(syntax.Inline.Contains));

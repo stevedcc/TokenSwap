@@ -200,6 +200,9 @@ public class InlineCodeBlockTests
     // Review fix G1: the stdin paths compare case-insensitively.
     [InlineData("python3", "/dev/STDIN", "{{x}}")]
     [InlineData("perl", "/Dev/Fd/0", "{{x}}")]
+    // Review fix I1: a stdin path in any spelling the system resolves.
+    [InlineData("python3", "//dev//stdin", "{{x}}")]
+    [InlineData("awk", "-f", "/dev/./stdin")]
     public void InlineCodeOrBlockedProgram_IsRefused(params string[] argv)
     {
         Assert.NotNull(Validation.GetBlockedInvocation(argv));
@@ -595,6 +598,63 @@ public class InlineCodeBlockTests
         Assert.DoesNotContain("a\"b", blocked.Reason);
     }
 
+    // ── Review fix I1: one stdin check that resolves the path ─────────────────────────────────────────
+
+    [Theory]
+    [InlineData("-")]
+    [InlineData(" - ")]
+    [InlineData("/dev/stdin")]
+    [InlineData("/DEV/STDIN")]
+    [InlineData("/dev/fd/0")]
+    [InlineData("/proc/self/fd/0")]
+    [InlineData("/proc/thread-self/fd/0")]
+    [InlineData("/proc/1/fd/0")]
+    [InlineData("/proc/4242/fd/0")]
+    [InlineData("/dev/./stdin")]
+    [InlineData("/dev//stdin")]
+    [InlineData("//dev//stdin")]
+    [InlineData("/dev/../dev/stdin")]
+    [InlineData("/dev/fd/./0")]
+    [InlineData("//proc//self//fd//0")]
+    [InlineData("/proc/1/../self/fd/0")]
+    public void IsStdinScript_AStdinPathInAnySpelling_IsTrue(string word)
+    {
+        Assert.True(Validation.IsStdinScript(word));
+    }
+
+    [Theory]
+    [InlineData("./x.ps1")]
+    [InlineData("/opt/x.ps1")]
+    [InlineData("x.py")]
+    [InlineData("--")]
+    [InlineData("/dev/stdout")]
+    [InlineData("/dev/fd/1")]
+    [InlineData("/dev/stdin2")]
+    [InlineData("/proc/self/fd/01")]
+    [InlineData("/proc/1x/fd/0")]
+    [InlineData("/proc//fd/0")]
+    [InlineData("{{pw}}")]
+    [InlineData("")]
+    public void IsStdinScript_AnyOtherWord_IsFalse(string word)
+    {
+        Assert.False(Validation.IsStdinScript(word));
+    }
+
+    /// <summary>
+    /// I1: a relative path is resolved against the current folder, as the kernel does: enough <c>../</c> to climb from
+    /// the real current folder to <c>/</c>, then <c>dev/stdin</c>.
+    /// </summary>
+    [UnixFact("a relative path to /dev/stdin needs a Unix current folder")]
+    public void IsStdinScript_ARelativePathToStdin_IsTrue()
+    {
+        var depth = Environment.CurrentDirectory.Split('/', StringSplitOptions.RemoveEmptyEntries).Length;
+        var word = string.Concat(Enumerable.Repeat("../", depth)) + "dev/stdin";
+
+        Assert.True(Validation.IsStdinScript(word), word);
+        Assert.NotNull(Validation.GetBlockedInvocation(["pwsh", word, "{{pw}}"]));
+        Assert.False(Validation.IsStdinScript(string.Concat(Enumerable.Repeat("../", depth)) + "dev/stdout"));
+    }
+
     // ── Review fix G2: cmd without /c or /k is a shell reading stdin; deno run - reads its script from stdin ──
 
     [Theory]
@@ -626,6 +686,7 @@ public class InlineCodeBlockTests
     [Theory]
     [InlineData("deno", "run", "-", "{{pw}}")]
     [InlineData("deno", "run", "--allow-net", "/dev/stdin", "{{pw}}")]
+    [InlineData("deno", "run", "/dev/./stdin", "{{x}}")]
     public void DenoRun_ScriptFromStdin_IsRefused(params string[] argv)
     {
         var blocked = Validation.GetBlockedInvocation(argv);
@@ -679,6 +740,15 @@ public class InlineCodeBlockTests
     [InlineData(NoScriptKind, "pwsh")]
     [InlineData(NoScriptKind, "pwsh", "-NoProfile")]
     [InlineData(NoScriptKind, "pwsh", "-NoExit", "-File", "./x.ps1", "{{pw}}")]
+    // Review fix I1: a stdin path in any spelling the system resolves.
+    [InlineData(StdinKind, "pwsh", "-File", "/dev/./stdin", "{{pw}}")]
+    [InlineData(StdinKind, "pwsh", "/dev//stdin", "{{pw}}")]
+    [InlineData(StdinKind, "pwsh", "//dev//stdin", "{{pw}}")]
+    [InlineData(StdinKind, "pwsh", "-File", "/dev/../dev/stdin", "{{pw}}")]
+    [InlineData(StdinKind, "pwsh", "-f", "/dev/fd/./0", "{{pw}}")]
+    [InlineData(StdinKind, "pwsh", "/proc/thread-self/fd/0", "{{pw}}")]
+    [InlineData(StdinKind, "pwsh", "/proc/1/fd/0", "{{pw}}")]
+    [InlineData(StdinKind, "pwsh", "//proc//self//fd//0", "{{pw}}")]
     [InlineData(NoScriptKind, "pwsh", "-noe", "./x.ps1", "{{pw}}")]
     [InlineData(NoScriptKind, "pwsh", "-File")]
     [InlineData(NoScriptKind, "pwsh.exe.", "-ExecutionPolicy", "Bypass")]
