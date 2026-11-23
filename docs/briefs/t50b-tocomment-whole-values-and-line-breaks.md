@@ -30,19 +30,23 @@ Line numbers are at 3e22bcb; find anchors by content if they drifted.
    | `RedactTests.ToComment_YamlFlowMapping_UnquotedValueAdjacentToComma` | replaced (the closing `}` lands in the comment) | content unchanged |
    | `RedactTests.ToComment_YamlFlowMapping_DoubleQuotedValueAdjacentToComma` | replaced (same) | content unchanged |
    | `RedactTests.ToComment_YamlFlowSequence_ValueAdjacentToBracket` | replaced (`]` in the comment) | content unchanged |
-   | `RedactBehaviourPinTests.OverlappingSecrets_TheOrdinallySmallerTextWins` (tocomment half) | `k: foo ""  # tswap: s2` | unchanged, no change (engine and oracle, through `AssertToComment`) |
-   | `RedactBehaviourPinTests.EqualLengthTies_DecidedByText_NotPosition` (tocomment half) | `k: x ""  # tswap: z-abz-secret` | unchanged, no change (the same) |
+   | `RedactBehaviourPinTests.OverlappingSecrets_TheOrdinallySmallerTextWins` (tocomment half) | `AssertToComment("k: foo \"\"  # tswap: s2", "k: foo bar baz", db, new LineDiff(…))` | `AssertToComment("k: foo bar baz", "k: foo bar baz", db)` (no change; `foo bar` fails rule (b), `bar baz` rule (a)), plus `Redact.ToCommentReport("k: foo bar baz", db).Skipped` is `[(1, 1, "s1"), (1, 1, "s2")]` |
+   | `RedactBehaviourPinTests.EqualLengthTies_DecidedByText_NotPosition` (tocomment half) | `AssertToComment("k: x \"\"  # tswap: z-abz-secret", "k: x ab z", spaced, new LineDiff(…))` | `AssertToComment("k: x ab z", "k: x ab z", spaced)`, plus `Skipped` `[(1, 1, "a-xab-secret"), (1, 1, "z-abz-secret")]` |
    | `RedactEngineTests.ToComment_AdjacentSecrets_UseOriginalNeighbours` (lines 69-70, oracle and engine) | `k: ""  # tswap: b""  # tswap: a` / `k: beta2.""  # tswap: a` | `k: beta2.alpha12` for both |
-   | `RedactEngineTests.ToComment_SecretInsideAnInsertedMarker_NotReplaced` (line 58, oracle) | `k: ""  # ""  # tswap: s2: s1` | `k: ""  # tswap: s1` |
-   | `ToCommentDryRunPinTests.DryRun_ReportsRedactedBeforeLines_AndLeavesTheFile` | `+ db: ""  # tswap: db  # note ""  # tswap: api` | `+ db: ""  # tswap: db  # note [REDACTED: api]`, then the Task 1 warning for line 1 and `'api'` before the summary |
+   | `RedactEngineTests.ToComment_SecretInsideAnInsertedMarker_NotReplaced` (line 59, oracle) | `k: ""  # ""  # tswap: s2: s1` | `k: ""  # tswap: s1` |
+   | `ToCommentDryRunPinTests.DryRun_ReportsRedactedBeforeLines_AndLeavesTheFile` | `+ db: ""  # tswap: db  # note ""  # tswap: api` | `+ db: ""  # tswap: db  # note [REDACTED: api]`, then the full R1 warning line for line 1 and `'api'` (exact text) before the summary |
    | `ToCommentBlockScalarTests.QuotedPipe_NotABlock` | `    ""  # tswap: pem` (a marker `apply` can never fill: nothing before it) | content unchanged, no change, and `ToCommentReport(…).Skipped` is `[(2, 2, "pem")]`; its comment says what it pins now |
 
    The comments of the changed `RedactEngineTests` lines say what the old engine did ("Before T50: …").
-2. **The oracle keeps comparing.** `Engine_MatchesOracle_OnRandomCorpus` keeps its tocomment comparison and its
-   `tocomment-hits` counter; instead the frozen oracle gets T50b's rules (Task 1 and Task 3 say exactly what), an
-   owner-sanctioned rule change to an otherwise frozen file. If the fixed seed now gives 20 or fewer tocomment hits
-   (the test asserts more than 20), or the corpus shows any engine/oracle difference, stop and report; don't change the
-   seed or the generator.
+2. **The oracle keeps comparing.** `Engine_MatchesOracle_OnRandomCorpus` keeps its tocomment comparison; instead the
+   frozen oracle gets T50b's rules (Task 1 and Task 3 say exactly what), an owner-sanctioned rule change to an otherwise
+   frozen file. Pre-decided so the corpus can't block the brief: the rule makes replacements rare in the corpus (most
+   placements are followed by more text), so the `tocomment-hits` counter now counts rounds in which the engine **found
+   an occurrence**, replaced or skipped (`ToCommentReport(…).Changes.Count + Skipped.Count > 0`, computed with the
+   internal facade), and keeps the common `> 20` bar; every placement with `[-\w]` boundaries is such an occurrence, so
+   this counts at least the rounds today's counter counts. The number of rounds with a replacement is not asserted (the
+   Task 1 and Task 3 tables compare the oracle on replaced rows). This counter change is sanctioned. If the corpus shows
+   any engine/oracle difference, stop and report; don't change the seed or the generator.
 3. **Found but not replaced:** exit 0, one warning per occurrence, ending with `File unchanged.` when nothing was replaced
    (as T22), never `No secrets found.`.
 4. **One multi-line value counts as one change** in the summary.
@@ -76,40 +80,58 @@ consumed marker are part of it. It is replaced only when all of these hold, **ev
 file's text, never text `tocomment` has inserted):
 
 - **(a) Before it** (from the line's start to the occurrence), scanned left to right with quote regions: `"` opens a
-  region closed by the next `"` not preceded by `\`; `'` opens one closed by the next `'` that isn't part of `''`. The
-  text has no `#` outside a region, ends outside every region, and, with trailing spaces and tabs removed, is not empty
-  and ends in `:` or `=`.
+  region closed by the next `"` not preceded by `\`; `'` opens one closed by the next `'` that isn't part of `''`; a
+  quote of the other kind inside an open region is ordinary text; YAML's `\\` before a closing `"` is not modelled (the
+  region stays open, so the rule fails: fail closed). The text has no `#` outside a region, ends outside every region,
+  and, with trailing spaces and tabs removed, is not empty and ends in `:` or `=`.
 - **(a′) On an `=` line** (the text before ends in `=`) the occurrence must be the **plain** form of the value (not its
   whitespace-stripped, base64 or base64url form) and hold no control character (`Apply.HasControlCharacter`): only then
   does `apply` write it back on a `KEY=` line. On a `:` line every form qualifies (`apply` writes the plain value
   double-quoted and escaped).
-- **(b) After it** is empty, only spaces and tabs, or spaces/tabs followed by `#` (a YAML comment).
+- **(b) After it** is empty, only spaces and tabs, or spaces/tabs followed by `#` (a YAML comment). A consumed
+  `# tswap:` marker counts only when at least one space or tab stands before its `#` (YAML reads `val# tswap: x` as one
+  plain scalar), so `k: val-12345# tswap: note` is rejected (fail closed; `AnchoredPatterns` itself doesn't change).
 
-These are exactly the shapes `apply` fills and decodes back to the stored value, so `tocomment` never writes a marker that
-loses the secret. Accepted consequences: `namespace: authentik` **is** replaced (a whole value can't be told from a
+(a), (a′) and (b) admit exactly the shapes that `apply` fills and decodes back to the stored value; (b) also keeps a
+marker out of a flow collection, where `apply` would fill it but the marker's `#` turns the closing `}` or `]` into
+comment text. So `tocomment` never writes a marker that loses the secret or breaks the line. Accepted consequences: `namespace: authentik` **is** replaced (a whole value can't be told from a
 credential by its shape; usernames belong in fields, #311); `apply` writes the value double-quoted, so the file's YAML
 meaning can change where it wasn't a plain mapping value before (`user:authentik` is one plain scalar in YAML, and a
 double-quoted scalar broken over lines folds its line break); `k#1: v` is left (a `#` outside quotes, fail closed).
 
-An occurrence the rule rejects stays in the file and is reported as a `SkippedValue`. The command prints one line per
-skipped occurrence (two occurrences of one token on one line give two lines), after T22's warnings, ordered by first line,
-then last line, then token ordinally; `{where}` is `line {n}`, or `lines {a}-{b}` for a value over several lines;
-`{token}` is `name` or `name:previous`. This is the only new warning text:
+**Rejected occurrences.** In the engine, every attempt `SelectToComment` makes whose pattern matches is an occurrence;
+one the rule rejects is not replaced, and it reserves its span against later attempts **of the same entry** exactly as
+a taken one does (so the bare attempt at `s` after a rejected quoted attempt at `s − 1` is not tried, as `Regex.Replace`
+in the oracle never revisits a match it kept); it doesn't reserve against other entries, so a lower-priority entry can
+still take an overlapping span that passes the rule. Each rejected occurrence stays in the file and is reported as a
+`SkippedValue`, unless a replacement overlaps its span (its text is then gone). One report per occurrence: two
+occurrences of one token on one line give two lines.
+
+The command prints them after T22's warnings, ordered by first line, then last line, then token ordinally; `{where}` is
+`line {n}`, or `lines {a}-{b}` for a value over several lines; `{token}` is `name` or `name:previous`. This is the only
+new warning, with exactly one of two reasons:
 
 ```
-Warning: {where}: the value of '{token}' (or an encoded form of it) is not a whole value that apply can fill back exactly ('key: value', or 'KEY=value' without control characters), so it was not replaced. If it is the secret there, move it out by hand.
+Warning: {where}: the value of '{token}' (or an encoded form of it) was left in place: {reason}. If it is the secret there, move it out by hand.
 ```
+
+- `{reason}` R1, for an occurrence rule (a), (a′) or (b) rejects: `it is not a whole value that apply fills back ('key: value', or 'KEY=value' without control characters)`
+- `{reason}` R2, for a plain occurrence on a line T22 leaves whole (Task 1) and a multi-line value inside block-scalar
+  content (Task 3): `it is inside a YAML block scalar`
 
 ## Task 1: whole values only (#394)
 
 **Engine.** `SelectToComment`'s occurrences go through the rule; the rejected ones are not replaced and are collected.
 On a line T22 leaves whole (block content with an encoded form), T22 decides the line as today, and every plain
-occurrence on it that T22 doesn't report is also reported as a `SkippedValue` (so none is left silently).
+occurrence on it is also reported as a `SkippedValue` with reason R2, one per occurrence, even when T22 reports the same
+token for an encoded form on that line (so none is left silently). `SkippedValue` therefore carries the reason
+(`SkippedReason.NotWholeValue` or `SkippedReason.InBlockScalar`, an enum beside it).
 
 **API.** In `TswapCore/SecretProcessor.cs`:
 
 ```csharp
-public sealed record SkippedValue(int FirstLine, int LastLine, string Token);
+public enum SkippedReason { NotWholeValue, InBlockScalar }
+public sealed record SkippedValue(int FirstLine, int LastLine, string Token, SkippedReason Reason);
 public sealed record ToCommentReport(string Content, IReadOnlyList<LineDiff> Changes,
     IReadOnlyList<UnreplacedLine> Unreplaced, IReadOnlyList<SkippedValue> Skipped);
 ```
@@ -135,7 +157,8 @@ whole-value rule and line-break pass (owner decision 2026-11-23)".
 
 Tests, engine level (`Redact.ToCommentReport(content, db)`; each row also asserts that the oracle's `Content` and
 `Changes` equal the engine's, and runs Task 2's guard once it exists). One secret `app-user` = `authentik`, and for rows 24-25
-`cr` = `line-one\rline-two` (a lone CR inside a line):
+`cr` = `line-one\rline-two` (a lone CR inside a line), for row 26 `v` = `val-12345`. `Skipped` tuples here and in Task 3
+leave out the reason, which is R1 (`NotWholeValue`) unless the row says R2:
 
 | # | Line | `Content` | `Skipped` |
 |---|---|---|---|
@@ -164,6 +187,7 @@ Tests, engine level (`Redact.ToCommentReport(content, db)`; each row also assert
 | 23 | `token: YXV0aGVudGlr` | `token: ""  # tswap: app-user` | empty |
 | 24 | `TOKEN=line-one\rline-two` | unchanged | `(1, 1, "cr")` |
 | 25 | `token: line-one\rline-two` | `token: ""  # tswap: cr` | empty |
+| 26 | `k: val-12345# tswap: note` | unchanged | `(1, 1, "v")` |
 
 Two more engine tests: (i) `a-1` = `alpha-value-1`, `b-2` = `beta-value-22`; `k: alpha-value-1  # beta-value-22` gives
 `k: ""  # tswap: a-1  # beta-value-22` and `Skipped` `[(1, 1, "b-2")]`, the oracle the same content (the gate on the
@@ -185,7 +209,8 @@ Command tests (`TswapTests/CommandTests.cs`, beside the redact tests, `RunTswap`
   ```
 
   `tocomment --dry-run`: exit 0; stderr (LF-normalised) lists `  line 3:` and `  line 8:` with their redacted `-` and `+`
-  texts, then the warning for line 6 and the one for line 7 (both `'app-user'`), and ends
+  texts, then exactly two full warning lines, the template with `{where}` = `line 6`, `'app-user'` and R1, then the same
+  for `line 7`, and ends
   `(dry run) 2 line(s) would be modified.`; it doesn't contain `authentik`. Then the live run: lines 3 and 8 become
   markers, lines 1-2 and 4-7 are byte for byte as before. (The manifest lives only here, not in the T46 corpus, which
   holds values, not files; say so in the commit.)
@@ -193,10 +218,11 @@ Command tests (`TswapTests/CommandTests.cs`, beside the redact tests, `RunTswap`
   the file `x: v1-value-aaaa\nother: 1\ny: v2-value-bbbb\n`; `tocomment --dry-run` exits 0 and stderr holds
   `  line 1:\n  - x: [REDACTED: v-1]\n` and `  line 3:\n  - y: [REDACTED: v-2]\n` (LF-normalised).
 
-Break-it-once (five runs): (a) make rules (a), (a′) and (b) always true: rows 2, 12, 13 and the manifest test must fail;
+Break-it-once (six runs): (a) make rules (a), (a′) and (b) always true: rows 2, 12, 13 and the manifest test must fail;
 (b) drop (a′)'s control-character and plain-form conditions: rows 22 and 24 must fail; (c) print the `+` text unredacted:
 `ToCommentDryRunPinTests` must fail; (d) put the join back: the listing test must fail; (e) take the rule out of the oracle
-only: row 2's oracle comparison must fail.
+only: row 2's oracle comparison must fail; (f) drop the whitespace requirement before a consumed marker: row 26 must
+fail.
 
 ## Task 2: the round-trip guard (owner decision 5)
 
@@ -211,10 +237,12 @@ internal static class ToCommentRoundTrip
 ```
 
 For each change that is not a `BlockLineDiff`, whose `After` is not empty and holds `""  # tswap: {token}`
-(`{token}` matched as `[a-zA-Z0-9_-]+(?::previous)?`): run `Apply.ApplySecrets(change.After, db, warnings)` on that one
-line (so markers elsewhere in the file can't interfere); assert it doesn't throw and `warnings` holds no
-`value appears already populated`; take the prefix `After[..After.IndexOf("\"\"  # tswap: ")]` and assert
-`DoubleQuotedTestDecoder.Decode(ApplyMultiLineTests.QuotedPart(filled, prefix + "\""))` equals the token's value in `db`
+(`{token}` matched as `[a-zA-Z0-9_-]+(?::previous)?`, the first such marker: the one `tocomment` wrote): take
+`prefix = After[..After.IndexOf("\"\"  # tswap: ")]` and run `Apply.ApplySecrets(prefix + "\"\"  # tswap: " + token,
+db, warnings)`, that marker alone without the rest of the line (so kept comment text shaped like a marker, or markers
+elsewhere in the file, can't interfere); assert it doesn't throw and `warnings` holds no `value appears already
+populated`; and assert `DoubleQuotedTestDecoder.Decode(ApplyMultiLineTests.QuotedPart(filled, prefix + "\""))` equals
+the token's value in `db`
 (`Secrets[name].Value`, or `.PreviousValue` for `name:previous`), exactly. It compares with the vault's value, not with the
 file's text: an encoded occurrence (`a: Pz8+`) is filled with the plain value (`??>`) by design.
 
@@ -232,7 +260,9 @@ ToComment_UnquotedValue_ReplacedWithMarker` must fail; and, as a one-off check, 
 
 ## Task 3: values with a line break (#399)
 
-**Finding them.** Before the line loop, `ToCommentReport` scans the **raw** content with T50a's line-ending views and
+**Finding them.** Before the line loop, `ToCommentReport` scans the **raw** content with T50a's line-ending views (its
+private helper in `SecretMatcher`; after T50a's merge, check rows 2-4 against that helper's real behaviour and stop if
+it differs from T50a's views section) and
 keeps the hits whose raw span holds a `\n` (only plain forms can), selected as `redact` selects (priority order, no
 overlap; short-value hits need `TokenBoundary.IsDelimited` on the raw text). Lines are numbered by `\n` in the raw text;
 `a` is the line where the occurrence starts and `b` where it ends. An opening quote right before it and the matching
@@ -254,8 +284,8 @@ occurrence is decided when the line loop reaches line `a`:
   don't go through the line path, and continuation-line removal doesn't run after it. Every occurrence the line path's
   finder sees on line `a`'s original text before the span or on line `b`'s after it is reported as a `SkippedValue` on its
   own line (rules (a) and (b) can't hold there: one is followed by the multi-line value, the other sits in a comment).
-- **Left** otherwise: reported as `SkippedValue(a, b, token)`, and lines `a`..`b` go through the line path as any other
-  lines.
+- **Left** otherwise: reported as `SkippedValue(a, b, token, reason)`, with R2 when any of lines `a`..`b` is
+  block-scalar content and R1 otherwise, and lines `a`..`b` go through the line path as any other lines.
 
 **Command.** A `MultiLineDiff` prints as
 
@@ -294,7 +324,7 @@ the Task 2 guard):
 | 11 | `s` as row 1, `p` = `xyz-12345` | `password: xyz-12345 token: line-one\nline-two\n` | `password: xyz-12345 token: ""  # tswap: s\n` | `MultiLineDiff(1, 2, …)` | `(1, 1, "p")` |
 | 12 | `s` as row 1, `t` = `tee-cmd-x` | `cmd: echo line-one\nline-two \| tee-cmd-x\n` | unchanged | empty | `(1, 2, "s")`, `(2, 2, "t")` |
 | 13 | `s` as row 1, `y` = `y-value-123` | `token: line-one\nline-two  # key: y-value-123\n` | `token: ""  # tswap: s  # key: y-value-123\n` | `MultiLineDiff(1, 2, …)` | `(2, 2, "y")` |
-| 14 | `line-one\n  line-two` | `script: \|\n  echo line-one\n  line-two\n` | unchanged | empty | `(2, 3, "s")` |
+| 14 | `line-one\n  line-two` | `script: \|\n  echo line-one\n  line-two\n` | unchanged | empty | `(2, 3, "s")`, R2 |
 | 15 | `pem` = `line-one\nline-two`, `frag` = `line-one\n  line-two` | `key: \|\n  line-one\n  line-two\n` | `key: ""  # tswap: pem\n` | the T20 adoption's changes | empty |
 
 Command tests:
@@ -308,7 +338,7 @@ Command tests:
   holds an 8-character window of it.
 - `ToCommentBlockScalarTests`, next to `NoSecrets_SaysSoExactly`: `line-one\nline-two` ingested as `s`, the file
   `cmd: echo line-one\nline-two | tee x\n`; `tocomment` exits 0; stderr (LF-normalised) is exactly the warning with
-  `{where}` = `lines 1-2` and `'s'`, then `File unchanged.\n`; the file is byte for byte as before.
+  `{where}` = `lines 1-2`, `'s'` and R1, then `File unchanged.\n`; the file is byte for byte as before.
 
 Break-it-once (three runs): (a) skip the multi-line pass: the `TocommentDryrun` cases for `lf-inside` and `crlf-inside`
 must fail; (b) admit `=` for a value with a line break: row 9 must fail; (c) don't report the occurrences in the kept
@@ -316,17 +346,23 @@ text: rows 11 and 13 must fail.
 
 ## Task 4: docs
 
-- `docs/commands.md`, the `tocomment` paragraph (from line 105): `--dry-run` redacts its `+` texts as well as its `-`
-  texts; `tocomment` replaces a value only where `apply` can fill it back exactly (`key: value`, or `KEY=value` holding no
-  control character; nothing but a comment after it; no `#` before it outside quotes), with `namespace: authentik`
+- `docs/commands.md`, the "Other changes in 0.3" paragraph (line 107): replace "`tocomment --dry-run` redacts its
+  "before" lines in one pass, so a value spanning two changed lines is masked there too" with: `--dry-run` redacts each
+  changed line's "before" and "after" text on its own, and lists a replaced multi-line value as `[value over N lines]`,
+  never its text.
+- `docs/commands.md`, the `tocomment` paragraph (from line 112): `tocomment` replaces a value only where `apply` fills it
+  back, double-quoted (`key: value`, or `KEY=value` holding no control character; nothing but a `#` comment after it,
+  with whitespace before the `#`; no `#` before it outside quotes), with `namespace: authentik`
   replaced and `- authentik.sources…`, a command line, a URL, a comment and a flow collection not, and warns, naming the
   line and the secret, for each occurrence it leaves; a value with a line break is replaced when it is such a value after
   `key:` (one change, shown as `[value over N lines]`), and warned about otherwise. Say that `apply` writes the value
   double-quoted, so the YAML meaning of `user:authentik` or of a quoted scalar broken over lines can change. Replace "A
   plain value inside a block is still replaced by a marker, whose `#` then becomes part of the block's text: right for
   shell scripts and YAML kept in a block, not for JSON" with the same rule applied inside a block (`export TOKEN=…` is
-  replaced, `run --user …` is not), keeping one sentence that markers are not for JSON. Don't claim dotenv needs
-  whitespace before `#`.
+  replaced, `run --user …` is not), keeping one sentence that markers are not for JSON. On `KEY=` lines say only what
+  `apply` does: it writes `KEY="value"` and keeps the rest of the line; readers that take quotes or a ` # …` literally
+  (`docker run --env-file`, systemd's `EnvironmentFile`) see them as part of the value, as for any marker on such a line
+  since T20. Don't claim dotenv needs whitespace before `#`, or that ` # …` is a comment on a `KEY=` line.
 - `docs/security-model.md` line 338: `tocomment` replaces a value only between `[-\w]` boundaries and, since 0.3.3, only
   where `apply` can fill it back.
 - `TswapCore/Prompt.cs` and `ToCommentCommand.Description` stay as they are.
