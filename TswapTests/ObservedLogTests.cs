@@ -67,6 +67,10 @@ public class ObservedLogTests
         const int linesEach = 5000;
         var log = new ObservedLog();
         var errors = new ConcurrentQueue<Exception>();
+        var expected = Enumerable.Range(0, writers)
+            .SelectMany(i => Enumerable.Range(0, linesEach).Select(j => $"w{i}-{j}"))
+            .ToHashSet();
+        var torn = new ConcurrentQueue<string>();
         var waited = Task.Run(() => log.WaitForAsync("w3-4999"));
         using var start = new Barrier(writers + 1);
         var writersDone = 0;
@@ -104,7 +108,14 @@ public class ObservedLogTests
                 while (Volatile.Read(ref writersDone) < writers)
                 {
                     var before = Volatile.Read(ref written);
-                    _ = log.ToString();
+                    // Each snapshot holds whole lines only: every WriteLine lands as one unit, so the text ends with
+                    // a line break and every line is one a writer wrote.
+                    var snapshot = log.ToString();
+                    if (snapshot.Length > 0 && !snapshot.EndsWith(log.NewLine, StringComparison.Ordinal))
+                        torn.Enqueue($"snapshot ends mid-line: ...{snapshot[^Math.Min(20, snapshot.Length)..]}");
+                    foreach (var line in snapshot.Split(log.NewLine, StringSplitOptions.RemoveEmptyEntries))
+                        if (!expected.Contains(line))
+                            torn.Enqueue(line);
                     while (Volatile.Read(ref written) - before < 100 && Volatile.Read(ref writersDone) < writers)
                         spin.SpinOnce();
                 }
@@ -121,9 +132,7 @@ public class ObservedLogTests
         reader.Join();
 
         Assert.Empty(errors);
-        var expected = Enumerable.Range(0, writers)
-            .SelectMany(i => Enumerable.Range(0, linesEach).Select(j => $"w{i}-{j}"))
-            .ToHashSet();
+        Assert.Empty(torn);
         var lines = log.ToString().Split(log.NewLine, StringSplitOptions.RemoveEmptyEntries);
         Assert.Equal(expected.Count, lines.Length);
         Assert.Equal(expected, lines.ToHashSet());
