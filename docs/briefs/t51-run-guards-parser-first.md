@@ -312,3 +312,30 @@ Don't change `TswapCore/Prompt.cs` (its hash is pinned).
   any test asserting the old text exactly changes with it (a rule change the controller ruled: the wording must match the widened rule; name each in the commit, and stop and list them if there are more than three).
 - **A10 (MiMo M6).** Restate the standing rule: no **new** reason interpolates a command word, except the existing
   `Wrapped` inner-program prefix (`'wsl' runs '<program>': …`).
+
+## Amendments (round 2; GLM ready, MiMo ready after these)
+
+- **A11 (MiMo C1): deno's walk skips exactly what `resolve_subcommand` skips.** Task 3 step 2 also skips the word after a
+  bare `--env-file`, `--help` and `-h` (as well as `--log-level` and bare `-L`); the `=` forms skip nothing. A5's
+  over-refusal list stays. Rows refused: `deno --env-file x eval 'code {{x}}'`, `deno --env-file x repl`,
+  `deno -h x eval 'code {{x}}'`; allowed: `deno --env-file x run app.ts {{x}}`, `deno --env-file=x run app.ts {{x}}`.
+  A4's break-it-once also shows the bare `--env-file` row failing. A5's sentence "matches what deno runs" is replaced by
+  "matches `resolve_subcommand`".
+- **A12 (both): A9 names five reasons.** The widened rule triggers the reasons near Validation.cs 1157, 1203, 1230, 698
+  (awk `-f`) and 733 (deno rule 1). All five say "stdin or the terminal" ("reads its program from stdin or the terminal"
+  for awk). Task 3's "unchanged text" for the deno rule-1 reason is replaced by this. The test assertions that change
+  with them (`InlineCodeBlockTests`' `ExpectedReason` stdin arm near line 445, the `StdinKind`/`NoScriptKind` constants,
+  `DenoRun_ScriptFromStdin_IsRefused`'s expected text) are sanctioned by this amendment; name each in the commit. A9's
+  stop condition counts tests asserting an old text exactly: stop if any test beyond those named here would change.
+- **A13 (MiMo M3, GLM M3): Task 2 rule 3 is A1's algorithm.** Replace rule 3's body text with A1's: both separators,
+  drop an `X:` drive prefix, last component, cut at the first `.` or `:`, then trim trailing dots and spaces, then compare
+  ignoring case with `CON`, `CONIN$`, `CONOUT$` (and the `\\.\` prefix rule as before). Docs name all three names (GLM M2).
+- **A14 (MiMo M1): A8's example.** Replace `python3 -W /dev/stderr tool.py` (allowed: `-W` takes the next word) with
+  `python3 --check-hash-based-pycs /dev/stderr tool.py`; and add: rule 2 also over-refuses a `/dev` or `/proc` word at an
+  interpreter's script position (`python3 /proc/self/root/tmp/tool.py`).
+- **A15 (MiMo M4): broker row.** In `TswapTests/BrokerTemplateConfigTests.cs` (or the test class that already covers
+  `BrokerTemplatePolicy`'s argv check), with single-brace placeholders: `wsl ./deploy.sh {arg}` refused,
+  `wsl -e ./deploy.sh {arg}` allowed.
+- **A16 (MiMo M5): Task 1's break-it-once** names all four rows (python3, pwsh, deno, wsl) as failing.
+- **A17 (MiMo M6): preamble.** "No existing test's assertion changes, except the two rows Task 4 names and the
+  reason-text assertions A12 lists."
