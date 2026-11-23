@@ -1,7 +1,7 @@
 # Design: Unicode normalisation across machines (masking and the vault password)
 
 Issue: https://github.com/stevedcc/TokenSwap/issues/400 (milestone 0.3.3). Date: 2026-11-23. Base: origin/main 666336c.
-Status: **draft for review**, not yet a brief. Owner decision (2026-11-23): both parts ship in 0.3.3, and this
+Status: **decided 2026-11-23** (owner answers below); built by brief T54 (`docs/briefs/t54-unicode-normalisation.md`). Owner decision (2026-11-23): both parts ship in 0.3.3, and this
 design is reviewed before anything is built. Marked **(owner)** where the owner decided, **(my call)** where the
 designer did. Every claim about the code cites `file:line` at 666336c.
 
@@ -158,7 +158,7 @@ Fingerprint the alternative forms at write time, as further variants.
 - **The new build maps each new kind to its base kind** wherever the kind is used: the scanner's classes
   (`FingerprintScanner.cs:150-171`; an NFD plain entry pairs with the NFD stripped entry), labels
   (`TswapCore/RedactProcessor.cs:16-21`), `SecretProcessor.TypeOf`, `tocomment`'s "encoded" test
-  (`SecretMatcher.cs:159-160`) and whole-value adoption (`SecretMatcher.cs:169-186`, see owner question 2). The
+  (`SecretMatcher.cs:159-160`) and whole-value adoption (`SecretMatcher.cs:169-186`, see owner decision 2). The
   short-value rule reads the first `Plain` entry, the stored form's (`TswapCore/Fingerprints/TokenBoundary.cs:83-90`), and
   stays as it is: a value is short or long in every form, as T30 wants.
 - **Plaintext paths get the same forms.** `Redaction.Variants` adds the NFC and NFD forms of each written form, before
@@ -257,7 +257,7 @@ practice, at the price of the most delicate code in the scanner. Revisit B if mi
 
 Docs: `docs/security-model.md:763-768` loses its "Unicode forms" limit for version 2 records and states what is left
 (mixed forms, compatibility forms). The release notes tell users with non-ASCII secrets to run
-`sudo tswap vault reindex` once on one machine (owner question 3).
+`sudo tswap vault reindex` once on one machine (owner decision 3).
 
 ## Part 2: text passwords and the KDF
 
@@ -294,7 +294,7 @@ the vault password (all callers of `Stretch`: `VaultPasswordChoice.cs:230,258`, 
   password is one candidate, one TPM authorisation. That stays an anti-goal for any future change.
 - **Left: Unicode-version drift.** A password containing a character newer than one machine's Unicode library is
   normalised differently there (facts above). Only a fallback to the raw typed bytes could open such a slot, and for a
-  TPM slot that costs a second authorisation, counted towards the lockout, whenever the first fails. Owner question 1.
+  TPM slot that costs a second authorisation, counted towards the lockout, whenever the first fails. Owner decision 1: a documented limit, no second try.
 - **Left: a lone surrogate.** `ReadPassword` appends a key's `KeyChar` and backspace removes one UTF-16 unit
   (`TswapCli/SystemConsole.cs:129,134`). Typing a character outside the BMP and deleting it leaves half a surrogate pair,
   and `Stretch` then throws .NET's `ArgumentException` (`TswapCli/CliRunner.cs:28` prints its message). No vault can have such
@@ -360,7 +360,7 @@ with `VaultPasswordParams` at the decoder's floor, as `StretchedPasswordTests` d
 
 - **Part 1, per path**, with `nfc-e-acute` from T46's corpus, a value stored as NFD, and U+0958 (neither form):
   - each value's other spellings masked by `redact`, by `run` (scanner, and the token path through
-    `Redaction.Variants`), by `tocomment` (as decided in question 2), by the field guard rail, and by
+    `Redaction.Variants`), by `tocomment` (owner decision 2: replaced), by the field guard rail, and by
     `BrokerRedactorTests`;
   - base64 of the NFD bytes masked;
   - `EvilValuesTests.cs:506,524` turn from "recorded" into assertions.
@@ -392,18 +392,14 @@ Compatibility normalisation, case and look-alikes; escapes no path matches today
 views of scanned text (approach B, revisit if mixed forms appear); Windows' own FIDO2 PIN dialog; classic vaults; the
 recovery key.
 
-## Open questions for the owner
+## Owner decisions (2026-11-23, were the open questions)
 
-1. **Vault password and Unicode-version drift.** A password with a character newer than one machine's Unicode library
-   can stretch differently on that machine. Accept this as a documented limit (recommended: it needs a character
-   assigned in the last Unicode versions, typed into a password)? Or add a raw-bytes second try when the typed
-   password isn't NFC, which costs a second TPM lockout count on every failed attempt in that case?
-2. **`tocomment` and the other spelling.** When a file holds a value in the other Unicode form, `tocomment` would
-   replace it with a marker, and `apply`/`run` later fill in the *stored* form, so the file's bytes change. That is what
-   happens to base64 occurrences outside YAML block scalars today. Replace it (recommended: the secret leaves the
-   file), or leave the line and report it, as T22 does for encoded forms in block scalars?
-3. **Reindex after the upgrade.** Vaults with non-ASCII values print the "older variant set" note until
-   `sudo tswap vault reindex` runs once. Is the note plus a release-notes line enough, or should 0.3.3 also mention it
-   once at the first unlock after the upgrade?
-4. **FIDO2 PIN in this work.** Include the NFC PIN change in the 0.3.3 brief with the rest (recommended, it is small),
-   or file it as its own issue?
+1. **Unicode-version drift of the vault password: a documented limit (owner).** A password holding a character that
+   an older Unicode library normalises differently may not open on that machine. No second try with the raw bytes, so
+   one typed password stays one TPM authorisation.
+2. **`tocomment` replaces a value found in its other spelling with a marker (owner).** `apply`/`run` later fill in the
+   stored form, so the file's bytes change to the stored spelling, as an encoded occurrence is filled with the plain
+   value today.
+3. **Reindex notice (controller):** the existing "older variant set" note plus a release-notes line are enough. No
+   extra notice at the first unlock.
+4. **FIDO2 PIN (owner):** sent in NFC, with no automatic second try, in this brief (T54).
