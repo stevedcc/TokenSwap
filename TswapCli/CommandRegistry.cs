@@ -54,7 +54,7 @@ public static class CommandRegistry
     /// <summary>
     /// Brief T52 (#403): whether <paramref name="args"/> run a command that prints secret values
     /// (<see cref="ICliCommand.PrintsSecretValues"/>), found as <see cref="Dispatch"/> finds it: the global flags
-    /// skipped, the name lowercased. False for no command or an unknown one.
+    /// skipped, the name lowercased. False for no command or an unknown one. <c>--version</c> is not mapped here; it prints no value.
     /// </summary>
     public static bool PrintsSecretValues(string[] args)
     {

@@ -73,10 +73,10 @@ public sealed class SecretValueOutputTests
         }
     }
 
-    /// <summary>Every member throws except <see cref="IsWindows"/> when <paramref name="windowsAllowed"/>.</summary>
-    private sealed class ThrowingHost(bool windowsAllowed) : IConsoleEncodingHost
+    /// <summary>Every member throws except <see cref="IsWindows"/> when <paramref name="isWindowsReadable"/>.</summary>
+    private sealed class ThrowingHost(bool isWindowsReadable) : IConsoleEncodingHost
     {
-        public bool IsWindows => windowsAllowed ? false : throw new InvalidOperationException("IsWindows");
+        public bool IsWindows => isWindowsReadable ? false : throw new InvalidOperationException("IsWindows");
 
         public bool IsConsole(StandardStream stream) => throw new InvalidOperationException("IsConsole");
 
@@ -117,11 +117,11 @@ public sealed class SecretValueOutputTests
 
     [Fact]
     public void NotWindows_NoWriter_OnlyIsWindowsRead() =>
-        Assert.Null(ConsoleOutputEncoding.Utf8StdoutForSecretValues(new ThrowingHost(windowsAllowed: true), printsSecretValues: true));
+        Assert.Null(ConsoleOutputEncoding.Utf8StdoutForSecretValues(new ThrowingHost(isWindowsReadable: true), printsSecretValues: true));
 
     [Fact]
     public void NotAValuePrintingCommand_NoWriter_NoHostMemberRead() =>
-        Assert.Null(ConsoleOutputEncoding.Utf8StdoutForSecretValues(new ThrowingHost(windowsAllowed: false), printsSecretValues: false));
+        Assert.Null(ConsoleOutputEncoding.Utf8StdoutForSecretValues(new ThrowingHost(isWindowsReadable: false), printsSecretValues: false));
 
     /// <summary>
     /// Every corpus value with a character above U+007F comes out as its UTF-8 bytes and the newline, with no byte

@@ -2012,13 +2012,17 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     /// <summary>
     /// Brief T52 (#403), the docs line's proof: PowerShell (Windows PowerShell 5.1 and PowerShell 7) decodes a native
     /// program's output with <c>[Console]::OutputEncoding</c>, the OEM code page by default; with it set to UTF-8 first,
-    /// <c>$v = &amp; tswap get p1</c> holds the value exactly.
+    /// <c>$v = &amp; tswap get p1</c> holds the value exactly. It proves the documented PowerShell advice only, not
+    /// tswap's own switch: setting <c>[Console]::OutputEncoding</c> sets the code page of the console the shell shares
+    /// with tswap, so tswap writes UTF-8 here even without T52. The byte tests
+    /// (<see cref="Get_RedirectedStdout_IsUtf8_EveryNonAsciiCorpusValue_Windows"/>,
+    /// <see cref="Apply_RedirectedStdout_IsUtf8_Windows"/>) prove the switch.
     /// </summary>
     /// <remarks>
     /// <c>CreateNoWindow = false</c>: Windows PowerShell 5.1 (.NET Framework) raises an error setting
     /// <c>Console.OutputEncoding</c> without a console, and the documented case is a console window anyway.
-    /// Break-it-once (controller, Windows CI): remove the <c>[Console]::OutputEncoding</c> line from <c>capture.ps1</c>;
-    /// both shells must fail (the runner's 437). The <c>Program.cs</c> break above fails it too.
+    /// Break-it-once (controller, Windows CI 45195812049): removing the <c>[Console]::OutputEncoding</c> line from
+    /// <c>capture.ps1</c> failed both shells (the runner's 437).
     /// </remarks>
     [WindowsFact("Windows PowerShell 5.1 and the [Console]::OutputEncoding advice are about Windows consoles")]
     public void Get_CapturedInPowerShell_WithUtf8ConsoleEncoding_IsExact_Windows()
@@ -2048,8 +2052,8 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
             }
 
             var outFile = Path.Combine(_tempDir, $"t52-{Path.GetFileNameWithoutExtension(shell)}.txt");
-            // On a developer machine the shell may share the test host's console and leave its output code page at
-            // 65001; on CI each shell gets its own console.
+            // The shell and the tswap it starts share one console, on CI too (only the test host's is separate); on a
+            // developer machine that console may be the test host's, whose code page may already be 65001.
             var psi = new ProcessStartInfo
             {
                 FileName = shellPath,
