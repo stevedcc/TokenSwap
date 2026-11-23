@@ -154,3 +154,68 @@ python:3.12 app` and the same with `node:20` are not refused by the `{{@file}}` 
 has such a row already, it must still pass); the F11/F12 stream rows still refused. Break-it-once: cut at the first `:`
 again; the image-tag rows fail. Also F16 (minor): `StrictStdin`'s refusal message keeps its exact text (the brief fixes
 it), no change.
+
+## Round 4 (code re-review: GLM ready, MiMo two Important)
+
+### F17 (Important, MiMo I1 = GLM M1): trim before the stream gate
+In `WindowsFileName`, take the part before the first `:`, `TrimEnd('.', ' ')` it, and test **that** with
+`HasProgramExtension`; if it passes, the name becomes the trimmed head. Rows: `IsBatchTarget` true for `x.cmd.:s`,
+`x.cmd :s`, `x.cmd.::$DATA`; `InlineCodeOrBlockedProgram_IsRefused` for `pwsh.exe.:$DATA -c …` and `pwsh.exe ::$DATA -c …`;
+run row `["x.cmd.:s", "{{pw}}"]` refused; F15's image-tag rows still allowed. Break-it-once: test the untrimmed head
+again; the new rows fail.
+
+### F18 (Important, MiMo I2): an image tag that names an interpreter, behind a wrapper
+In the wrapper/subcommand walk only (`CheckWrapper` and `find -exec`'s inner check), a word whose last path component,
+with a trailing `:<tag>` removed, names a checked program (`python:3.12` → `python`, `node:20` → `node`,
+`mcr.microsoft.com/powershell:7.4` → `powershell`) is checked as that program with the words after it as its arguments.
+`GetFileTokenRefusal`'s data-word check stays as F15 has it. Rows: `docker run python:3.12 -c "print('{{pw}}')"`,
+`docker run node:20 -e "console.log('{{pw}}')"`, `docker run mcr.microsoft.com/powershell:7.4 -c "Write-Host {{pw}}"`
+refused; `docker run python:3.12 app.py {{pw}}` and F15's `docker run -v {{@cfg.yaml}}:/c.yaml python:3.12 app` allowed.
+`docs/security-model.md`: an image whose entrypoint is an interpreter but whose name doesn't say so still runs
+unchecked. Break-it-once: drop the tag strip; the three refused rows fail.
+
+### F19 (Minor, MiMo M1): `wsl` is a wrapper
+Add `wsl` to `Validation.Wrappers` (with its valued options `-d`, `--distribution`, `-u`, `--user`, `--cd`, `-e`/`--exec`
+taking the command). Rows: `wsl bash -c "echo {{pw}}"` and `wsl -d Ubuntu bash -c "echo {{pw}}"` refused,
+`wsl ./deploy.sh {{pw}}` allowed. If `wsl -e`/`--exec`'s command needs its own handling, treat the word after it as the
+command. Break-it-once: remove `wsl`; the refused rows fail.
+
+### F20 (Minor, MiMo M2): `IsBatchTarget`'s doc comment says the stream suffix is dropped only after a program extension.
+
+## Round 5 (code re-review round 3: MiMo two Important; GLM's session failed)
+
+### F21 (Important, MiMo I1): image digests
+In `ImageProgram`, split the last path component at its last `@` first, then apply the `:<tag>` rule
+(`python@sha256:<hex>` → `python`, `python:3.12@sha256:<hex>` → `python`). Rows refused: `docker run
+python@sha256:0123456789abcdef -c "print('{{x}}')"`, `docker run mcr.microsoft.com/powershell@sha256:0123456789abcdef -c
+"Write-Host {{x}}"`, `find . -exec python@sha256:0123456789abcdef -c "print('{{x}}')" ;`. F15/F18 allowed rows stay.
+Docs sentence names the digest spelling. Break-it-once: drop the `@` split.
+
+### F22 (Important, MiMo I2): an unknown option's value can't hide the command
+In the simple-wrapper walk, when the first positional word matches a checked program but `Wrapped(i)` returns null and
+the wrapper is **not** in `TrustedWrappers`, fall through to the existing later-word scan instead of returning null.
+Rows refused: `bwrap --tmpfs /node:20 bash -c "echo {{x}}"`, `bwrap --tmpfs /python bash -c "echo {{x}}"`. Existing
+allowed rows must stay allowed (if one doesn't, stop and list it). Break-it-once: restore `return Wrapped(i)`.
+
+### F23 (Minor, MiMo M1): extension-less heads that needed trimming
+In `WindowsFileName`, cut at the colon when `HasProgramExtension(head) || head != head.TrimEnd('.', ' ')`
+(`cmd.:s` → `cmd`, `pwsh.:s` → `pwsh`; `python:3.12`, `node:20`, `cmd:x` keep their colon). And run `GetBlockedInvocation`'s
+first word through `ImageProgram` too (top level: `run "python:3.12" -c "…{{x}}"` refused). Rows: `IsBatchTarget` true for
+`cmd.:s`, `cmd.::$DATA`; refused `pwsh.:s -c …`, `cmd.:s /c …`, `python:3.12 -c …`; `IsBatchTarget_False("cmd:x")` stays.
+`docs/security-model.md`: undotted `name:stream` words go next to the 8.3 names. Break-it-once: drop the second condition.
+
+### F24 (Minor, MiMo M2/M3): `wsl`
+`wsl` with no arguments at all is refused (it starts a shell reading stdin; reuse the `ShellWhenNoCommand` reason);
+`wsl --list`, `--status`, `--version` stay allowed. An attached exec form (`--exec=…`, `-e<cmd>`) is refused fail-closed
+(the su `--command=` guard's pattern). Rows for each. Break-it-once: drop the no-arguments rule.
+
+### F25 (Minor, MiMo M4): docs
+`docs/security-model.md`: F18 may refuse an image reference given as a plain last argument (`docker run img skopeo
+inspect python:3.12`); a `{{@file}}` copy run by an image's interpreter entrypoint (`docker run -v {{@f}}:/x.py
+python:3.12 /x.py`) is not caught by the printer guard.
+
+### Convergence rule (controller, from here on)
+The batch-file check (the security fix in this release) stays fail-closed: any finding that lets a re-parsed value reach
+a batch file is fixed before release. The inline-code check is documented as a shallow guard: from here on, a new
+spelling that defeats only it is filed as an issue (0.3.3) and listed in `docs/security-model.md`, unless it is a common
+command shape.

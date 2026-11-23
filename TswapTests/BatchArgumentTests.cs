@@ -130,6 +130,13 @@ public sealed class BatchArgumentTests
     [InlineData("x.cmd ")]
     [InlineData("x.cmd...")]
     [InlineData("x.cmd::$DATA")]
+    // Review fix F17: the head before the ':' is trimmed before the stream gate.
+    [InlineData("x.cmd.:s")]
+    [InlineData("x.cmd :s")]
+    [InlineData("x.cmd.::$DATA")]
+    // Review fix F23: an extension-less head that Windows trims (cmd. is cmd).
+    [InlineData("cmd.:s")]
+    [InlineData("cmd.::$DATA")]
     [InlineData("CMD.EXE")]
     [InlineData("X.BAT")]
     [InlineData(@"C:\dir\x.cmd")]

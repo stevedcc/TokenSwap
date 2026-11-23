@@ -338,8 +338,10 @@ public static class Validation
 
     /// <summary>
     /// Brief T47 (A4): whether <paramref name="program"/> starts as a batch file or is cmd itself: its last component,
-    /// normalised as Windows does (a drive prefix, a <c>:stream</c> suffix and trailing dots and spaces dropped), ends
-    /// in <c>.cmd</c> or <c>.bat</c>, or is <c>cmd</c> (<c>cmd.exe</c>), ignoring case.
+    /// normalised as Windows does (<see cref="WindowsFileName"/>: a drive prefix and trailing dots and spaces dropped,
+    /// and a <c>:stream</c> suffix dropped only after a name ending in <c>.exe</c>, <c>.cmd</c>, <c>.bat</c> or
+    /// <c>.com</c>, reviews F15 and F17), ends in <c>.cmd</c> or <c>.bat</c>, or is <c>cmd</c> (<c>cmd.exe</c>), ignoring
+    /// case.
     /// </summary>
     public static bool IsBatchTarget(string program)
     {
@@ -518,7 +520,7 @@ public static class Validation
           "xvfb-run", "dbus-run-session", "systemd-run", "firejail", "bwrap", "unshare", "nsenter",
           "chroot", "caffeinate", "uv", "uvx", "poetry", "pipenv", "pdm", "hatch", "conda", "pixi",
           "npx", "pnpx", "bunx", "npm", "pnpm", "yarn", "bundle", "docker", "podman", "nerdctl",
-          "kubectl", "oc", "lxc", "incus", "flatpak", "snap", "machinectl", "toolbox", "distrobox" };
+          "kubectl", "oc", "lxc", "incus", "flatpak", "snap", "machinectl", "toolbox", "distrobox", "wsl" };
 
     // Run their -c/--command argument through the target user's shell.
     private static readonly HashSet<string> ShellAsUser = new(StringComparer.OrdinalIgnoreCase)
@@ -560,7 +562,8 @@ public static class Validation
         if (argv.Count == 0)
             return null;
 
-        var program = ProgramName(argv[0]);
+        // Review fix F23: an image tag or digest as the program itself (python:3.12 -c ...) is that program.
+        var program = ImageProgram(argv[0]) ?? ProgramName(argv[0]);
         var args = argv.Skip(1).ToList();
 
         if (BlockedCommands.Contains(program))
@@ -643,7 +646,7 @@ public static class Validation
             {
                 if (!FindExecOptions.Contains(args[i]))
                     continue;
-                var command = args.Skip(i + 1).TakeWhile(a => a is not (";" or "+")).ToList();
+                var command = WithImageProgram(args.Skip(i + 1).TakeWhile(a => a is not (";" or "+")).ToList());
                 var inner = command.Count == 0 ? null : GetBlockedInvocation(command);
                 if (inner is not null)
                     return inner with { Reason = $"'find {args[i]}' runs '{inner.Program}': {inner.Reason}" };
@@ -697,6 +700,8 @@ public static class Validation
         ["runuser"] = ["-u", "-g", "-G", "--user", "--group", "--supp-group", "-s", "--shell"],
         ["npx"] = ["-p", "--package"],
         ["systemd-run"] = ["-p", "--property", "-u", "--unit", "-E", "--setenv", "-M", "--machine"],
+        // Review fix F19: wsl's -e/--exec take no value of their own: the word after them is the command.
+        ["wsl"] = ["-d", "--distribution", "-u", "--user", "--cd"],
     };
 
     // Wrappers whose first positional argument is not the command (timeout DURATION cmd,
@@ -723,12 +728,25 @@ public static class Validation
     {
         BlockedInvocation? Wrapped(int from)
         {
-            var inner = GetBlockedInvocation(args.Skip(from).ToList());
+            var inner = GetBlockedInvocation(WithImageProgram(args.Skip(from).ToList()));
             return inner is null ? null : inner with { Reason = $"'{program}' runs '{inner.Program}': {inner.Reason}" };
         }
 
         if (program.Equals("command", StringComparison.OrdinalIgnoreCase) && args.Any(a => a is "-v" or "-V"))
             return null; // command -v only looks the name up
+
+        // Review fix F24: wsl with no arguments at all starts the default distribution's shell reading stdin
+        // (wsl --list, --status, --version stay allowed); an attached exec form (--exec=cmd, -ecmd) names the command
+        // inside its own option, which the walk can't follow, so it is refused fail-closed (as su's --command=).
+        if (program.Equals("wsl", StringComparison.OrdinalIgnoreCase))
+        {
+            if (args.Count == 0)
+                return NoCommandShell(program);
+            var attached = OwnOptions(program, args).FirstOrDefault(a => a.StartsWith("--exec=", StringComparison.Ordinal)
+                || (a.StartsWith("-e", StringComparison.Ordinal) && a.Length > 2));
+            if (attached is not null)
+                return new(program, $"'{program} {attached}' names its command inside the option, which this check can't follow. {WayOut}");
+        }
 
         // sudo -s/-i run a shell (with any command through its -c), npx -c and flock -c run shell
         // code. Only the wrapper's own options count, before its command (sudo mv -i a b passes).
@@ -756,7 +774,7 @@ public static class Validation
                 && !args.Skip(sub + 1).Where(a => !a.StartsWith('-')).Skip(1).Any())
                 return new(program, $"'machinectl {args[sub]}' with no command starts a shell reading stdin, which can transform and print secrets past redaction. {WayOut}");
             for (var i = sub + 1; i < args.Count; i++)
-                if (IsCheckedProgram(ProgramName(args[i])) && Wrapped(i) is { } blocked)
+                if (IsWrappedCheckedProgram(args[i]) && Wrapped(i) is { } blocked)
                     return blocked;
             return null;
         }
@@ -788,24 +806,55 @@ public static class Validation
                 continue;
             }
             // The wrapped command, checked in full (a bare interpreter reading stdin is refused).
-            if (IsCheckedProgram(ProgramName(arg)))
-                return Wrapped(i);
-            // Not a checked program. For a wrapper whose options this check knows completely,
-            // it is the command (sudo apt install python3 passes). For any other wrapper it may
-            // be the value of an unknown option (bwrap --ro-bind / / python), so keep scanning
-            // and refuse any later checked program that would be refused on its own, a bare
-            // interpreter reading stdin included: failing closed.
+            if (IsWrappedCheckedProgram(arg) && Wrapped(i) is { } wrapped)
+                return wrapped;
+            // Not a checked program, or one that passes. For a wrapper whose options this check knows
+            // completely, it is the command (sudo apt install python3 passes). For any other wrapper it
+            // may be the value of an unknown option (bwrap --ro-bind / / python; review fix F22:
+            // bwrap --tmpfs /python bash -c ..., whatever word the value is), so keep scanning and refuse
+            // any later checked program that would be refused on its own, a bare interpreter reading
+            // stdin included: failing closed.
             if (TrustedWrappers.Contains(program))
                 return null;
             for (var k = i + 1; k < args.Count; k++)
-                if (IsCheckedProgram(ProgramName(args[k])) && Wrapped(k) is { } later)
+                if (IsWrappedCheckedProgram(args[k]) && Wrapped(k) is { } later)
                     return later;
             return null;
         }
         // No command at all: these wrappers then start a shell that reads stdin.
-        return ShellWhenNoCommand.Contains(program)
-            ? new(program, $"'{program}' with no command starts a shell reading stdin, which can transform and print secrets past redaction. {WayOut}")
-            : null;
+        return ShellWhenNoCommand.Contains(program) ? NoCommandShell(program) : null;
+    }
+
+    private static BlockedInvocation NoCommandShell(string program) =>
+        new(program, $"'{program}' with no command starts a shell reading stdin, which can transform and print secrets past redaction. {WayOut}");
+
+    // Review fix F18: in a wrapper's command (CheckWrapper, find -exec), a word whose last path component, with a
+    // trailing '@<digest>' (F21) and ':<tag>' removed, names a checked program is a container image of it (python:3.12,
+    // mcr.microsoft.com/powershell:7.4), checked as that program with the words after it as its arguments. Null when
+    // the word isn't such a tag, or already names a checked program as it is.
+    private static string? ImageProgram(string word)
+    {
+        if (IsCheckedProgram(ProgramName(word)))
+            return null;
+        var last = word.Replace('\\', '/');
+        last = last[(last.LastIndexOf('/') + 1)..];
+        // F21: a digest first (python@sha256:..., python:3.12@sha256:...), then the tag.
+        if (last.LastIndexOf('@') is var at and > 0)
+            last = last[..at];
+        if (last.IndexOf(':') is var colon and > 0)
+            last = last[..colon];
+        return ProgramName(last) is var name && IsCheckedProgram(name) ? name : null;
+    }
+
+    private static bool IsWrappedCheckedProgram(string word) =>
+        IsCheckedProgram(ProgramName(word)) || ImageProgram(word) is not null;
+
+    // The wrapped command with an image tag's program (ImageProgram) in place of its first word.
+    private static List<string> WithImageProgram(List<string> command)
+    {
+        if (command.Count > 0 && ImageProgram(command[0]) is { } program)
+            command[0] = program;
+        return command;
     }
 
     private static readonly HashSet<string> ShellWhenNoCommand = new(StringComparer.OrdinalIgnoreCase)
@@ -1015,9 +1064,13 @@ public static class Validation
         name = name.Replace('\\', '/');
         name = name[(name.LastIndexOf('/') + 1)..];
         // Review fix F15: a ':stream' suffix only on a name that is a program file before its first ':', so an image
-        // tag (python:3.12, node:20) keeps its ':' and is not read as the interpreter.
-        if (name.IndexOf(':') is var colon and >= 0 && HasProgramExtension(name[..colon]))
-            name = name[..colon];
+        // tag (python:3.12, node:20) keeps its ':' and is not read as the interpreter. F17: that head is tested as
+        // Windows names it, trailing dots and spaces dropped (x.cmd.:s, pwsh.exe ::$DATA).
+        // F23: also when Windows had to trim the head, extension or not (cmd.:s, pwsh.:s); an untrimmed head without
+        // a program extension keeps its ':' (python:3.12, node:20, cmd:x).
+        if (name.IndexOf(':') is var colon and >= 0 && name[..colon] is var raw && raw.TrimEnd('.', ' ') is var head
+            && (HasProgramExtension(head) || head != raw))
+            name = head;
         return name.TrimEnd('.', ' ');
     }
 

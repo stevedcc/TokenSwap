@@ -163,6 +163,38 @@ public class InlineCodeBlockTests
     [InlineData("PowerShell.EXE.", "-c", "Write-Host {{x}}")]
     [InlineData("pwsh.exe::$DATA", "-c", "Write-Host {{x}}")]
     [InlineData("pwsh.exe:s", "-c", "Write-Host {{x}}")]
+    // Review fix F17: the head before the ':' is trimmed before the stream gate.
+    [InlineData("pwsh.exe.:$DATA", "-c", "Write-Host {{x}}")]
+    [InlineData("pwsh.exe ::$DATA", "-c", "Write-Host {{x}}")]
+    // Review fix F23: an extension-less head that Windows trims, and an image tag as the program itself.
+    [InlineData("pwsh.:s", "-c", "Write-Host {{x}}")]
+    [InlineData("cmd.:s", "/c", "echo {{x}}")]
+    [InlineData("python:3.12", "-c", "print('{{x}}')")]
+    [InlineData("pwsh:s", "-c", "Write-Host {{x}}")] // an undotted name:stream, read by its name like an image tag
+    [InlineData("timeout", "5", "pwsh:s", "-c", "Write-Host {{x}}")]
+    // Review fix F18: an image tag naming an interpreter, behind a wrapper, is that interpreter.
+    [InlineData("docker", "run", "python:3.12", "-c", "print('{{x}}')")]
+    [InlineData("docker", "run", "node:20", "-e", "console.log('{{x}}')")]
+    [InlineData("docker", "run", "mcr.microsoft.com/powershell:7.4", "-c", "Write-Host {{x}}")]
+    [InlineData("find", ".", "-exec", "python:3.12", "-c", "print('{{x}}')", ";")]
+    // Review fix F21: an image digest (name@sha256:...), with or without a tag.
+    [InlineData("docker", "run", "python@sha256:0123456789abcdef", "-c", "print('{{x}}')")]
+    [InlineData("docker", "run", "mcr.microsoft.com/powershell@sha256:0123456789abcdef", "-c", "Write-Host {{x}}")]
+    [InlineData("find", ".", "-exec", "python@sha256:0123456789abcdef", "-c", "print('{{x}}')", ";")]
+    [InlineData("docker", "run", "python:3.12@sha256:0123456789abcdef", "-c", "print('{{x}}')")]
+    // Review fix F22: a checked word that is an unknown option's value can't hide the command after it.
+    [InlineData("bwrap", "--tmpfs", "/node:20", "bash", "-c", "echo {{x}}")]
+    [InlineData("bwrap", "--tmpfs", "/python", "bash", "-c", "echo {{x}}")]
+    // Review fix F19: wsl runs the command after its options (-e/--exec name it).
+    [InlineData("wsl", "bash", "-c", "echo {{x}}")]
+    [InlineData("wsl", "-d", "Ubuntu", "bash", "-c", "echo {{x}}")]
+    [InlineData("wsl.exe", "--distribution", "Ubuntu", "--user", "root", "--cd", "/srv", "bash", "-c", "echo {{x}}")]
+    [InlineData("wsl", "-e", "bash", "-c", "echo {{x}}")]
+    [InlineData("wsl", "--exec", "python3", "-c", "print('{{x}}')")]
+    // Review fix F24: an attached exec form names the command inside the option: refused fail-closed.
+    [InlineData("wsl", "--exec=bash", "-c", "echo {{x}}")]
+    [InlineData("wsl", "-ebash", "-c", "echo {{x}}")]
+    [InlineData("wsl", "-d", "Ubuntu", "--exec=./deploy.sh", "{{x}}")]
     [InlineData("python.exe.", "-c", "print('{{x}}')")]
     [InlineData("cmd.exe.", "/c", "echo {{x}}")]
     public void InlineCodeOrBlockedProgram_IsRefused(params string[] argv)
@@ -248,6 +280,16 @@ public class InlineCodeBlockTests
     [InlineData("find", ".", "-name", "{{x}}")]
     [InlineData("podman", "push", "--creds", "{{x}}", "img")]
     [InlineData("cmd2", "/c", "{{x}}")] // only cmd itself is the Windows shell
+    // Review fix F18: an image tag naming an interpreter that runs a script file, and F15's mount next to an image.
+    [InlineData("docker", "run", "python:3.12", "app.py", "{{x}}")]
+    [InlineData("docker", "run", "-v", "{{@cfg.yaml}}:/c.yaml", "python:3.12", "app")]
+    // Review fix F19: wsl running a script file.
+    [InlineData("wsl", "./deploy.sh", "{{x}}")]
+    [InlineData("wsl", "-d", "Ubuntu", "./deploy.sh", "{{x}}")]
+    // Review fix F24: wsl's own informational commands.
+    [InlineData("wsl", "--list")]
+    [InlineData("wsl", "--status")]
+    [InlineData("wsl", "--version")]
     public void ScriptFileOrOrdinaryProgram_IsAllowed(params string[] argv)
     {
         Assert.Null(Validation.GetBlockedInvocation(argv));
@@ -346,5 +388,21 @@ public class InlineCodeBlockTests
     {
         foreach (var program in new[] { "powershell", "pwsh" })
             Assert.Null(Validation.GetBlockedInvocation([program, flag, "deploy.ps1", "{{x}}"]));
+    }
+
+    /// <summary>
+    /// Review fix F24: <c>wsl</c> with no arguments at all starts the default distribution's shell reading stdin,
+    /// refused with the reason every such wrapper gets.
+    /// </summary>
+    [Theory]
+    [InlineData("wsl")]
+    [InlineData("wsl.exe")]
+    public void Wsl_WithNoArguments_IsRefusedAsAShellReadingStdin(string program)
+    {
+        var blocked = Validation.GetBlockedInvocation([program]);
+
+        Assert.NotNull(blocked);
+        Assert.Equal("wsl", blocked!.Program);
+        Assert.StartsWith("'wsl' with no command starts a shell reading stdin, which can transform and print secrets past redaction.", blocked.Reason);
     }
 }
