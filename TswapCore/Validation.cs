@@ -340,7 +340,7 @@ public static class Validation
     /// Brief T47 (A4): whether <paramref name="program"/> starts as a batch file or is cmd itself: its last component,
     /// normalised as Windows does (<see cref="WindowsFileName"/>: a drive prefix and trailing dots and spaces dropped,
     /// and a <c>:stream</c> suffix dropped only after a name ending in <c>.exe</c>, <c>.cmd</c>, <c>.bat</c> or
-    /// <c>.com</c>, reviews F15 and F17), ends in <c>.cmd</c> or <c>.bat</c>, or is <c>cmd</c> (<c>cmd.exe</c>), ignoring
+    /// <c>.com</c>, or a head Windows trimmed (F23), reviews F15 and F17), ends in <c>.cmd</c> or <c>.bat</c>, or is <c>cmd</c> (<c>cmd.exe</c>), ignoring
     /// case.
     /// </summary>
     public static bool IsBatchTarget(string program)
@@ -1183,7 +1183,7 @@ public static class Validation
     /// <summary>
     /// Brief T47 (A4), review fix F12: the last component of <paramref name="path"/> as Windows names the file it
     /// starts: a drive prefix (<c>C:</c>) dropped, either separator, a <c>:stream</c> suffix dropped (F15: only after
-    /// a name ending in .exe, .cmd, .bat or .com), and trailing dots
+    /// a name ending in .exe, .cmd, .bat or .com, or a head Windows trimmed (F23)), and trailing dots
     /// and spaces dropped (<c>pwsh.exe.</c>, <c>pwsh.exe </c>, <c>pwsh.exe::$DATA</c> are <c>pwsh.exe</c>). Shared by
     /// <see cref="IsBatchTarget"/> and <see cref="ProgramName"/>, on every OS (fail closed).
     /// </summary>
