@@ -1013,6 +1013,24 @@ public sealed class RunFileTokenTests : IDisposable
         Assert.Empty(RunFolders());
     }
 
+    /// <summary>
+    /// Review fix G3: <c>powershell -File x.ps1 {{@f}}</c> passes T49's -File rule, so it is the file-token rule that
+    /// refuses it (a theory row of <see cref="RunFileToken_InterpreterAnywhereRefused"/> can't show which rule fired).
+    /// </summary>
+    [Fact]
+    public void RunFileToken_PowerShellWithFile_IsRefusedByTheFileTokenRule()
+    {
+        WriteFile("f", ValuesYaml);
+
+        var (exit, _, err) = Run(["run", "powershell", "-File", "x.ps1", "{{@f}}"]);
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("'powershell'", err);
+        Assert.Contains("filled copy", err);
+        Assert.Equal(0, _pty.Starts);
+        Assert.Empty(RunFolders());
+    }
+
     [UnixFact("an elevated Windows tswap is allowed (the per-user temp folder and the ACL keep it private)")]
     public void RunFileToken_AsRootRefused()
     {
