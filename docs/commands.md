@@ -79,12 +79,18 @@ by a 0.1 machine on a shared folder) and format 3 ones written without fingerpri
 Records fingerprinted by an older tswap are still matched with the fingerprints they have; the
 commands print a note naming the count and the reindex, which adds the newer variants.
 
+`redact` masks a value with line breaks whatever the line endings of the value and of the file (`\r\n`
+or `\n`; a lone `\r` as a line ending is not handled).
+
 `redact` also masks a value that looks like a credential it doesn't know (a keyword such as
 `password`, `token`, `secret` or `key`, then `:` or `=`, then 12 or more characters) as
-`[POSSIBLE SECRET]`, with a warning on stderr naming the line and the keyword, never the value; a
-short or unusual value can still slip through, such as one with spaces (the heuristic needs 12
-unbroken characters, so `password: correct horse battery staple` is neither flagged nor masked,
-though a value the vault holds is still masked by its fingerprints), or one that follows a value
+`[POSSIBLE SECRET]`, with a warning on stderr naming the line and the keyword, never the value. A
+quoted value of 12 or more characters after such a keyword is masked whole, spaces and escaped quotes
+included (`password: "correct horse battery staple"`), also after a quoted key as in JSON
+(`"password": "…"`), which also masks a quoted description (`secret: "see the README file"`). A
+short or unusual value can still slip through, such as an unquoted one with spaces
+(`password: correct horse battery staple` is neither flagged nor masked, though a value the vault
+holds is still masked by its fingerprints), or one that follows a value
 running straight into its keyword without a space (in `password=aaaaaaaaaaaatoken = bbbbbbbbbbbbbbbb`
 the first match takes `token` as part of the first value, so the second value is not found), so
 check the output before sharing it.
@@ -124,7 +130,7 @@ the raw value: use `stringData:` (JSON status `data-not-base64`).
 
 `run` (since 0.3) decrypts only the value versions it substitutes and masks every other value in the
 vault that has fingerprints, in its stored forms (verbatim, whitespace-stripped, base64, base64url),
-also a multi-line one printed through a terminal ([what `run` masks](security-model.md#what-run-masks)).
+also a multi-line one, whatever the line endings it is printed with ([what `run` masks](security-model.md#what-run-masks)).
 On a vault where some records can't be matched it keeps working and prints one line on stderr before
 the command starts and the same line after it exits (wrapped here):
 

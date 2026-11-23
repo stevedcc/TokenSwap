@@ -295,8 +295,8 @@ exits; `run` keeps working (owner decision).
 | A substituted value's forms (raw, escaped in a file, base64/base64url padded and unpadded, the `\r\n`, `\n` and PTY-printed forms of a multi-line value and their encodings) | yes¹ |
 | Any other vault value, current or previous, burned included: verbatim, whitespace-stripped, base64 padded, base64url unpadded | yes¹ (a value made only of whitespace: when it arrives in one read, see below) |
 | … base64url with padding | the unpadded core¹; the `=` stay visible |
-| … base64 with its padding removed; a `\r\n` value printed with `\n` only; wrapped base64; a re-indented PEM (YAML block); JSON, URL or hex encodings; inside a larger base64 blob | no (a later variant-set version) |
-| … multi-line, through a pipe (line endings as stored) or a PTY (`\n` printed as `\r\n`) | yes¹ |
+| … base64 with its padding removed; wrapped base64; a re-indented PEM (YAML block); JSON, URL or hex encodings; inside a larger base64 blob | no (a later variant-set version) |
+| … multi-line, through a pipe (line endings as stored or `\n` only) or a PTY (`\n` printed as `\r\n`), except a value made only of whitespace (see Limits) | yes¹ |
 | Records not fully fingerprinted, or unreadable | no; warned before and after the child |
 | A secret added while the child runs | no (the matcher is built at the start) |
 
