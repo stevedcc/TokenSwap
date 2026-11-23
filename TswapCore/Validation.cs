@@ -812,8 +812,9 @@ public static class Validation
         ["runuser"] = ["-u", "-g", "-G", "--user", "--group", "--supp-group", "-s", "--shell"],
         ["npx"] = ["-p", "--package"],
         ["systemd-run"] = ["-p", "--property", "-u", "--unit", "-E", "--setenv", "-M", "--machine"],
-        // Review fix F19: wsl's -e/--exec take no value of their own: the word after them is the command.
-        ["wsl"] = ["-d", "--distribution", "-u", "--user", "--cd"],
+        // Review fix F19: wsl's -e/--exec take no value of their own: the word after them is the command. Brief T51:
+        // every run option of wsl.exe that takes the next word (WslValued).
+        ["wsl"] = ["-d", "--distribution", "--distribution-id", "-u", "--user", "--cd", "--shell-type", "--parent-console"],
     };
 
     // Wrappers whose first positional argument is not the command (timeout DURATION cmd,
@@ -847,18 +848,9 @@ public static class Validation
         if (program.Equals("command", StringComparison.OrdinalIgnoreCase) && args.Any(a => a is "-v" or "-V"))
             return null; // command -v only looks the name up
 
-        // Review fix F24: wsl with no arguments at all starts the default distribution's shell reading stdin
-        // (wsl --list, --status, --version stay allowed); an attached exec form (--exec=cmd, -ecmd) names the command
-        // inside its own option, which the walk can't follow, so it is refused fail-closed (as su's --command=).
+        // Brief T51 Task 4 (#405): wsl by wsl.exe's own walk, terminal (A6): nothing below runs for wsl.
         if (program.Equals("wsl", StringComparison.OrdinalIgnoreCase))
-        {
-            if (args.Count == 0)
-                return NoCommandShell(program);
-            var attached = OwnOptions(program, args).FirstOrDefault(a => a.StartsWith("--exec=", StringComparison.Ordinal)
-                || (a.StartsWith("-e", StringComparison.Ordinal) && a.Length > 2));
-            if (attached is not null)
-                return new(program, $"'{program} {attached}' names its command inside the option, which this check can't follow. {WayOut}");
-        }
+            return CheckWsl(program, args);
 
         // sudo -s/-i run a shell (with any command through its -c), npx -c and flock -c run shell
         // code. Only the wrapper's own options count, before its command (sudo mv -i a b passes).
@@ -935,6 +927,93 @@ public static class Validation
         }
         // No command at all: these wrappers then start a shell that reads stdin.
         return ShellWhenNoCommand.Contains(program) ? NoCommandShell(program) : null;
+    }
+
+    // wsl.exe (microsoft/WSL at 65719878ad3c, src/windows/common/WslClient.cpp WslMain and ParseLegacyArguments; names in
+    // src/windows/inc/wsl.h): its run options that take the next word as their value.
+    private static readonly HashSet<string> WslValued = new(StringComparer.Ordinal)
+        { "-d", "--distribution", "--distribution-id", "-u", "--user", "--cd", "--parent-console" };
+
+    // Its management options: wsl runs the action and returns, starting no Linux command.
+    private static readonly HashSet<string> WslManagement = new(StringComparer.Ordinal)
+    {
+        "--help", "--list", "-l", "--status", "--version", "-v", "--shutdown", "--terminate", "-t",
+        "--set-default", "-s", "--setdefault", "--set-default-version", "--set-version",
+        "--export", "--import", "--import-in-place", "--unregister",
+        "--mount", "--unmount", "--manage", "--update", "--uninstall",
+    };
+
+    private const string WslShellModeReason =
+        "'wsl' without -e (or --shell-type none) runs its command line through the Linux shell ($SHELL -c), which parses " +
+        "a substituted value again and can transform and print secrets past redaction. Give the command after -e: " +
+        "'wsl -e ./deploy.sh {{secret}}'. " + WayOut;
+
+    private const string WslUnknownReason =
+        "'wsl': an option this check doesn't know (wsl.exe matches its options exactly), so it can't tell what wsl runs. " +
+        "Give the command after -e: 'wsl -e ./deploy.sh {{secret}}'. " + WayOut;
+
+    /// <summary>
+    /// Brief T51 Task 4 (#405): <c>wsl</c> by wsl.exe's own walk, its words compared exactly and case-sensitively as
+    /// wsl.exe compares them. Valued run options skip their value; <c>--shell-type</c> <c>none</c> selects exec mode
+    /// and <c>login</c>/<c>standard</c> shell mode (the last wins); <c>--</c> ends the options in the mode so far;
+    /// <c>-e</c>/<c>--exec</c> select exec mode and end them; a management option runs no Linux command;
+    /// <c>--debug-shell</c> and <c>--install</c> start a shell; any other <c>-</c> word is an error in wsl.exe and
+    /// unknown here (fail closed); any other word (a legacy <c>~</c> or GUID included) begins the command. In shell
+    /// mode wsl.exe runs a command line as <c>$SHELL -c &lt;commandline&gt;</c> and an empty one as a login shell; in
+    /// exec mode it runs the command directly, which is checked as what it runs.
+    /// </summary>
+    private static BlockedInvocation? CheckWsl(string program, List<string> args)
+    {
+        var exec = false;
+        var command = args.Count;
+        for (var i = 0; i < args.Count; i++)
+        {
+            var word = args[i];
+            if (WslValued.Contains(word))
+            {
+                i++;
+                continue;
+            }
+            if (word == "--shell-type")
+            {
+                var mode = i + 1 < args.Count ? args[++i] : null;
+                if (mode == "none")
+                    exec = true;
+                else if (mode is "login" or "standard")
+                    exec = false;
+                else
+                    return new(program, WslUnknownReason);
+                continue;
+            }
+            if (word == "--system")
+                continue;
+            if (word == "--")
+            {
+                command = i + 1;
+                break;
+            }
+            if (word is "-e" or "--exec")
+            {
+                exec = true;
+                command = i + 1;
+                break;
+            }
+            if (WslManagement.Contains(word))
+                return null;
+            if (word is "--debug-shell" or "--install")
+                return NoCommandShell(program);
+            if (word.StartsWith('-'))
+                return new(program, WslUnknownReason);
+            command = i;
+            break;
+        }
+
+        if (command >= args.Count)
+            return exec ? null : NoCommandShell(program); // exec mode with no command: E_INVALIDARG, nothing runs
+        if (!exec)
+            return new(program, WslShellModeReason);
+        var inner = GetBlockedInvocation(WithImageProgram(args.Skip(command).ToList()));
+        return inner is null ? null : inner with { Reason = $"'{program}' runs '{inner.Program}': {inner.Reason}" };
     }
 
     private static BlockedInvocation NoCommandShell(string program) =>

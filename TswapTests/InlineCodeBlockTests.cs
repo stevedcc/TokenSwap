@@ -195,6 +195,10 @@ public class InlineCodeBlockTests
     [InlineData("wsl", "--exec=bash", "-c", "echo {{x}}")]
     [InlineData("wsl", "-ebash", "-c", "echo {{x}}")]
     [InlineData("wsl", "-d", "Ubuntu", "--exec=./deploy.sh", "{{x}}")]
+    // Brief T51 (owner's decision 2026-11-23): moved from ScriptFileOrOrdinaryProgram_IsAllowed. Without -e wsl.exe runs
+    // its command line as $SHELL -c "./deploy.sh <value>", the shape sh -c is refused for.
+    [InlineData("wsl", "./deploy.sh", "{{x}}")]
+    [InlineData("wsl", "-d", "Ubuntu", "./deploy.sh", "{{x}}")]
     [InlineData("python.exe.", "-c", "print('{{x}}')")]
     [InlineData("cmd.exe.", "/c", "echo {{x}}")]
     // Review fix G1: the stdin paths compare case-insensitively.
@@ -289,9 +293,10 @@ public class InlineCodeBlockTests
     // Review fix F18: an image tag naming an interpreter that runs a script file, and F15's mount next to an image.
     [InlineData("docker", "run", "python:3.12", "app.py", "{{x}}")]
     [InlineData("docker", "run", "-v", "{{@cfg.yaml}}:/c.yaml", "python:3.12", "app")]
-    // Review fix F19: wsl running a script file.
-    [InlineData("wsl", "./deploy.sh", "{{x}}")]
-    [InlineData("wsl", "-d", "Ubuntu", "./deploy.sh", "{{x}}")]
+    // Review fix F19: wsl running a script file. Brief T51 (owner's decision 2026-11-23): only in exec mode (-e,
+    // --exec); the shell-mode rows moved to InlineCodeOrBlockedProgram_IsRefused.
+    [InlineData("wsl", "-e", "./deploy.sh", "{{x}}")]
+    [InlineData("wsl", "-d", "Ubuntu", "--exec", "./deploy.sh", "{{x}}")]
     // Review fix F24: wsl's own informational commands.
     [InlineData("wsl", "--list")]
     [InlineData("wsl", "--status")]
@@ -965,5 +970,113 @@ public class InlineCodeBlockTests
         Assert.NotNull(blocked);
         Assert.Equal("wsl", blocked!.Program);
         Assert.StartsWith("'wsl' with no command starts a shell reading stdin, which can transform and print secrets past redaction.", blocked.Reason);
+    }
+
+    // ── Brief T51 Task 4 (#405): wsl by wsl.exe's own walk (WslClient.cpp) ─────────────────────────────
+
+    private const string WslShell = "shell";
+    private const string WslUnknown = "unknown";
+    private const string WslNoCommand = "no-command";
+    private const string WslInner = "inner";
+
+    private const string WslShellReason =
+        "'wsl' without -e (or --shell-type none) runs its command line through the Linux shell ($SHELL -c), which " +
+        "parses a substituted value again and can transform and print secrets past redaction. Give the command after " +
+        "-e: 'wsl -e ./deploy.sh {{secret}}'. " + UnixWayOut;
+
+    private const string WslUnknownReason =
+        "'wsl': an option this check doesn't know (wsl.exe matches its options exactly), so it can't tell what wsl " +
+        "runs. Give the command after -e: 'wsl -e ./deploy.sh {{secret}}'. " + UnixWayOut;
+
+    /// <summary>
+    /// wsl.exe compares its own words exactly: valued run options skip their value, <c>--shell-type</c> picks the mode,
+    /// <c>--</c>, <c>-e</c>/<c>--exec</c> or the first plain word begin the command; a management option runs no Linux
+    /// command, <c>--debug-shell</c> and <c>--install</c> start a shell, any other <c>-</c> word is unknown. An empty
+    /// command in shell mode starts the login shell (#405); a command in shell mode runs through <c>$SHELL -c</c>; a
+    /// command in exec mode is checked as what it runs.
+    /// </summary>
+    [Theory]
+    [InlineData(WslNoCommand, "wsl", "-d", "Ubuntu")]
+    [InlineData(WslNoCommand, "wsl", "-u", "root")]
+    [InlineData(WslNoCommand, "wsl", "--cd", "/srv")]
+    [InlineData(WslNoCommand, "wsl", "--")]
+    [InlineData(WslNoCommand, "wsl", "-d", "Ubuntu", "--")]
+    [InlineData(WslShell, "wsl", "~")]
+    [InlineData(WslNoCommand, "wsl", "--system")]
+    [InlineData(WslNoCommand, "wsl", "--debug-shell")]
+    [InlineData(WslNoCommand, "wsl", "--install")]
+    [InlineData(WslShell, "wsl", "--shell-type", "login", "./x.sh", "{{x}}")]
+    [InlineData(WslShell, "wsl", "--shell-type", "none", "--shell-type", "standard", "./x.sh", "{{x}}")]
+    [InlineData(WslUnknown, "wsl", "-D", "Ubuntu", "-e", "./x.sh", "{{x}}")]
+    [InlineData(WslUnknown, "wsl", "--shell-type", "bogus")]
+    [InlineData(WslInner, "wsl", "-e", "python3", "/dev/stdin")]
+    [InlineData(WslInner, "wsl", "--shell-type", "none", "bash", "-c", "echo {{x}}")]
+    [InlineData(WslInner, "wsl", "-e", "bash")]
+    // A8's accepted over-refusals.
+    [InlineData(WslShell, "wsl", "~", "-e", "./x.sh")]
+    [InlineData(WslNoCommand, "wsl", "--install", "--no-launch")]
+    [InlineData(WslShell, "wsl", "{00000000-0000-0000-0000-000000000000}", "-e", "./x.sh")]
+    [InlineData(WslNoCommand, "wsl", "-d")]
+    [InlineData(WslUnknown, "wsl", "--exec=bash")]
+    [InlineData(WslUnknown, "wsl", "-ebash")]
+    [InlineData(WslUnknown, "wsl", "--Exec", "./x.sh")]
+    public void Wsl_ByItsOwnWalk_IsRefused(string kind, params string[] argv)
+    {
+        var blocked = Validation.GetBlockedInvocation(argv);
+
+        Assert.NotNull(blocked);
+        Assert.Equal(kind == WslInner ? argv.SkipWhile(a => a != "-e" && a != "none").ElementAt(1) : "wsl", blocked!.Program);
+        switch (kind)
+        {
+            case WslShell:
+                Assert.Equal(WslShellReason, blocked.Reason);
+                break;
+            case WslUnknown:
+                Assert.Equal(WslUnknownReason, blocked.Reason);
+                break;
+            case WslNoCommand:
+                Assert.Equal(
+                    $"'wsl' with no command starts a shell reading stdin, which can transform and print secrets past redaction. {UnixWayOut}",
+                    blocked.Reason);
+                break;
+            default:
+                var inner = Validation.GetBlockedInvocation(argv.SkipWhile(a => a != "-e" && a != "none").Skip(1).ToArray());
+                Assert.NotNull(inner);
+                Assert.Equal($"'wsl' runs '{inner!.Program}': {inner.Reason}", blocked.Reason);
+                break;
+        }
+    }
+
+    [Theory]
+    [InlineData("wsl", "--list")]
+    [InlineData("wsl", "-l", "-v")]
+    [InlineData("wsl", "--status")]
+    [InlineData("wsl", "--version")]
+    [InlineData("wsl", "--shutdown")]
+    [InlineData("wsl", "-d", "Ubuntu", "--list")]
+    [InlineData("wsl", "-e", "./deploy.sh", "{{x}}")]
+    [InlineData("wsl", "--shell-type", "none", "./deploy.sh", "{{x}}")]
+    [InlineData("wsl", "-d", "Ubuntu", "-u", "app", "--cd", "/srv", "-e", "./deploy.sh", "{{x}}")]
+    [InlineData("wsl", "-e")]
+    public void Wsl_ByItsOwnWalk_IsAllowed(params string[] argv)
+    {
+        Assert.Null(Validation.GetBlockedInvocation(argv));
+    }
+
+    /// <summary>Task 4's two reasons, written out in full.</summary>
+    [Fact]
+    public void Wsl_NewReasons_HaveTheExactText()
+    {
+        Assert.Equal(
+            "'wsl' without -e (or --shell-type none) runs its command line through the Linux shell ($SHELL -c), which " +
+            "parses a substituted value again and can transform and print secrets past redaction. Give the command " +
+            "after -e: 'wsl -e ./deploy.sh {{secret}}'. Put the commands in a script file and run that instead, e.g. " +
+            "'run ./script.sh {{secret}}' (the script reads the value as $1).",
+            Validation.GetBlockedInvocation(["wsl", "./x.sh", "{{x}}"])?.Reason);
+        Assert.Equal(
+            "'wsl': an option this check doesn't know (wsl.exe matches its options exactly), so it can't tell what wsl " +
+            "runs. Give the command after -e: 'wsl -e ./deploy.sh {{secret}}'. Put the commands in a script file and run " +
+            "that instead, e.g. 'run ./script.sh {{secret}}' (the script reads the value as $1).",
+            Validation.GetBlockedInvocation(["wsl", "--exec=bash"])?.Reason);
     }
 }

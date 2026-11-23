@@ -249,6 +249,24 @@ public class BrokerTemplateConfigTests : IDisposable
         Refused(WithTemplate(Template(argv: argv)), "inline");
     }
 
+    // Brief T51 (A3, A15): templates use run's argv check, so wsl's shell mode is refused here too, and its exec mode loads.
+    private const string WslArg = """{ "arg": { "pattern": "[a-z]+" } }""";
+
+    [LinuxFact("templates are Linux only (bwrap)")]
+    public void AWslArgvWithoutExec_IsRefused()
+    {
+        Refused(WithTemplate(Template(argv: """["/usr/bin/wsl", "./deploy.sh", "{arg}"]""", args: WslArg)),
+            "'wsl' without -e (or --shell-type none) runs its command line through the Linux shell");
+    }
+
+    [LinuxFact("templates are Linux only (bwrap)")]
+    public void AWslArgvWithExec_Loads()
+    {
+        var policy = Parse(WithTemplate(Template(argv: """["/usr/bin/wsl", "-e", "./deploy.sh", "{arg}"]""", args: WslArg)));
+
+        Assert.Equal("/usr/bin/wsl", policy.Templates["deploy"].Program);
+    }
+
     [LinuxTheory("templates are Linux only (bwrap)")]
     [InlineData("(?i)brief/.*")]
     [InlineData("brief/(?s:.*)")]

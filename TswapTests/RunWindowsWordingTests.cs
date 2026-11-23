@@ -83,8 +83,9 @@ public sealed class RunWindowsWordingTests : IDisposable
     /// One refused argv per place in <c>Validation.cs</c> (at 51b0b37) that appends the way out: <c>InlineReason</c>
     /// and the nine direct uses (su, xargs, sudo -s, docker --entrypoint, machinectl shell, a wrapper with no
     /// command, python3 -, expect -f -, python3 with no script), and brief T49's four reasons (powershell without
-    /// -File, an untrusted spelling, a script from stdin, no script or -NoExit), and review fix G2's deno run -: fourteen direct uses in all (G2's bare cmd reuses the
-    /// no-command shell reason).
+    /// -File, an untrusted spelling, a script from stdin, no script or -NoExit), review fix G2's deno run -, and brief
+    /// T51's four (deno with no script, deno with options but no subcommand, wsl in shell mode, a wsl option the check
+    /// doesn't know): eighteen direct uses in all (G2's bare cmd reuses the no-command shell reason).
     /// <c>run</c>'s Windows swap relies on each reason ending with the whole sentence.
     /// </summary>
     public static TheoryData<string[]> WayOutReasons =>
@@ -108,6 +109,8 @@ public sealed class RunWindowsWordingTests : IDisposable
         ["deno", "run", "-"],
         ["deno"],
         ["deno", "-A", "main.ts"],
+        ["wsl", "./deploy.sh", "x"],
+        ["wsl", "--exec=bash"],
     ];
 
     [Theory]
