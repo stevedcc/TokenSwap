@@ -166,6 +166,12 @@ public class InlineCodeBlockTests
     // Review fix F17: the head before the ':' is trimmed before the stream gate.
     [InlineData("pwsh.exe.:$DATA", "-c", "Write-Host {{x}}")]
     [InlineData("pwsh.exe ::$DATA", "-c", "Write-Host {{x}}")]
+    // Review fix F23: an extension-less head that Windows trims, and an image tag as the program itself.
+    [InlineData("pwsh.:s", "-c", "Write-Host {{x}}")]
+    [InlineData("cmd.:s", "/c", "echo {{x}}")]
+    [InlineData("python:3.12", "-c", "print('{{x}}')")]
+    [InlineData("pwsh:s", "-c", "Write-Host {{x}}")] // an undotted name:stream, read by its name like an image tag
+    [InlineData("timeout", "5", "pwsh:s", "-c", "Write-Host {{x}}")]
     // Review fix F18: an image tag naming an interpreter, behind a wrapper, is that interpreter.
     [InlineData("docker", "run", "python:3.12", "-c", "print('{{x}}')")]
     [InlineData("docker", "run", "node:20", "-e", "console.log('{{x}}')")]

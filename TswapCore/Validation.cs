@@ -562,7 +562,8 @@ public static class Validation
         if (argv.Count == 0)
             return null;
 
-        var program = ProgramName(argv[0]);
+        // Review fix F23: an image tag or digest as the program itself (python:3.12 -c ...) is that program.
+        var program = ImageProgram(argv[0]) ?? ProgramName(argv[0]);
         var args = argv.Skip(1).ToList();
 
         if (BlockedCommands.Contains(program))
@@ -1051,7 +1052,10 @@ public static class Validation
         // Review fix F15: a ':stream' suffix only on a name that is a program file before its first ':', so an image
         // tag (python:3.12, node:20) keeps its ':' and is not read as the interpreter. F17: that head is tested as
         // Windows names it, trailing dots and spaces dropped (x.cmd.:s, pwsh.exe ::$DATA).
-        if (name.IndexOf(':') is var colon and >= 0 && name[..colon].TrimEnd('.', ' ') is var head && HasProgramExtension(head))
+        // F23: also when Windows had to trim the head, extension or not (cmd.:s, pwsh.:s); an untrimmed head without
+        // a program extension keeps its ':' (python:3.12, node:20, cmd:x).
+        if (name.IndexOf(':') is var colon and >= 0 && name[..colon] is var raw && raw.TrimEnd('.', ' ') is var head
+            && (HasProgramExtension(head) || head != raw))
             name = head;
         return name.TrimEnd('.', ' ');
     }

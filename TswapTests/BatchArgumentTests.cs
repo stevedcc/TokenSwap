@@ -134,6 +134,9 @@ public sealed class BatchArgumentTests
     [InlineData("x.cmd.:s")]
     [InlineData("x.cmd :s")]
     [InlineData("x.cmd.::$DATA")]
+    // Review fix F23: an extension-less head that Windows trims (cmd. is cmd).
+    [InlineData("cmd.:s")]
+    [InlineData("cmd.::$DATA")]
     [InlineData("CMD.EXE")]
     [InlineData("X.BAT")]
     [InlineData(@"C:\dir\x.cmd")]
