@@ -83,3 +83,54 @@ preceding `-File`; the `powershell Write-Host {{pw}}` row must fail. Second brea
 ## Out of scope
 
 - `pwsh`'s behaviour (positional = `-File`), the batch check (F11 covers `powershell x.cmd`), other interpreters.
+
+## Amendments (round 1; GLM and MiMo)
+
+These replace the brief text they name; where they conflict with it, they win.
+
+- **A1 (MiMo I2, GLM I3/I2; replaces the table's "Minimum prefix" column and "5.1 resolves unambiguous prefixes").**
+  Windows PowerShell 5.1's docs document no abbreviations and its parser is closed, so a word counts as a 5.1 parameter
+  only when, after one leading `-` or `/` (case-insensitive), it is **exactly** a full name from the table, or exactly
+  one of these widely used short forms: `ep` and `ex` (ExecutionPolicy, value), `nop` (NoProfile), `noni`
+  (NonInteractive), `nol` (NoLogo), `noe` (NoExit), `w` (WindowStyle, value), `f` (File, value), `if` (InputFormat,
+  value), `of` (OutputFormat, value). Any other spelling, prefix or alias is "a word that isn't a 5.1 parameter" and is
+  refused (fail closed). Allowed rows: `powershell -ep Bypass -File .\x.ps1 {{pw}}`, `powershell -nop -noni -w Hidden -ex
+  Bypass -f .\x.ps1 {{pw}}`; refused rows: `powershell -m -File .\x.ps1 {{pw}}`, `powershell -s -File .\x.ps1 {{pw}}`,
+  `powershell -NoProf -File .\x.ps1 {{pw}}`. `-Help`, `-?`, `/?`, `-EncodedArguments` are deliberately not in the list
+  (refused, fail closed; say so in a comment).
+- **A2 (GLM C1, MiMo I1): stdin is not a script.** When the word after a `File` parameter is in `Validation.StdinScripts`
+  (`-`, `/dev/stdin`, `/dev/fd/0`, `/proc/self/fd/0`), refuse with the existing stdin sentence ("reads code from stdin,
+  which can transform and print secrets past redaction", reuse whatever builds it). This applies to `pwsh` too: for
+  `pwsh`, a word whose `PowerShellParameterKey` is a prefix of `file` (length 1 or more) followed by a `StdinScripts` word
+  is refused (the rest of `pwsh` stays as it is). `-NoExit` (or `noe`) anywhere before `-File` is refused for
+  `powershell` (the shell keeps reading stdin after the script; fail closed). `-File` as the last word, with nothing
+  after it: refused. Rows: `powershell -File - {{pw}}`, `powershell /f - {{pw}}`, `powershell -NoExit -File .\x.ps1
+  {{pw}}`, `powershell -File`, `pwsh -File - {{pw}}`, `pwsh --file - {{pw}}`, `pwsh -f /dev/stdin {{pw}}` refused. Third
+  break-it-once: treat `-` as a script path; the `powershell -File - {{pw}}` row must fail.
+- **A3 (both; replaces the preamble's stop rule for these two tests only).** Two tests that exist only on `brief/t48`
+  (never on main) change because T49 changes the rule; say so in the commit message ("#401: the rule changed, the brief
+  names the rows"):
+  - `InlineCodeBlockTests.PowerShellOtherParameter_IsNotInline`: the `pwsh` half stays as it is; for `powershell`, the
+    `-File` and `-f` rows stay not-refused and the other rows move to a new theory asserting they are refused by the
+    T49 rule (the message once).
+  - `RunBatchRefusalTests.ABatchTargetBehindAWrapper_IsRefused`, rows `{"powershell", "x.cmd", "{{pw}}"}` and
+    `{"powershell", "--file", "x.cmd", "{{pw}}"}`: T49's check runs before substitution, so they are now refused by T49
+    (exit 1, the child never starts, the value never printed, the message names `powershell`). Move them to a new test
+    asserting that; the `-File`/`/File` rows stay where they are (they still reach the batch check). Precedence is: the
+    pre-substitution checks (inline code, T49) first, the batch check after substitution, as `RunCommand` already orders
+    them.
+  Any other existing assertion that would change: stop and list it.
+- **A4 (both M; replaces the exact refusal text).** The reason is built like `InlineReason`, ending with the standard
+  way-out sentence so `RunCommand`'s Windows wording swap applies (`RunWindowsWordingTests.EveryWayOutReason_EndsWithTheWholeSentence`
+  must cover it): `$"'{program}' without -File runs its first argument as code (Windows PowerShell 5.1 reads it as
+  -Command), which can transform and print secrets past redaction. {WayOut}"`, with `{program}` the word as typed. The
+  test asserts this exact text for `powershell`.
+- **A5 (MiMo M3/M4/M6/M7, GLM M3).** Spellings in the rows: `powershell`, `PowerShell.EXE` and `powershell.exe.` (the
+  F12 trailing-dot spelling). The value in the "never printed" row is `a"b$c&d'e`. `powershell -File {{pw}}` (a token as
+  the script path) is allowed: the value is a path, PowerShell's error echoes it and output redaction masks it; one test
+  row names this as intended. Wrapper rows: `timeout 5 powershell {{pw}}` refused, `timeout 5 powershell -File .\x.ps1
+  {{pw}}` allowed.
+- **A6 (MiMo M8, GLM M4; Task 2).** `docs/scripts.md`'s sentence adds "only `-` and `/` spellings of its full parameter
+  names (and the common short forms `-ep`, `-nop`, `-noni`, `-w`, `-f`) count, and `-File -` (a script from stdin) is
+  refused". In `docs/security-model.md`, the row in "What tswap protects against" that lists the inline-code check gets
+  the `powershell` sentence. British spelling (`SpellingTests`).
