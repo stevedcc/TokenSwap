@@ -62,6 +62,7 @@ internal static class PlaintextRedactOracle
         public (string Content, IReadOnlyList<LineDiff> Changes) Process(string content, SecretsDb db)
         {
             var matchList = BuildMatchList(db);
+            var (multiLine, held) = LineBreakPass(content, db);
             content = content.Replace("\r\n", "\n");
             var lines = content.Split('\n');
             List<LineDiff> diffs = [];
@@ -70,6 +71,14 @@ internal static class PlaintextRedactOracle
             {
                 if (linesToRemove.Contains(i))
                     continue;
+                if (multiLine.TryGetValue(i, out var replaced))
+                {
+                    diffs.Add(new MultiLineDiff(i + 1, replaced.Last + 1, string.Join('\n', lines[i..(replaced.Last + 1)]), replaced.After));
+                    lines[i] = replaced.After;
+                    for (var j = i + 1; j <= replaced.Last; j++)
+                        linesToRemove.Add(j);
+                    continue;
+                }
                 var original = lines[i];
                 var current = ReplaceLine(original, matchList);
                 if (current != original)
@@ -82,6 +91,8 @@ internal static class PlaintextRedactOracle
                         for (int j = i + 1; j < lines.Length; j++)
                         {
                             var nextLine = lines[j];
+                            if (held.Contains(j))
+                                break; // brief T50b: a line holding part of a multi-line occurrence stays
                             if (string.IsNullOrWhiteSpace(nextLine))
                                 break;
                             var nextIndent = GetLeadingWhitespaceCount(nextLine);
@@ -120,6 +131,10 @@ internal static class PlaintextRedactOracle
         }
 
         protected virtual bool ShouldRemoveContinuationLines() => false;
+
+        /// <summary>Brief T50b: the multi-line replacements (by first line, 0-based) and every line a multi-line occurrence holds.</summary>
+        protected virtual (Dictionary<int, (int Last, string After)> Replaced, HashSet<int> Held) LineBreakPass(string content, SecretsDb db) =>
+            ([], []);
 
         /// <summary>The line with every entry's matches replaced, one <c>Regex.Replace</c> per entry in order.</summary>
         protected virtual string ReplaceLine(string original, List<(string Name, Kind Type, VariantKind Variant, string SearchText)> matchList)
@@ -199,7 +214,7 @@ internal static class PlaintextRedactOracle
                     {
                         var start = before[m.Index];
                         var end = before[m.Index + m.Length - 1] + 1;
-                        replaced = WholeValue(original, start, end, parts.Match(m.Value).Groups["marker"].Value,
+                        replaced = WholeValue(original[..start], original[end..], parts.Match(m.Value).Groups["marker"].Value,
                             variant == VariantKind.Plain && !Apply.HasControlCharacter(searchText));
                     }
                     decisions.Add((m.Index, m.Length, replaced));
@@ -222,21 +237,92 @@ internal static class PlaintextRedactOracle
             return current;
         }
 
+        private static readonly Regex MarkerAfter = new(@"^\s*#\s*tswap\s*:\s*[a-zA-Z0-9_-]+(?::previous)?(?![-\w])");
+
+        /// <summary>
+        /// Brief T50b Task 3, the oracle's own line-break pass on the raw content: every value version whose plain form
+        /// holds a <c>\n</c>, longest first, then by text, live before burned, then token; its forms (as stored, every
+        /// <c>\r\n</c> as <c>\n</c>, every lone <c>\n</c> as <c>\r\n</c>) found leftmost first, never overlapping one
+        /// taken. One that starts or ends with a line break, sits in block-scalar content or fails the rule (only after
+        /// <c>:</c>) is left; the rest become one line.
+        /// </summary>
+        protected override (Dictionary<int, (int Last, string After)> Replaced, HashSet<int> Held) LineBreakPass(string content, SecretsDb db)
+        {
+            Dictionary<int, (int Last, string After)> replaced = [];
+            HashSet<int> held = [];
+            var versions = db.Secrets.Select(kv => (Token: kv.Key, Value: kv.Value.Value, Burned: kv.Value.BurnedAt.HasValue))
+                .Concat(db.Secrets.Where(kv => kv.Value.PreviousValue is not null)
+                    .Select(kv => (Token: kv.Key + SecretsDb.PreviousSuffix, Value: kv.Value.PreviousValue!, Burned: false)))
+                .Where(v => v.Value.Contains('\n'))
+                .OrderByDescending(v => v.Value.Length).ThenBy(v => v.Value, StringComparer.Ordinal).ThenBy(v => v.Burned)
+                .ThenBy(v => v.Token, StringComparer.Ordinal)
+                .ToList();
+            if (versions.Count == 0)
+                return (replaced, held);
+            var lines = content.Replace("\r\n", "\n").Split('\n');
+            var block = ToCommentProcessor.BlockScalarContent(lines);
+            int LineOf(int at) => content[..at].Count(c => c == '\n');
+            int StartOf(int line)
+            {
+                var at = 0;
+                for (var n = 0; n < line; n++)
+                    at = content.IndexOf('\n', at) + 1;
+                return at;
+            }
+            List<(int Start, int End, string Token)> taken = [];
+            foreach (var (token, value, _) in versions)
+            {
+                string[] forms = [.. new[] { value, value.Replace("\r\n", "\n"), Regex.Replace(value, "(?<!\r)\n", "\r\n") }.Distinct()];
+                List<(int Start, int End)> found = [];
+                foreach (var form in forms)
+                {
+                    for (var at = content.IndexOf(form, StringComparison.Ordinal); at >= 0; at = content.IndexOf(form, at + form.Length, StringComparison.Ordinal))
+                        found.Add((at, at + form.Length));
+                }
+                foreach (var (start, end) in found.OrderBy(f => f.Start).ThenByDescending(f => f.End))
+                {
+                    if (taken.Any(t => t.Start < end && start < t.End))
+                        continue;
+                    taken.Add((start, end, token));
+                }
+            }
+            foreach (var (valueStart, valueEnd, token) in taken)
+            {
+                var atBreak = content[valueStart] == '\n' || content.AsSpan(valueStart).StartsWith("\r\n") || content[valueEnd - 1] == '\n';
+                var (start, end) = (valueStart, valueEnd);
+                if (start > 0 && end < content.Length && (content[start - 1] == '"' || content[start - 1] == '\'') && content[end] == content[start - 1])
+                {
+                    start--;
+                    end++;
+                }
+                int a = LineOf(start), b = LineOf(end - 1);
+                for (var n = a; n <= b; n++)
+                    held.Add(n);
+                if (atBreak || Enumerable.Range(a, b - a + 1).Any(n => block[n]))
+                    continue;
+                var before = lines[a][..(start - StartOf(a))];
+                var rest = lines[b][(end - StartOf(b))..];
+                var marker = MarkerAfter.Match(rest).Value;
+                var after = rest[marker.Length..];
+                if (WholeValue(before, after, marker, plainWithoutControls: false))
+                    replaced[a] = (b, before + GetReplacement(token, Kind.Plaintext) + after);
+            }
+            return (replaced, held);
+        }
+
         private const string ExistingMarker = @"(?:\s*#\s*tswap\s*:\s*[a-zA-Z0-9_-]+(?::previous)?)?";
 
         private static readonly Regex MarkerShape = new(@"#\s*tswap\s*:");
 
         /// <summary>
-        /// T50b's rule for the occurrence <c>[start, end)</c> of <paramref name="line"/> (the original text), with the
-        /// <c># tswap:</c> marker it consumed (or ""): (m) no marker-shaped text before or after it; (a) before it no
+        /// T50b's rule for an occurrence with <paramref name="before"/> and <paramref name="after"/> around it (original
+        /// text) and the <c># tswap:</c> marker it consumed (or ""): (m) no marker-shaped text before or after it; (a) before it no
         /// <c>#</c> outside quotes, no open quote, and a non-empty text ending in <c>:</c> or <c>=</c> (spaces and tabs
         /// aside); (a′) after <c>=</c> only <paramref name="plainWithoutControls"/>; a consumed marker with a space or tab
         /// before its <c>#</c>; (b) after it nothing, blanks, or blanks and a <c>#</c>.
         /// </summary>
-        private static bool WholeValue(string line, int start, int end, string marker, bool plainWithoutControls)
+        private static bool WholeValue(string before, string after, string marker, bool plainWithoutControls)
         {
-            var before = line[..start];
-            var after = line[end..];
             if (MarkerShape.IsMatch(before) || MarkerShape.IsMatch(after))
                 return false;
             bool inDouble = false, inSingle = false;

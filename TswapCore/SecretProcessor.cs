@@ -7,6 +7,14 @@ public enum MatchType { Plaintext, Base64, Base64Url }
 public record LineDiff(int LineNumber, string Before, string After);
 
 /// <summary>
+/// Brief T50b Task 3 (#399): lines <see cref="LineDiff.LineNumber"/> to <see cref="LastLineNumber"/> of the input, a
+/// value with a line break after <c>key:</c>, replaced by one line. <see cref="LineDiff.Before"/> is those lines joined
+/// with <c>\n</c> (without <c>\r</c>); it is never printed (<c>--dry-run</c> shows <c>[value over N lines]</c>).
+/// </summary>
+public sealed record MultiLineDiff(int LineNumber, int LastLineNumber, string Before, string After)
+    : LineDiff(LineNumber, Before, After);
+
+/// <summary>
 /// Brief T22 (#319): a line <c>tocomment</c> left as it was because it is YAML block-scalar content
 /// holding an encoded form (base64, base64url, whitespace-stripped) of the value of <see cref="Token"/>
 /// (<c>name</c> or <c>name:previous</c>): a marker is filled with the plain value, so replacing it would

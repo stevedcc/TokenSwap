@@ -121,27 +121,74 @@ public sealed class SecretMatcher(FingerprintIndex index, IReadOnlySet<string> b
     /// <see cref="SkippedValue"/> (<see cref="SkippedReason.InBlockScalar"/>). The adoption of a whole block (T20) is
     /// unchanged.
     /// </para>
+    /// <para>
+    /// Brief T50b Task 3 (#399): first, values with a line break are found on the raw content and its line-ending views
+    /// (<see cref="SelectMultiLine"/>); each is decided when the loop reaches its first line: replaced as one
+    /// <see cref="MultiLineDiff"/> when the rule holds around it and none of its lines is block content, dropped with a
+    /// block T20 adopted, otherwise left (reported over its lines unless a replacement overlaps it) while its lines go
+    /// through the line path.
+    /// </para>
     /// </summary>
     public ToCommentReport ToCommentReport(string content)
     {
         var lines = content.Replace("\r\n", "\n").Split('\n');
         var blockContent = ToCommentProcessor.BlockScalarContent(lines);
+        // Brief T50b Task 3: line i of 'lines' starts at lineStarts[i] in the raw content (only a final '\r' differs).
+        List<int> lineStarts = [0];
+        for (var at = content.IndexOf('\n'); at >= 0; at = content.IndexOf('\n', at + 1))
+            lineStarts.Add(at + 1);
+        var multiLine = SelectMultiLine(content, lineStarts);
+        Dictionary<int, MultiLineOccurrence> startingAt = multiLine.ToDictionary(static o => o.First);
+        HashSet<int> multiLineLines = [.. multiLine.SelectMany(static o => Enumerable.Range(o.First, o.Last - o.First + 1))];
+        List<(MultiLineOccurrence Occurrence, SkippedReason Reason)> left = [];
+        List<(int Start, int End)> replacedRanges = [];
+        bool InsideLeft(int start, int end) => left.Exists(l => l.Occurrence.Start <= start && end <= l.Occurrence.End);
+
         List<LineDiff> diffs = [];
         List<UnreplacedLine> unreplaced = [];
         List<SkippedValue> skipped = [];
         SortedSet<string> replacedNames = new(StringComparer.Ordinal);
         HashSet<int> linesToRemove = [];
+        HashSet<int> mergedLines = [];
         for (var i = 0; i < lines.Length; i++)
         {
+            var multi = startingAt.GetValueOrDefault(i);
             if (linesToRemove.Contains(i))
+            {
+                // Removed by a T20 adoption above: the adoption replaced that block, the occurrence goes with it.
+                // Removed by a multi-line replacement: it can't be replaced on a line that no longer exists.
+                if (multi is not null && mergedLines.Contains(i))
+                    left.Add((multi, BlockReason(multi, blockContent)));
                 continue;
+            }
             var original = lines[i];
+            if (multi is not null)
+            {
+                if (MultiLineReplacement(multi, lines, lineStarts, blockContent) is { } after)
+                {
+                    diffs.Add(new MultiLineDiff(i + 1, multi.Last + 1, string.Join('\n', lines[i..(multi.Last + 1)]), after));
+                    replacedNames.Add(BaseName(multi.Token));
+                    replacedRanges.Add((multi.Start, multi.End));
+                    // What the line path's finder sees in the kept text: before the value on line a, after it on line b.
+                    ReportKept(original[..(multi.Start - lineStarts[i])], i, skipped);
+                    ReportKept(lines[multi.Last][(multi.End - lineStarts[multi.Last])..], multi.Last, skipped);
+                    lines[i] = after;
+                    for (var j = i + 1; j <= multi.Last; j++)
+                    {
+                        linesToRemove.Add(j);
+                        mergedLines.Add(j);
+                    }
+                    continue;
+                }
+                left.Add((multi, BlockReason(multi, blockContent)));
+            }
             // Brief T20 (#315): a literal block scalar holding exactly one stored value is adopted whole.
             if (ToCommentProcessor.LiteralBlockAt(lines, i) is { } block && WholeValueToken(block.Candidate) is { } token)
             {
                 var keyLine = $"{block.Indent}{block.Key} {ToCommentProcessor.Replacement(token)}";
                 diffs.Add(new LineDiff(i + 1, original, keyLine));
                 replacedNames.Add(BaseName(token));
+                replacedRanges.Add((lineStarts[i], block.EndLine < lineStarts.Count ? lineStarts[block.EndLine] : content.Length));
                 lines[i] = keyLine;
                 for (var j = block.FirstLine; j < block.EndLine; j++)
                 {
@@ -153,34 +200,38 @@ public sealed class SecretMatcher(FingerprintIndex index, IReadOnlySet<string> b
             var (taken, rejected) = SelectToComment(original);
             if (taken.Count == 0 && rejected.Count == 0)
                 continue;
+            var offset = lineStarts[i];
             if (blockContent[i] && EncodedTokens([.. taken.Values, .. rejected]) is [_, ..] encoded)
             {
                 unreplaced.AddRange(encoded.Select(t => new UnreplacedLine(i + 1, t)));
                 // Brief T50b: the plain occurrences on a line T22 keeps whole are left too, none silently.
                 foreach (var span in taken.Values.Concat(rejected).Where(static s => s.Kind == VariantKind.Plain))
-                    skipped.Add(new SkippedValue(i + 1, i + 1, span.Token, SkippedReason.InBlockScalar));
+                {
+                    if (!InsideLeft(offset + span.Start, offset + span.End))
+                        skipped.Add(new SkippedValue(i + 1, i + 1, span.Token, SkippedReason.InBlockScalar));
+                }
                 continue;
             }
-            // One report per occurrence: a rejected span overlapping one of its own token already reported is the
-            // same occurrence in another form (a value's base64url inside its padded base64).
-            List<Span> reported = [];
-            foreach (var span in rejected)
+            foreach (var span in Reportable(rejected, taken))
             {
-                if (Overlaps(taken, span.Start, span.End)
-                    || reported.Exists(r => r.Token == span.Token && r.Start < span.End && span.Start < r.End))
-                    continue;
-                reported.Add(span);
-                skipped.Add(new SkippedValue(i + 1, i + 1, span.Token, SkippedReason.NotWholeValue));
+                if (!InsideLeft(offset + span.Start, offset + span.End))
+                    skipped.Add(new SkippedValue(i + 1, i + 1, span.Token, SkippedReason.NotWholeValue));
             }
             if (taken.Count == 0)
                 continue;
             foreach (var span in taken.Values)
+            {
                 replacedNames.Add(BaseName(span.Token));
+                replacedRanges.Add((offset + span.Start, offset + span.End));
+            }
             var current = Replace(original, taken);
             diffs.Add(new LineDiff(i + 1, original, current));
             lines[i] = current;
             foreach (var j in ToCommentProcessor.ContinuationLines(lines, i, original))
             {
+                // Brief T50b: never a line holding part of a multi-line occurrence.
+                if (multiLineLines.Contains(j))
+                    break;
                 // Brief T22: a content line holding an encoded occurrence stays (and is reported in its turn).
                 if (blockContent[j] && SelectToComment(lines[j]) is var (t, r) && EncodedTokens([.. t.Values, .. r]) is [_, ..])
                     break;
@@ -188,10 +239,125 @@ public sealed class SecretMatcher(FingerprintIndex index, IReadOnlySet<string> b
                 diffs.Add(new LineDiff(j + 1, lines[j], ""));
             }
         }
+        // A left multi-line occurrence is reported unless a replacement overlaps it.
+        foreach (var (occurrence, reason) in left)
+        {
+            if (!replacedRanges.Exists(r => r.Start < occurrence.End && occurrence.Start < r.End))
+                skipped.Add(new SkippedValue(occurrence.First + 1, occurrence.Last + 1, occurrence.Token, reason));
+        }
         List<SkippedValue> ordered = [.. skipped.OrderBy(static s => s.FirstLine).ThenBy(static s => s.LastLine)
             .ThenBy(static s => s.Token, StringComparer.Ordinal)];
         return new ToCommentReport(string.Join('\n', lines.Where((_, i) => !linesToRemove.Contains(i))), diffs, unreplaced,
             ordered, [.. replacedNames]);
+    }
+
+    /// <summary>
+    /// Brief T50b: the rejected spans to report: not overlapped by a taken one, and one per occurrence (a rejected span
+    /// overlapping one of its own token already reported is the same occurrence in another form, a value's base64url
+    /// inside its padded base64).
+    /// </summary>
+    private static List<Span> Reportable(List<Span> rejected, SortedList<int, Span> taken)
+    {
+        List<Span> reported = [];
+        foreach (var span in rejected)
+        {
+            if (Overlaps(taken, span.Start, span.End)
+                || reported.Exists(r => r.Token == span.Token && r.Start < span.End && span.Start < r.End))
+                continue;
+            reported.Add(span);
+        }
+        return reported;
+    }
+
+    /// <summary>Brief T50b Task 3: every occurrence the line path finds in <paramref name="kept"/> (text a multi-line replacement keeps on line <paramref name="line"/>), reported.</summary>
+    private void ReportKept(string kept, int line, List<SkippedValue> skipped)
+    {
+        var (taken, rejected) = SelectToComment(kept);
+        foreach (var span in Reportable([.. taken.Values, .. rejected], []))
+            skipped.Add(new SkippedValue(line + 1, line + 1, span.Token, SkippedReason.NotWholeValue));
+    }
+
+    /// <summary>
+    /// Brief T50b Task 3 (#399): a value found across a line break, with its quotes and a consumed marker:
+    /// raw span <see cref="Start"/>..<see cref="End"/> (the value with its quotes, without the marker),
+    /// <see cref="MarkerEnd"/> (the end of a consumed marker, or <see cref="End"/>), and its first and last line
+    /// (0-based; a line break belongs to the line it ends). <see cref="AtLineBreak"/>: the value starts or ends with a
+    /// line break, so it is never replaced.
+    /// </summary>
+    private sealed record MultiLineOccurrence(int Start, int End, int MarkerEnd, int First, int Last, string Token, bool AtLineBreak);
+
+    private static readonly Regex ConsumedMarker = new(@"\G\s*#\s*tswap\s*:\s*[a-zA-Z0-9_-]+(?::previous)?(?![-\w])");
+
+    /// <summary>
+    /// Brief T50b Task 3 (#399): the occurrences in the raw <paramref name="content"/> (and its line-ending views)
+    /// whose raw span holds a <c>\n</c>, selected as <see cref="Select"/> does: priority order, no overlap, short values
+    /// only where delimited.
+    /// </summary>
+    private List<MultiLineOccurrence> SelectMultiLine(string content, List<int> lineStarts)
+    {
+        if (!content.Contains('\n'))
+            return [];
+        List<ViewHit> hits = [.. ViewHits(content).Where(h => content.AsSpan(h.RawStart, h.RawEnd - h.RawStart).Contains('\n'))];
+        if (hits.Count == 0)
+            return [];
+        SortedList<int, Span> taken = [];
+        foreach (var (entry, spans) in Entries(content, hits, wholeTokenShortValues: true))
+        {
+            var position = 0;
+            foreach (var (s, e) in spans)
+            {
+                if (s < position || Overlaps(taken, s, e))
+                    continue;
+                taken.Add(s, new Span(s, e, "", entry.Token, entry.Kind));
+                position = e;
+            }
+        }
+        int LineOf(int at)
+        {
+            var index = lineStarts.BinarySearch(at);
+            return index >= 0 ? index : ~index - 1;
+        }
+        List<MultiLineOccurrence> found = [];
+        foreach (var span in taken.Values)
+        {
+            var (start, end) = (span.Start, span.End);
+            var atLineBreak = content[start] == '\n' || (content[start] == '\r' && start + 1 < content.Length && content[start + 1] == '\n')
+                || content[end - 1] == '\n';
+            if (start > 0 && content[start - 1] is '"' or '\'' && end < content.Length && content[end] == content[start - 1])
+                (start, end) = (start - 1, end + 1);
+            var lineEnd = content.IndexOf('\n', end) is var lf and >= 0 ? lf : content.Length;
+            var markerEnd = end;
+            if (!atLineBreak && ConsumedMarker.Match(content[..lineEnd], end) is { Success: true } marker)
+                markerEnd = end + marker.Length;
+            found.Add(new MultiLineOccurrence(start, end, markerEnd, LineOf(start), LineOf(end - 1), span.Token, atLineBreak));
+        }
+        return found;
+    }
+
+    /// <summary>Brief T50b: R2 when any line of <paramref name="occurrence"/> is block-scalar content, else R1.</summary>
+    private static SkippedReason BlockReason(MultiLineOccurrence occurrence, bool[] blockContent) =>
+        Enumerable.Range(occurrence.First, occurrence.Last - occurrence.First + 1).Any(j => blockContent[j])
+            ? SkippedReason.InBlockScalar
+            : SkippedReason.NotWholeValue;
+
+    /// <summary>
+    /// Brief T50b Task 3: the one line that replaces lines a..b of <paramref name="occurrence"/>
+    /// (<c>{before}""  # tswap: {token}{after}</c>), or null when it is left: it starts or ends with a line break, the
+    /// whole-value rule fails (a line break is a control character, so only <c>:</c> qualifies), or a line of it is
+    /// block-scalar content.
+    /// </summary>
+    private static string? MultiLineReplacement(MultiLineOccurrence occurrence, string[] lines, List<int> lineStarts, bool[] blockContent)
+    {
+        if (occurrence.AtLineBreak || BlockReason(occurrence, blockContent) == SkippedReason.InBlockScalar)
+            return null;
+        var before = lines[occurrence.First][..(occurrence.Start - lineStarts[occurrence.First])];
+        var last = lines[occurrence.Last];
+        var valueEnd = occurrence.End - lineStarts[occurrence.Last];
+        var markerEnd = occurrence.MarkerEnd - lineStarts[occurrence.Last];
+        var after = last[markerEnd..];
+        if (!ToCommentProcessor.FillsBack(before, last[valueEnd..markerEnd], after, envForm: false))
+            return null;
+        return before + ToCommentProcessor.Replacement(occurrence.Token) + after;
     }
 
     /// <summary>Brief T50b: the secret's name in <paramref name="token"/>, without <c>:previous</c>.</summary>

@@ -629,6 +629,26 @@ public sealed class ToCommentBlockScalarCommandTests : IDisposable
         Assert.Equal(Warning(2, "svc:previous") + "\nFile unchanged.\n", stderr.Replace("\r\n", "\n"));
     }
 
+    /// <summary>Brief T50b Task 3 (#399): a value with a line break that is not a whole value is left, with one warning over its lines.</summary>
+    [Fact]
+    public void MultiLineValueInACommand_WarnsOverItsLines_FileUnchanged()
+    {
+        _m.Ok("line-one\nline-two", "ingest", "s");
+        var file = _m.PathOf("cmd.yaml");
+        File.WriteAllText(file, "cmd: echo line-one\nline-two | tee x\n");
+        var before = File.ReadAllBytes(file);
+
+        var (exit, _, stderr) = _m.Run("", "tocomment", file);
+
+        Assert.True(exit == 0, stderr);
+        Assert.Equal(
+            "Warning: lines 1-2: the value of 's' (or an encoded form of it) was left in place: it is not a whole value that apply " +
+            "fills back ('key: value', or 'KEY=value' without control characters). If it is the secret there, move it out by hand.\n" +
+            "File unchanged.\n",
+            stderr.Replace("\r\n", "\n"));
+        Assert.Equal(before, File.ReadAllBytes(file));
+    }
+
     [Fact]
     public void NoSecrets_SaysSoExactly()
     {

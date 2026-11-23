@@ -51,6 +51,14 @@ public sealed class ToCommentCommand : ICliCommand
 
         foreach (var diff in changes)
         {
+            if (diff is MultiLineDiff multi)
+            {
+                // Brief T50b Task 3 (#399): one change over several lines; the value's text is never printed.
+                ctx.Console.Error.WriteLine($"  lines {multi.LineNumber}-{multi.LastLineNumber}:");
+                ctx.Console.Error.WriteLine($"  - [value over {multi.LastLineNumber - multi.LineNumber + 1} lines]");
+                ctx.Console.Error.WriteLine($"  + {Redact.RedactContent(multi.After, matcher)}");
+                continue;
+            }
             ctx.Console.Error.WriteLine($"  line {diff.LineNumber}:");
             if (diff is BlockLineDiff)
             {
