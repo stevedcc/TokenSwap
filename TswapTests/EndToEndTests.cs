@@ -467,8 +467,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         // inline `sh -c` code); tswap execs sh directly with the script and the secret as $1.
         var childScript = Path.Combine(_tempDir, "print3.sh");
         File.WriteAllText(childScript, "echo before\necho \"$1\"\necho after\n");
-        if (RunTswapUnderOuterPty($"run sh \"{childScript}\" {{{{my-secret}}}}") is not var (exitCode, output))
-            return; // openpty not available on this platform; skip test
+        var (exitCode, output) = RunTswapUnderOuterPty($"run sh \"{childScript}\" {{{{my-secret}}}}");
         Assert.Equal(0, exitCode);
         Assert.Contains("before",               output);
         Assert.Contains("after",                output);
@@ -479,19 +478,17 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     /// <summary>
     /// Runs the tswap binary with <paramref name="tswapArgs"/> (a bash-quoted argument string) under
     /// an outer PTY, so isatty(0/1/2) is true and <c>PtyRunnerFactory.Create()</c> picks
-    /// LinuxPty/MacOSPty. Returns tswap's exit code and everything it wrote to the terminal, or null
-    /// where openpty isn't available. With <paramref name="reply"/>, its text is typed into the terminal
+    /// LinuxPty/MacOSPty. Returns tswap's exit code and everything it wrote to the terminal; fails the test
+    /// where openpty isn't available (#362). With <paramref name="reply"/>, its text is typed into the terminal
     /// once (and only once) the output contains <c>WhenSeen</c>: input is sent only after a prompt shows.
     /// </summary>
-    private (int ExitCode, string Output)? RunTswapUnderOuterPty(string tswapArgs, (string WhenSeen, string Type)? reply = null)
+    private (int ExitCode, string Output) RunTswapUnderOuterPty(string tswapArgs, (string WhenSeen, string Type)? reply = null)
     {
         // Open an outer PTY pair. tswap will inherit the slave as its fds so
         // isatty(0/1/2) returns true and PtyRunnerFactory.Create() picks LinuxPty/MacOSPty.
         var nameBuf = new byte[256];
         int masterFd = -1, slaveFd = -1;
         int ptyRet = OpenPty(ref masterFd, ref slaveFd, nameBuf);
-        if (ptyRet == int.MinValue)
-            return null; // openpty not available on this platform
         if (ptyRet < 0)
             throw new Exception($"openpty failed (errno {Marshal.GetLastPInvokeError()})");
 
@@ -518,8 +515,9 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         // Read from the outer PTY master until the child has exited and the master is drained (the parent holds a
         // slave fd, so EOF/EIO is not the normal end, #234). poll() with a 500 ms timeout bounds each read attempt so the test can never hang
         // indefinitely if tswap or dotnet stalls; the 60 s deadline kills the child process.
-        // try/finally ensures masterFd and slaveFd are closed on all exit paths (assertion
-        // failure, exception from PtyRead, etc.) so the test never leaks file descriptors.
+        // try/finally (opened before Process.Start, as in EnrolOnPty.Run) kills and reaps the child, then closes
+        // masterFd and slaveFd, on every exit path (a throw from Start or PtyRead included), so the test never leaks
+        // a process or a file descriptor.
         const int EINTR  = 4;
         // EAGAIN differs by OS: Linux=11, macOS=35. Retry rather than treating as EIO
         // to match the production UnixPty loop and avoid spurious breaks on O_NONBLOCK fds.
@@ -528,9 +526,10 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         var sb       = new StringBuilder();
         var buf      = new byte[4096];
         var deadline = DateTime.UtcNow.AddSeconds(60);
-        using var process = Process.Start(psi)!;
+        Process? process = null;
         try
         {
+            process = Process.Start(psi)!;
             // The parent keeps its copy of the slave open until it is done (#234). On macOS CI the master reported
             // EOF (revents POLLIN|POLLHUP) tens of ms after start, before tswap printed anything; why is not proven
             // (#210 found that a 1 s delay before the child opens the slave does not reproduce it). The master
@@ -572,18 +571,27 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
                 if (readErrno == EINTR || readErrno == eagain) continue; // interrupted or O_NONBLOCK: retry
                 break; // EIO or other terminal error
             }
+            if (!process.WaitForExit(TimeSpan.FromSeconds(5)))
+            {
+                process.Kill(entireProcessTree: true);
+                process.WaitForExit();
+            }
+            return (process.ExitCode, sb.ToString());
         }
         finally
         {
+            if (process is not null)
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                    process.WaitForExit(TimeSpan.FromSeconds(10));
+                }
+                process.Dispose();
+            }
             if (masterFd != -1) { PtyClose(masterFd); masterFd = -1; }
             if (slaveFd  != -1) { PtyClose(slaveFd);  slaveFd  = -1; }
         }
-        if (!process.WaitForExit(TimeSpan.FromSeconds(5)))
-        {
-            process.Kill(entireProcessTree: true);
-            process.WaitForExit();
-        }
-        return (process.ExitCode, sb.ToString());
     }
 
     /// <summary>
@@ -600,8 +608,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         var childScript = Path.Combine(_tempDir, "print-other.sh");
         File.WriteAllText(childScript, "echo \"got $1\"\necho \"log other-vault-value-42 end\"\n");
 
-        if (RunTswapUnderOuterPty($"run sh \"{childScript}\" {{{{my-secret}}}}") is not var (exitCode, output))
-            return; // openpty not available on this platform; skip test
+        var (exitCode, output) = RunTswapUnderOuterPty($"run sh \"{childScript}\" {{{{my-secret}}}}");
         Assert.Equal(0, exitCode);
         Assert.DoesNotContain("other-vault-value-42", output);
         Assert.DoesNotContain("s3cr3t", output);
@@ -624,8 +631,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         var prompt = Path.Combine(_tempDir, "prompt.sh");
         File.WriteAllText(prompt, "printf 'Continue? [y/N] '\nread x\necho \"answer-$x\"\n");
 
-        if (RunTswapUnderOuterPty($"run sh \"{prompt}\" {{{{token}}}}", ("Continue? [y/N] ", "y\n")) is not var (exitCode, output))
-            return; // openpty not available on this platform; skip test
+        var (exitCode, output) = RunTswapUnderOuterPty($"run sh \"{prompt}\" {{{{token}}}}", ("Continue? [y/N] ", "y\n"));
         Assert.Contains("answer-y", output);
         Assert.Equal(0, exitCode);
     }
@@ -641,8 +647,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         RunTswap("init", "--yubikey", "--no-recovery");
         RunTswapWithStdin("s3cr3t", "ingest", "my-secret");
 
-        if (RunTswapUnderOuterPty("run tswap-test-no-such-command {{my-secret}}") is not var (exitCode, output))
-            return; // openpty not available on this platform; skip test
+        var (exitCode, output) = RunTswapUnderOuterPty("run tswap-test-no-such-command {{my-secret}}");
         Assert.Equal(127, exitCode);
         Assert.Contains("redactingpty: exec failed (command not found or not executable)", output);
         Assert.DoesNotContain("s3cr3t", output);
@@ -778,17 +783,34 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     [DllImport("libc", EntryPoint = "poll", SetLastError = true)]
     private static extern int PtyPoll(ref TestPollFd fds, uint nfds, int timeout);
 
-    // Returns the openpty result (< 0 on failure), or int.MinValue if openpty is not
-    // available on this platform (neither libc nor libutil exports the symbol).
+    /// <summary>
+    /// Opens a pseudo-terminal pair through <see cref="OpenPtyThrough"/>: returns openpty's result (&lt; 0 on failure)
+    /// and fails the test where neither libc nor libutil exports openpty (#362).
+    /// </summary>
     private static int OpenPty(ref int masterFd, ref int slaveFd, byte[] nameBuf)
     {
-        try { return openpty_libc(ref masterFd, ref slaveFd, nameBuf, IntPtr.Zero, IntPtr.Zero); }
-        catch (DllNotFoundException) { }
-        catch (EntryPointNotFoundException) { } // openpty not exported by libc on this platform
-        try { return openpty_libutil(ref masterFd, ref slaveFd, nameBuf, IntPtr.Zero, IntPtr.Zero); }
-        catch (DllNotFoundException) { }
-        catch (EntryPointNotFoundException) { } // libutil not present or openpty not exported
-        return int.MinValue; // sentinel: openpty not available on this platform
+        int master = masterFd, slave = slaveFd;
+        var ret = OpenPtyThrough(
+            () => openpty_libc(ref master, ref slave, nameBuf, IntPtr.Zero, IntPtr.Zero),
+            () => openpty_libutil(ref master, ref slave, nameBuf, IntPtr.Zero, IntPtr.Zero));
+        masterFd = master;
+        slaveFd = slave;
+        return ret;
+    }
+
+    /// <summary>
+    /// The probe order behind <see cref="OpenPty"/> (#362): <paramref name="libc"/>, then <paramref name="libutil"/> when
+    /// libc lacks the library or the symbol. On Linux and macOS openpty always exists, so finding it in neither fails the
+    /// test (<see cref="OpenPtyUnavailable"/>) instead of letting it pass without asserting. A returned value, a failure
+    /// (&lt; 0) included, is returned; any other exception propagates.
+    /// </summary>
+    internal static int OpenPtyThrough(Func<int> libc, Func<int> libutil)
+    {
+        try { return libc(); }
+        catch (Exception e) when (e is DllNotFoundException or EntryPointNotFoundException) { }
+        try { return libutil(); }
+        catch (Exception e) when (e is DllNotFoundException or EntryPointNotFoundException) { }
+        throw OpenPtyUnavailable();
     }
 
     // Starts tswap with a PTY so ReadPassword enters interactive mode, then sends
@@ -799,14 +821,14 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     // Early sends (before TreatControlCAsInput=true is set) generate SIGINT with no
     // foreground pgid, which is silently dropped; the process keeps running and more
     // output arrives, resetting the quiescent timer for another attempt.
-    // Returns (exitCode, output, loopEnd); (-2, "", "") if openpty is unavailable on this platform.
+    // Returns (exitCode, output, loopEnd); fails the test if openpty is unavailable (#362).
     // loopEnd says why the read loop ended (for failure messages; macOS flake, #210).
+    // As in EnrolOnPty.Run, the finally kills and reaps the child on every path before the fds close.
     private (int exitCode, string output, string loopEnd) RunTswapWithPtyCtrlC(string waitForPrompt, params IEnumerable<string> args)
     {
         var nameBuf = new byte[256];
         int masterFd = -1, slaveFd = -1;
         int ptyRet = OpenPty(ref masterFd, ref slaveFd, nameBuf);
-        if (ptyRet == int.MinValue) return (-2, "", "");
         if (ptyRet < 0) throw new Exception($"openpty failed (errno {Marshal.GetLastPInvokeError()})");
 
         var slavePath = Encoding.ASCII.GetString(nameBuf, 0,
@@ -851,10 +873,11 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
             if (written == 1) lastCtrlCAt = DateTime.UtcNow;
         }
 
-        // Open the try/finally before Process.Start so fd cleanup runs even if Start throws.
+        // Open the try/finally before Process.Start so the cleanup runs even if Start throws.
+        Process? process = null;
         try
         {
-            using var process = Process.Start(psi)!;
+            process = Process.Start(psi)!;
             // The parent keeps its copy of the slave open until it is done (#234). On macOS CI the master reported
             // EOF (revents POLLIN|POLLHUP) tens of ms after start, before tswap printed anything; why is not proven
             // (#210 found that a 1 s delay before the child opens the slave does not reproduce it). The master
@@ -922,6 +945,15 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         }
         finally
         {
+            if (process is not null)
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                    process.WaitForExit(TimeSpan.FromSeconds(10));
+                }
+                process.Dispose();
+            }
             if (masterFd != -1) { PtyClose(masterFd); masterFd = -1; }
             if (slaveFd  != -1) { PtyClose(slaveFd);  slaveFd  = -1; }
         }
@@ -1025,15 +1057,13 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
 
         /// <summary>
         /// Runs <c>slot enrol</c> on the joining side with its stdin, stdout and stderr on a new pseudo-terminal's slave,
-        /// and hands <paramref name="drive"/> a session on the master. Null where openpty isn't available.
+        /// and hands <paramref name="drive"/> a session on the master. Fails the test where openpty isn't available (#362).
         /// </summary>
-        public (int ExitCode, string Output, bool Killed)? Run(Action<PtyDriver> drive)
+        public (int ExitCode, string Output, bool Killed) Run(Action<PtyDriver> drive)
         {
             var nameBuf = new byte[256];
             int masterFd = -1, slaveFd = -1;
             int ptyRet = OpenPty(ref masterFd, ref slaveFd, nameBuf);
-            if (ptyRet == int.MinValue)
-                return null;
             if (ptyRet < 0)
                 throw new Exception($"openpty failed (errno {Marshal.GetLastPInvokeError()})");
             var slavePath = Encoding.ASCII.GetString(nameBuf, 0, Array.IndexOf(nameBuf, (byte)0) is int z and >= 0 ? z : nameBuf.Length);
@@ -1174,8 +1204,9 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     private static extern int PtyGetAttr(int fd, [Out] byte[] termios);
 
     /// <summary>
-    /// Review round 3 (1): these tests run on Linux and macOS only ([UnixFact]), where openpty must exist; its absence
-    /// (neither libc nor libutil exports it, <see cref="OpenPty"/>'s sentinel) is a failure, never a silent pass.
+    /// Review round 3 (1), #362: the PTY tests run on Linux and macOS only ([UnixFact], [LinuxFact]), where openpty must
+    /// exist; its absence (neither libc nor libutil exports it, found by <see cref="OpenPtyThrough"/>) is a failure, never
+    /// a silent pass.
     /// </summary>
     private static Exception OpenPtyUnavailable()
     {
@@ -1207,14 +1238,13 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         enrol.SetUp();
         var hostKeyring = File.ReadAllBytes(enrol.HostKeyringPath);
 
-        if (enrol.Run(pty =>
-            {
-                pty.WaitFor(EnterGatePrompt);
-                pty.WaitForKeyRead();
-                pty.Type("\x03");
-                pty.WaitFor("wasn't confirmed");
-            }) is not var (exitCode, output, killed))
-            throw OpenPtyUnavailable();
+        var (exitCode, output, killed) = enrol.Run(pty =>
+        {
+            pty.WaitFor(EnterGatePrompt);
+            pty.WaitForKeyRead();
+            pty.Type("\x03");
+            pty.WaitFor("wasn't confirmed");
+        });
 
         AssertTheRequestIsKept(enrol, hostKeyring, exitCode, output, killed);
     }
@@ -1226,14 +1256,13 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         enrol.SetUp();
         var hostKeyring = File.ReadAllBytes(enrol.HostKeyringPath);
 
-        if (enrol.Run(pty =>
-            {
-                pty.WaitFor(EnterGatePrompt);
-                pty.WaitForKeyRead();
-                pty.Type("\x04");
-                pty.WaitFor("wasn't confirmed");
-            }) is not var (exitCode, output, killed))
-            throw OpenPtyUnavailable();
+        var (exitCode, output, killed) = enrol.Run(pty =>
+        {
+            pty.WaitFor(EnterGatePrompt);
+            pty.WaitForKeyRead();
+            pty.Type("\x04");
+            pty.WaitFor("wasn't confirmed");
+        });
 
         AssertTheRequestIsKept(enrol, hostKeyring, exitCode, output, killed);
     }
@@ -1247,20 +1276,19 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         var hostKeyring = File.ReadAllBytes(enrol.HostKeyringPath);
         var afterGate = "";
 
-        if (enrol.Run(pty =>
-            {
-                pty.WaitFor(EnterGatePrompt);
-                var before = pty.Output.Length;
-                pty.WaitForKeyRead();
-                pty.Type("zq7x\r");
-                pty.WaitFor("Nothing was typed in, just press Enter");
-                pty.WaitFor(EnterGatePrompt, times: 2);
-                afterGate = pty.Output[before..];
-                pty.WaitForKeyRead();
-                pty.Type("\x03");
-                pty.WaitFor("wasn't confirmed");
-            }) is not var (exitCode, output, killed))
-            throw OpenPtyUnavailable();
+        var (exitCode, output, killed) = enrol.Run(pty =>
+        {
+            pty.WaitFor(EnterGatePrompt);
+            var before = pty.Output.Length;
+            pty.WaitForKeyRead();
+            pty.Type("zq7x\r");
+            pty.WaitFor("Nothing was typed in, just press Enter");
+            pty.WaitFor(EnterGatePrompt, times: 2);
+            afterGate = pty.Output[before..];
+            pty.WaitForKeyRead();
+            pty.Type("\x03");
+            pty.WaitFor("wasn't confirmed");
+        });
 
         Assert.Contains("(what you typed was not shown or used).", afterGate);
         Assert.DoesNotContain("zq7x", output);
@@ -1280,8 +1308,6 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
 
         var (exitCode, output, loopEnd) = RunTswapWithPtyCtrlC("Secret value for", "add", "ctrlc-secret");
 
-        if (exitCode == -2) return; // openpty not available on this platform
-
         Assert.True(exitCode == 130, $"Expected exit 130, got {exitCode}. PTY output: [{output}]. Read loop: {loopEnd}");
         Assert.True(output.Contains("Cancelled"), $"Expected 'Cancelled' in PTY output: [{output}]. Read loop: {loopEnd}");
     }
@@ -1294,8 +1320,6 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         var exportPath = Path.Combine(_tempDir, "ctrlc-export.enc");
 
         var (exitCode, output, loopEnd) = RunTswapWithPtyCtrlC("Export passphrase:", "export", exportPath);
-
-        if (exitCode == -2) return; // openpty not available on this platform
 
         Assert.True(exitCode == 130, $"Expected exit 130, got {exitCode}. PTY output: [{output}]. Read loop: {loopEnd}");
         Assert.True(output.Contains("Cancelled"), $"Expected 'Cancelled' in PTY output: [{output}]. Read loop: {loopEnd}");
@@ -1311,8 +1335,6 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         RunTswapWithStdin("passphrase\npassphrase\n", "export", exportPath);
 
         var (exitCode, output, loopEnd) = RunTswapWithPtyCtrlC("Import passphrase:", "import", exportPath);
-
-        if (exitCode == -2) return; // openpty not available on this platform
 
         Assert.True(exitCode == 130, $"Expected exit 130, got {exitCode}. PTY output: [{output}]. Read loop: {loopEnd}");
         Assert.True(output.Contains("Cancelled"), $"Expected 'Cancelled' in PTY output: [{output}]. Read loop: {loopEnd}");
