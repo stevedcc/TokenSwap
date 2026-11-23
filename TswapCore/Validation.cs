@@ -338,8 +338,10 @@ public static class Validation
 
     /// <summary>
     /// Brief T47 (A4): whether <paramref name="program"/> starts as a batch file or is cmd itself: its last component,
-    /// normalised as Windows does (a drive prefix, a <c>:stream</c> suffix and trailing dots and spaces dropped), ends
-    /// in <c>.cmd</c> or <c>.bat</c>, or is <c>cmd</c> (<c>cmd.exe</c>), ignoring case.
+    /// normalised as Windows does (<see cref="WindowsFileName"/>: a drive prefix and trailing dots and spaces dropped,
+    /// and a <c>:stream</c> suffix dropped only after a name ending in <c>.exe</c>, <c>.cmd</c>, <c>.bat</c> or
+    /// <c>.com</c>, reviews F15 and F17), ends in <c>.cmd</c> or <c>.bat</c>, or is <c>cmd</c> (<c>cmd.exe</c>), ignoring
+    /// case.
     /// </summary>
     public static bool IsBatchTarget(string program)
     {
@@ -518,7 +520,7 @@ public static class Validation
           "xvfb-run", "dbus-run-session", "systemd-run", "firejail", "bwrap", "unshare", "nsenter",
           "chroot", "caffeinate", "uv", "uvx", "poetry", "pipenv", "pdm", "hatch", "conda", "pixi",
           "npx", "pnpx", "bunx", "npm", "pnpm", "yarn", "bundle", "docker", "podman", "nerdctl",
-          "kubectl", "oc", "lxc", "incus", "flatpak", "snap", "machinectl", "toolbox", "distrobox" };
+          "kubectl", "oc", "lxc", "incus", "flatpak", "snap", "machinectl", "toolbox", "distrobox", "wsl" };
 
     // Run their -c/--command argument through the target user's shell.
     private static readonly HashSet<string> ShellAsUser = new(StringComparer.OrdinalIgnoreCase)
@@ -697,6 +699,8 @@ public static class Validation
         ["runuser"] = ["-u", "-g", "-G", "--user", "--group", "--supp-group", "-s", "--shell"],
         ["npx"] = ["-p", "--package"],
         ["systemd-run"] = ["-p", "--property", "-u", "--unit", "-E", "--setenv", "-M", "--machine"],
+        // Review fix F19: wsl's -e/--exec take no value of their own: the word after them is the command.
+        ["wsl"] = ["-d", "--distribution", "-u", "--user", "--cd"],
     };
 
     // Wrappers whose first positional argument is not the command (timeout DURATION cmd,

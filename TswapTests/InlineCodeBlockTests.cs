@@ -171,6 +171,12 @@ public class InlineCodeBlockTests
     [InlineData("docker", "run", "node:20", "-e", "console.log('{{x}}')")]
     [InlineData("docker", "run", "mcr.microsoft.com/powershell:7.4", "-c", "Write-Host {{x}}")]
     [InlineData("find", ".", "-exec", "python:3.12", "-c", "print('{{x}}')", ";")]
+    // Review fix F19: wsl runs the command after its options (-e/--exec name it).
+    [InlineData("wsl", "bash", "-c", "echo {{x}}")]
+    [InlineData("wsl", "-d", "Ubuntu", "bash", "-c", "echo {{x}}")]
+    [InlineData("wsl.exe", "--distribution", "Ubuntu", "--user", "root", "--cd", "/srv", "bash", "-c", "echo {{x}}")]
+    [InlineData("wsl", "-e", "bash", "-c", "echo {{x}}")]
+    [InlineData("wsl", "--exec", "python3", "-c", "print('{{x}}')")]
     [InlineData("python.exe.", "-c", "print('{{x}}')")]
     [InlineData("cmd.exe.", "/c", "echo {{x}}")]
     public void InlineCodeOrBlockedProgram_IsRefused(params string[] argv)
@@ -259,6 +265,9 @@ public class InlineCodeBlockTests
     // Review fix F18: an image tag naming an interpreter that runs a script file, and F15's mount next to an image.
     [InlineData("docker", "run", "python:3.12", "app.py", "{{x}}")]
     [InlineData("docker", "run", "-v", "{{@cfg.yaml}}:/c.yaml", "python:3.12", "app")]
+    // Review fix F19: wsl running a script file.
+    [InlineData("wsl", "./deploy.sh", "{{x}}")]
+    [InlineData("wsl", "-d", "Ubuntu", "./deploy.sh", "{{x}}")]
     public void ScriptFileOrOrdinaryProgram_IsAllowed(params string[] argv)
     {
         Assert.Null(Validation.GetBlockedInvocation(argv));
