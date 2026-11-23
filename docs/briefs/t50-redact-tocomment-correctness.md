@@ -12,7 +12,7 @@ and which test failed), `./runtests.sh --unit` after each task, the full `./runt
 `ykman`, `sudo`, real YubiKeys or `~/.config/tswap`. Commits end with
 `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`, explicit-path commits, no push, merge or rebase; stop and report
 when the brief can't be built as written. **No existing test's assertions change except the ones this brief names**
-(Task 2, Task 4); if any other existing test fails because of a rule here, stop and list it. Do not touch
+(Task 2, Task 4, Owner decision 1); if any other existing test fails because of a rule here, stop and list it. Do not touch
 `TswapCore/Validation.cs` or `run`'s guards (another brief owns them); `Validation.ShortValueLength` is only read.
 No message, warning or test failure text ever contains a value or the text of a line that holds one.
 
@@ -45,6 +45,36 @@ No message, warning or test failure text ever contains a value or the text of a 
    `[x]`) turns the closing `}` or `]` into comment text: the file no longer parses.
 5. **#391, `redact`.** `Redact.CredentialHeuristic` (`Redact.cs:16-18`) needs 12 unbroken `[A-Za-z0-9+/\-_]`
    characters, so a quoted passphrase (`password: "correct horse battery staple"`) is neither flagged nor masked.
+
+## Owner decisions (2026-11-23)
+
+1. **Assertion changes.** The changes this brief names (Task 2, Task 4) are sanctioned by the owner, with one exception:
+   the tocomment-vs-oracle comparison in `RedactEngineTests.Engine_MatchesOracle_OnRandomCorpus` is **kept**. Instead the
+   frozen oracle (`TswapTests/PlaintextRedactOracle.cs`) gets the same rules, an owner-sanctioned rule change to a file
+   that otherwise stays frozen (update its summary: "frozen at 65b41ed, plus T50's whole-value rule and line-break pass,
+   owner decision 2026-11-23"). Exactly this changes in its tocomment path (`ToCommenter`), nothing in its redact path:
+   - **Whole-value rule.** Each `Regex.Replace` match is replaced only when Task 4's rules (a) and (b) hold for it,
+     checked on the line as it stands when that match is tried (the oracle replaces sequentially); otherwise the match
+     is kept as it is (`m => WholeValue(current, m) ? replacement : m.Value`). Only one place on a line can satisfy both
+     rules, so the sequential order doesn't change the result.
+   - **Line-break pass.** Before its CRLF normalisation, for every plaintext value version holding a `\n` (the plain
+     form, current and previous), longest first, then as its match list sorts: its three forms (as stored, `\r\n` as
+     `\n`, lone `\n` as `\r\n`) are searched in the raw content, leftmost first, never overlapping an occurrence already
+     taken; each occurrence follows Task 5's rules and becomes one `MultiLineDiff` or is left as it is. The line loop
+     then skips those lines.
+
+   The oracle returns no warnings (`Skipped` is the engine's alone). Consequences, sanctioned with the rest: the corpus
+   test's tocomment comparison and its `tocomment-hits` counter stay (if the fixed seed now gives fewer than 21 tocomment
+   hits, stop and report; don't change the seed or the generator); `RedactBehaviourPinTests`' `AssertToComment` keeps
+   comparing with the oracle, so its two changed rows just get the new expected result; in `RedactEngineTests` the
+   oracle lines 58 (`ToComment_SecretInsideAnInsertedMarker_NotReplaced`: now `k: ""  # tswap: s1`) and 69
+   (`ToComment_AdjacentSecrets_UseOriginalNeighbours`: now `k: beta2.alpha12`) change with line 70, and their "Today"
+   comments say what the old engine did. Task 5's table rows also assert that the oracle gives the same `Content` and
+   `Changes`. If the corpus test shows any other engine/oracle difference, stop and report it.
+2. **Found but not replaced:** exit 0, one warning per occurrence, ending with `File unchanged.` (as T22), as Tasks 4 and
+   5 say.
+3. **Task 2 stays** (controller): masking must not depend on the PTY's ONLCR.
+4. **One multi-line value counts as one change** (controller), as Task 5 says.
 
 ## Task 1: `redact` matches on every line-ending form of the text (#398)
 
@@ -221,10 +251,11 @@ commit message lists them):
 | `RedactTests.ToComment_YamlFlowMapping_UnquotedValueAdjacentToComma` | replaced (closing `}` lands in the comment) | content unchanged |
 | `RedactTests.ToComment_YamlFlowMapping_DoubleQuotedValueAdjacentToComma` | replaced (same) | content unchanged |
 | `RedactTests.ToComment_YamlFlowSequence_ValueAdjacentToBracket` | replaced (`]` in the comment) | content unchanged |
-| `RedactBehaviourPinTests.OverlappingSecrets_TheOrdinallySmallerTextWins` (tocomment half) | `k: foo ""  # tswap: s2` | engine: unchanged, no change; the frozen oracle's old result asserted on its own line, as `RedactEngineTests.ToComment_AdjacentSecrets_UseOriginalNeighbours` does |
-| `RedactBehaviourPinTests.EqualLengthTies_DecidedByText_NotPosition` (tocomment half) | `k: x ""  # tswap: z-abz-secret` | the same treatment: engine unchanged, oracle on its own line |
-| `RedactEngineTests.ToComment_AdjacentSecrets_UseOriginalNeighbours` (line 70) | `k: beta2.""  # tswap: a` | `k: beta2.alpha12` |
-| `RedactEngineTests.Engine_MatchesOracle_OnRandomCorpus` | tocomment compared with the oracle (lines 169-172, counter `tocomment-hits`) | the tocomment comparison and its counter removed (the frozen oracle predates the rule); redact still compared |
+| `RedactBehaviourPinTests.OverlappingSecrets_TheOrdinallySmallerTextWins` (tocomment half) | `k: foo ""  # tswap: s2` | unchanged, no change (engine and the updated oracle, through `AssertToComment`) |
+| `RedactBehaviourPinTests.EqualLengthTies_DecidedByText_NotPosition` (tocomment half) | `k: x ""  # tswap: z-abz-secret` | unchanged, no change (the same) |
+| `RedactEngineTests.ToComment_AdjacentSecrets_UseOriginalNeighbours` (lines 69-70, oracle and engine) | `k: ""  # tswap: b""  # tswap: a` / `k: beta2.""  # tswap: a` | `k: beta2.alpha12` for both |
+| `RedactEngineTests.ToComment_SecretInsideAnInsertedMarker_NotReplaced` (line 58, oracle) | `k: ""  # ""  # tswap: s2: s1` | `k: ""  # tswap: s1` |
+| `RedactEngineTests.Engine_MatchesOracle_OnRandomCorpus` | — | no assertion changes: it keeps comparing tocomment, against the updated oracle (Owner decision 1) |
 | `ToCommentDryRunPinTests.DryRun_ReportsRedactedBeforeLines_AndLeavesTheFile` | `+ db: ""  # tswap: db  # note ""  # tswap: api` | `+ db: ""  # tswap: db  # note [REDACTED: api]`, then the warning for line 1 and `'api'` before the summary |
 
 Tests (engine, `Redact.ToCommentReport(content, db)`, one secret `app-user` = `authentik`, one line each):
