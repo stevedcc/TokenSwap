@@ -21,5 +21,5 @@ ProcessHardening.HardenCli();
 using var consoleOutput = ConsoleOutputEncoding.Utf8OnWindows(ConsoleOutputEncoding.System);
 
 // Brief T52 (#403): on Windows, get and apply write a redirected stdout as UTF-8 (one encoding for the whole stream).
-var stdout = ConsoleOutputEncoding.Utf8StdoutForSecretValues(ConsoleOutputEncoding.System, CommandRegistry.PrintsSecretValues(args));
+var stdout = ConsoleOutputEncoding.Utf8StdoutForSecretValues(ConsoleOutputEncoding.System, false);
 return CliHost.Run(args, new SystemConsole(stdout), Environment.GetEnvironmentVariable, Environment.IsPrivilegedProcess, Environment.ProcessPath);
