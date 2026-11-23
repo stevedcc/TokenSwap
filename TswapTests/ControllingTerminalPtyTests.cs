@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Text;
@@ -31,11 +32,11 @@ public sealed class ControllingTerminalPtyTests : IDisposable
 
     public void Dispose() => _pty?.Dispose();
 
-    [Fact]
+    [UnixFact("no pseudo-terminals on Windows")]
     public async Task ReadSecret_AfterDotNetReadLine_EnterEndsThePin()
     {
         if (_pty is null)
-            return; // no pseudo-terminals on Windows (and no /dev/tty reader there)
+            throw new UnreachableException("[UnixFact] runs this test only on Linux and macOS");
         _pty.DotNetAfterReadLine();
         var calls = new ObservedTermios();
         using var tty = ControllingTerminal.UnixTty.OpenPath(_pty.TerminalPath, calls)!;
@@ -48,11 +49,11 @@ public sealed class ControllingTerminalPtyTests : IDisposable
         Assert.Equal("1234", Encoding.UTF8.GetString(pin!));
     }
 
-    [Fact]
+    [UnixFact("no pseudo-terminals on Windows")]
     public async Task ReadSecret_AfterDotNetReadLine_BackspaceErases()
     {
         if (_pty is null)
-            return;
+            throw new UnreachableException("[UnixFact] runs this test only on Linux and macOS");
         _pty.DotNetAfterReadLine();
         var calls = new ObservedTermios();
         using var tty = ControllingTerminal.UnixTty.OpenPath(_pty.TerminalPath, calls)!;
@@ -65,11 +66,11 @@ public sealed class ControllingTerminalPtyTests : IDisposable
         Assert.Equal("1234", Encoding.UTF8.GetString(pin!)); // before: "12x\x7f34", a wrong PIN sent to the key
     }
 
-    [Fact]
+    [UnixFact("no pseudo-terminals on Windows")]
     public async Task ReadSecret_PutsTheTerminalBackAsItWas()
     {
         if (_pty is null)
-            return;
+            throw new UnreachableException("[UnixFact] runs this test only on Linux and macOS");
         _pty.DotNetAfterReadLine();
         _pty.EchoNewlines(); // ECHONL on beforehand: the read must switch it off too (review PR #298)
         var before = _pty.Flags();
@@ -86,11 +87,11 @@ public sealed class ControllingTerminalPtyTests : IDisposable
         Assert.Equal(before, _pty.Flags()); // .NET's console finds its own settings again
     }
 
-    [Fact]
+    [UnixFact("no pseudo-terminals on Windows")]
     public async Task ReadSecret_Resume_DiscardsWhatWasTypedBeforeTheStop()
     {
         if (_pty is null)
-            return;
+            throw new UnreachableException("[UnixFact] runs this test only on Linux and macOS");
         var calls = new ObservedTermios();
         using var tty = ControllingTerminal.UnixTty.OpenPath(_pty.TerminalPath, calls)!;
 
@@ -106,11 +107,11 @@ public sealed class ControllingTerminalPtyTests : IDisposable
         Assert.Contains(ControllingTerminal.UnixTty.ResumedText, _pty.Shown(Wait, ControllingTerminal.UnixTty.ResumedText));
     }
 
-    [Fact]
+    [UnixFact("no pseudo-terminals on Windows")]
     public async Task ReadLine_AfterDotNetReadLine_EnterEndsTheAnswerAndItIsEchoed()
     {
         if (_pty is null)
-            return;
+            throw new UnreachableException("[UnixFact] runs this test only on Linux and macOS");
         _pty.DotNetAfterReadLine();
         var before = _pty.Flags();
         var calls = new ObservedTermios();
@@ -129,11 +130,11 @@ public sealed class ControllingTerminalPtyTests : IDisposable
     // #293: what a stray touch on a YubiKey's OTP slot types (a one-time code, no Enter), in front of the answer.
     private const string StrayOtp = "cccccdhevenedcf";
 
-    [Fact]
+    [UnixFact("no pseudo-terminals on Windows")]
     public void Typeahead_DiscardUnix_DropsWhatWasTypedBeforeIt()
     {
         if (_pty is null)
-            return;
+            throw new UnreachableException("[UnixFact] runs this test only on Linux and macOS");
         _pty.Type(StrayOtp);
         Assert.Equal(0, Typeahead.DiscardUnix(_pty.TerminalFd));
         _pty.Type("yes\n");
@@ -143,11 +144,11 @@ public sealed class ControllingTerminalPtyTests : IDisposable
         Assert.Equal("yes", tty.ReadLine()); // without the discard: "cccccdhevenedcfyes"
     }
 
-    [Fact]
+    [UnixFact("no pseudo-terminals on Windows")]
     public async Task ReadLine_DiscardsWhatWasTypedBeforeTheRead()
     {
         if (_pty is null)
-            return;
+            throw new UnreachableException("[UnixFact] runs this test only on Linux and macOS");
         _pty.Type(StrayOtp);
         _pty.ReadEcho(Wait, StrayOtp);
         var calls = new ObservedTermios();
@@ -160,11 +161,11 @@ public sealed class ControllingTerminalPtyTests : IDisposable
         Assert.Equal("yes", await read.WaitAsync(Wait)); // TCSAFLUSH (#296) dropped the code
     }
 
-    [Fact]
+    [UnixFact("no pseudo-terminals on Windows")]
     public async Task ReadSecret_DiscardsWhatWasTypedBeforeTheRead()
     {
         if (_pty is null)
-            return;
+            throw new UnreachableException("[UnixFact] runs this test only on Linux and macOS");
         _pty.Type(StrayOtp);
         _pty.ReadEcho(Wait, StrayOtp);
         var calls = new ObservedTermios();

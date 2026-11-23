@@ -50,6 +50,11 @@ There is no linter configured.
 and assert the platform-neutral "requires", not "sudo" (Windows says "requires an administrator
 prompt"). Run such commands with the sudo bypass off (`SudoBypass: false`, or `FleetMachine.Sudo = false`).
 
+**PTY tests**: on Linux and macOS `openpty` must exist, so the PTY harnesses in `EndToEndTests` fail (never return
+early) when it is missing; ConPTY tests use `[WindowsConPtyFact]`, which skips with a reason off Windows and before
+Windows 10 1809. Broker tests read the log through `ObservedLog` (thread-safe; wait for a line with `WaitForLogAsync`
+before asserting on it).
+
 **Docs and spelling guards** (`TswapTests/Docs/`): the doc-link tests and the British-spelling tests
 (`SpellingTests`, allowlist `TswapTests/Docs/us-spellings-allowed.txt`) read every file git tracks *or would
 track*: untracked files that `.gitignore` doesn't exclude count too. A stray local note with a US spelling or a
