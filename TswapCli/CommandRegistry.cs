@@ -51,6 +51,20 @@ public static class CommandRegistry
     /// <see cref="Commands.CompletionCommand"/> to generate shell completions.</summary>
     public static IReadOnlyList<ICliCommand> All => Commands;
 
+    /// <summary>
+    /// Brief T52 (#403): whether <paramref name="args"/> run a command that prints secret values
+    /// (<see cref="ICliCommand.PrintsSecretValues"/>), found as <see cref="Dispatch"/> finds it: the global flags
+    /// skipped, the name lowercased. False for no command or an unknown one.
+    /// </summary>
+    public static bool PrintsSecretValues(string[] args)
+    {
+        var (_, commandArgs) = CliEnvironment.SplitGlobalFlags(args);
+        if (commandArgs is not [var first, ..])
+            return false;
+        var name = first.ToLower();
+        return Commands.FirstOrDefault(c => c.Name == name)?.PrintsSecretValues ?? false;
+    }
+
     public static int Dispatch(CommandContext ctx, string[] args)
     {
         if (args is [] or ["--help" or "-h" or "help", ..])
