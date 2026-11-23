@@ -17,6 +17,16 @@ changes, except the two rows Task 4 names.** If any other existing test fails, s
 redaction or `tocomment` code (another brief owns it). No reason text repeats a word of the command: the walk also runs
 after substitution, where a word can be a secret's value.
 
+## Decisions (2026-11-23)
+
+1. **Owner: sanctioned.** `wsl` runs a command only in exec mode (`-e`, `--exec`, `--shell-type none`). The two
+   `InlineCodeBlockTests` rows `wsl ./deploy.sh {{x}}` and `wsl -d Ubuntu ./deploy.sh {{x}}` move to refused, and `-e`
+   rows replace them (Task 4). The refusal names `wsl -e ./deploy.sh {{secret}}` as the way out.
+2. **Controller: the over-refusals listed in Tasks 2–4 are accepted** (fail closed; the inline check is a guard). Every
+   new refusal's message names its way out, then ends with the standard way-out sentence (`WayOut`), so `run`'s
+   Windows swap and `RunWindowsWordingTests.WayOutReasons` cover them. Task 5 lists the over-refusals in the docs.
+3. **Controller: System32's `bash.exe`** (WSL's launcher) stays out of scope; the controller files it as a 0.3.3 issue.
+
 ## Why parser-first
 
 In 0.3.2 the inline-code check took eight review rounds because each fix matched example spellings. Here every rule
@@ -177,9 +187,9 @@ Replace the `deno` branch (722–735) with `CheckDeno(string program, List<strin
    - Skip a word that starts with a single `-`, is longer than one character, and has `h`, `V`, `L` or `q` as its second character. When the word is exactly `-L`, skip the word after it too.
    - Stop at any other word.
 3. At the word where the walk stopped:
-   - No word left (`deno`, `deno -q`, `deno --version`): refused. Reason: `'deno' with no script starts its REPL, which reads code from stdin and can transform and print secrets past redaction.` followed by `WayOut`.
+   - No word left (`deno`, `deno -q`, `deno --version`): refused. Reason: `'deno' with no script starts its REPL, which reads code from stdin and can transform and print secrets past redaction. Write 'deno run <script>'.` followed by `WayOut`.
    - The word is `eval` or `repl`: today's `InlineReason(program, "eval")`.
-   - The word starts with `-` (a run option with no subcommand, as in `deno -A main.ts`): refused. Reason: `'deno' with options but no subcommand runs a script whose position this check can't find, or starts its REPL. Write 'deno run <options> <script>'.`
+   - The word starts with `-` (a run option with no subcommand, as in `deno -A main.ts`): refused. Reason: `'deno' with options but no subcommand runs a script whose position this check can't find, or starts its REPL. Write 'deno run <options> <script>'.` followed by `WayOut`.
    - Anything else is a subcommand or a bare script: null.
 
 Rows refused: `deno run --config deno.json - {{x}}`, `deno run --config x /dev/stdin`, `deno --log-level debug run -`,
@@ -187,8 +197,8 @@ Rows refused: `deno run --config deno.json - {{x}}`, `deno run --config x /dev/s
 `deno serve -`, `deno run --seed 1 /proc/self/root/dev/stdin`. Allowed: `deno run app.ts {{x}}`, `deno main.ts {{x}}`,
 `deno -q run app.ts {{x}}`, `deno --log-level=debug run app.ts {{x}}`, `deno run -A --config deno.json app.ts {{x}}`,
 `deno task build {{x}}`. Existing deno rows unchanged (InlineCodeBlockTests.cs:81, 242, 687–689; RunWindowsWordingTests.cs:108).
-Add `["deno"]` to `RunWindowsWordingTests.WayOutReasons` (the REPL reason ends with `WayOut`) and update its comment's
-count. Break-it-once: restore the old `FindIndex(a => !a.StartsWith('-'))` subcommand; the `--log-level debug run -`
+Add `["deno"]` and `["deno", "-A", "main.ts"]` to `RunWindowsWordingTests.WayOutReasons` (both reasons end with `WayOut`)
+and update its comment's count. Break-it-once: restore the old `FindIndex(a => !a.StartsWith('-'))` subcommand; the `--log-level debug run -`
 row fails. Accepted over-refusals: `deno --version`/`-h` with a token, `deno fmt -`, a literal `-` or `/dev/…`
 argument to a deno script, run options before a bare script.
 
@@ -215,19 +225,21 @@ Then, with the command:
 - Non-empty and `exec` false: refused with the shell-mode reason below.
 - Non-empty and `exec` true: `GetBlockedInvocation(WithImageProgram(command))`, wrapped as `'wsl' runs '<inner program>': <inner reason>`, exactly as `CheckWrapper.Wrapped` does.
 
-Reasons (new constants; they don't end with `WayOut`, since wsl's way out is its own):
-- Shell mode: `'wsl' without -e (or --shell-type none) runs its command line through the Linux shell ($SHELL -c), which parses a substituted value again and can transform and print secrets past redaction. Give the command after -e, e.g. 'run wsl -e ./script.sh {{secret}}'.`
-- Unknown: `'wsl': an option this check doesn't know (wsl.exe matches its options exactly), so it can't tell what wsl runs. Give the command after -e, e.g. 'run wsl -e ./script.sh {{secret}}'.`
+Reasons (new constants; each names wsl's own way out, then ends with `WayOut`, Decision 2):
+- Shell mode: `'wsl' without -e (or --shell-type none) runs its command line through the Linux shell ($SHELL -c), which parses a substituted value again and can transform and print secrets past redaction. Give the command after -e: 'wsl -e ./deploy.sh {{secret}}'.` followed by `WayOut`.
+- Unknown: `'wsl': an option this check doesn't know (wsl.exe matches its options exactly), so it can't tell what wsl runs. Give the command after -e: 'wsl -e ./deploy.sh {{secret}}'.` followed by `WayOut`.
+
+Add `["wsl", "./deploy.sh", "x"]` and `["wsl", "--exec=bash"]` to `RunWindowsWordingTests.WayOutReasons`.
 
 Extend `WrapperValued["wsl"]` (786) with `--distribution-id`, `--shell-type`, `--parent-console`, so the `{{@file}}`
 program walk (`ProgramPositions`, 261) skips their values too.
 
-**Existing rows that change (needs the controller's sanction before launch):** `ScriptFileOrOrdinaryProgram_IsAllowed`
+**Existing rows that change (sanctioned by the owner, Decision 1):** `ScriptFileOrOrdinaryProgram_IsAllowed`
 rows `["wsl", "./deploy.sh", "{{x}}"]` and `["wsl", "-d", "Ubuntu", "./deploy.sh", "{{x}}"]` (InlineCodeBlockTests.cs:293–294)
 move to `InlineCodeOrBlockedProgram_IsRefused`. wsl.exe runs both as `$SHELL -c "./deploy.sh <value>"`, the shape `sh -c`
 is refused for (source above). Their replacements in the allowed list are `["wsl", "-e", "./deploy.sh", "{{x}}"]` and
-`["wsl", "-d", "Ubuntu", "--exec", "./deploy.sh", "{{x}}"]`. Say so in the commit message. If the controller doesn't
-sanction it, build everything else in this task and leave those two rows and the shell-mode rule out.
+`["wsl", "-d", "Ubuntu", "--exec", "./deploy.sh", "{{x}}"]`. Say so in the commit message, naming the owner's
+sanction of 2026-11-23.
 
 Rows refused: `wsl -d Ubuntu`, `wsl -u root`, `wsl --cd /srv`, `wsl --`, `wsl -d Ubuntu --`, `wsl ~`, `wsl --system`,
 `wsl --debug-shell`, `wsl --install`, `wsl --shell-type login ./x.sh {{x}}`,
@@ -249,14 +261,19 @@ rows fail. Accepted over-refusal: `wsl ~ -e ./x.sh` (a legacy `~` read as the co
   - Drop #404 from the gaps, and say instead that a flag built from tokens is checked again after substitution (`pwsh -{{a}} {{b}}`).
   - Drop #405 and #406.
   - Replace "a script path is recognised as stdin in any spelling…" with: a script path under `/dev` or `/proc` (other than `/dev/null` and `/dev/shm`), or a Windows console name (`CON`, `CONIN$`), is refused, because it can read stdin or the terminal. A symbolic link elsewhere is not followed. A relative path resolved in another context (a container's working folder, `wsl --cd`, `sudo -D`, `chroot`) isn't checked, because the command line doesn't show where it resolves.
-  - Name the accepted over-refusals in one sentence.
+  - List the accepted over-refusals (Decision 2):
+    - any `/dev` or `/proc` word (other than `/dev/null`, `/dev/shm/`) anywhere after `pwsh`, `powershell` or `deno`;
+    - a file named `con…` up to its first dot, and a `\\.\` path, on every OS;
+    - `deno` with no script (`deno --version`, `deno -h` included), `deno fmt -`, run options with no subcommand
+      (`deno -A main.ts`: write `deno run -A main.ts`);
+    - `wsl` without `-e`/`--shell-type none` (write `wsl -e ./deploy.sh {{secret}}`), and `wsl ~ -e ./x.sh`.
 
 Don't change `TswapCore/Prompt.cs` (its hash is pinned).
 
 ## Out of scope
 
 - Redaction and `tocomment` (another brief).
-- System32's `bash.exe` (WSL's launcher, `BashMain`: `bash <cmdline>` is `/bin/bash -c <cmdline>`). Worth its own issue.
+- System32's `bash.exe` (WSL's launcher, `BashMain`: `bash <cmdline>` is `/bin/bash -c <cmdline>`). The controller files it as a 0.3.3 issue (Decision 3).
 - `deno x` and `deno task` (they run package binaries and the config's shell tasks).
 - Broker templates' argument placeholders (validated by pattern, no secrets in argv).
 - 8.3 names, symbolic links, an interpreter entrypoint under another image name.
