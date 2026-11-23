@@ -23,6 +23,9 @@ internal interface IConsoleEncodingHost
 
     /// <summary>Flushes <see cref="Console.Out"/> and <see cref="Console.Error"/>.</summary>
     void Flush();
+
+    /// <summary>The raw stdout stream (<see cref="Console.OpenStandardOutput()"/>).</summary>
+    Stream OpenStandardOutput();
 }
 
 /// <summary>
@@ -32,7 +35,8 @@ internal interface IConsoleEncodingHost
 /// as it is and redacts it. With either stream redirected nothing changes (A1): the library writes a child's output
 /// to the raw streams in <see cref="Console.OutputEncoding"/>, so a mixed setting would put two encodings in one
 /// file. The old code page is put back at dispose; a Ctrl+C or a killed tswap leaves the window at 65001 (no
-/// signal handler, by ruling).
+/// signal handler, by ruling). Brief T52 (#403): <c>get</c> and <c>apply</c> write a redirected stdout as UTF-8
+/// through their own writer instead (<see cref="Utf8StdoutForSecretValues"/>).
 /// </summary>
 internal static partial class ConsoleOutputEncoding
 {
@@ -51,6 +55,18 @@ internal static partial class ConsoleOutputEncoding
             return Unchanged.Instance;
         host.OutputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
         return new Restore(host, original);
+    }
+
+    /// <summary>
+    /// Brief T52 (#403): for a command that prints secret values, on Windows with stdout not a console, a UTF-8 writer
+    /// (no byte order mark, AutoFlush) over the raw stdout stream; null otherwise (stdout stays Console.Out). Never sets
+    /// the console's encodings.
+    /// </summary>
+    public static TextWriter? Utf8StdoutForSecretValues(IConsoleEncodingHost host, bool printsSecretValues)
+    {
+        if (!printsSecretValues || !host.IsWindows || host.IsConsole(StandardStream.Output))
+            return null;
+        return new StreamWriter(host.OpenStandardOutput(), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)) { AutoFlush = true };
     }
 
     /// <summary>The process's real console.</summary>
@@ -104,6 +120,8 @@ internal static partial class ConsoleOutputEncoding
             Console.Out.Flush();
             Console.Error.Flush();
         }
+
+        public Stream OpenStandardOutput() => Console.OpenStandardOutput();
 
         [LibraryImport("kernel32", SetLastError = true)]
         private static partial nint GetStdHandle(int which);

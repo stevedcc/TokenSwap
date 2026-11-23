@@ -37,6 +37,12 @@ public interface ICliCommand
     bool WorksOnClassicVault => false;
 
     /// <summary>
+    /// Brief T52 (#403): true for a command that prints a secret value or a filled file on stdout (<c>get</c>, <c>apply</c>).
+    /// On Windows such a command writes a redirected stdout as UTF-8 (<see cref="ConsoleOutputEncoding.Utf8StdoutForSecretValues"/>).
+    /// </summary>
+    bool PrintsSecretValues => false;
+
+    /// <summary>
     /// Executes with <paramref name="args"/> = everything after the command name
     /// (the leading global -v/--verbose flags already stripped). Returns the process exit code.
     /// </summary>
