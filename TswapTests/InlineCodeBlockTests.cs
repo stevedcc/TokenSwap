@@ -191,6 +191,10 @@ public class InlineCodeBlockTests
     [InlineData("wsl.exe", "--distribution", "Ubuntu", "--user", "root", "--cd", "/srv", "bash", "-c", "echo {{x}}")]
     [InlineData("wsl", "-e", "bash", "-c", "echo {{x}}")]
     [InlineData("wsl", "--exec", "python3", "-c", "print('{{x}}')")]
+    // Review fix F24: an attached exec form names the command inside the option: refused fail-closed.
+    [InlineData("wsl", "--exec=bash", "-c", "echo {{x}}")]
+    [InlineData("wsl", "-ebash", "-c", "echo {{x}}")]
+    [InlineData("wsl", "-d", "Ubuntu", "--exec=./deploy.sh", "{{x}}")]
     [InlineData("python.exe.", "-c", "print('{{x}}')")]
     [InlineData("cmd.exe.", "/c", "echo {{x}}")]
     public void InlineCodeOrBlockedProgram_IsRefused(params string[] argv)
@@ -282,6 +286,10 @@ public class InlineCodeBlockTests
     // Review fix F19: wsl running a script file.
     [InlineData("wsl", "./deploy.sh", "{{x}}")]
     [InlineData("wsl", "-d", "Ubuntu", "./deploy.sh", "{{x}}")]
+    // Review fix F24: wsl's own informational commands.
+    [InlineData("wsl", "--list")]
+    [InlineData("wsl", "--status")]
+    [InlineData("wsl", "--version")]
     public void ScriptFileOrOrdinaryProgram_IsAllowed(params string[] argv)
     {
         Assert.Null(Validation.GetBlockedInvocation(argv));
@@ -380,5 +388,21 @@ public class InlineCodeBlockTests
     {
         foreach (var program in new[] { "powershell", "pwsh" })
             Assert.Null(Validation.GetBlockedInvocation([program, flag, "deploy.ps1", "{{x}}"]));
+    }
+
+    /// <summary>
+    /// Review fix F24: <c>wsl</c> with no arguments at all starts the default distribution's shell reading stdin,
+    /// refused with the reason every such wrapper gets.
+    /// </summary>
+    [Theory]
+    [InlineData("wsl")]
+    [InlineData("wsl.exe")]
+    public void Wsl_WithNoArguments_IsRefusedAsAShellReadingStdin(string program)
+    {
+        var blocked = Validation.GetBlockedInvocation([program]);
+
+        Assert.NotNull(blocked);
+        Assert.Equal("wsl", blocked!.Program);
+        Assert.StartsWith("'wsl' with no command starts a shell reading stdin, which can transform and print secrets past redaction.", blocked.Reason);
     }
 }

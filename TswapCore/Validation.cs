@@ -735,6 +735,19 @@ public static class Validation
         if (program.Equals("command", StringComparison.OrdinalIgnoreCase) && args.Any(a => a is "-v" or "-V"))
             return null; // command -v only looks the name up
 
+        // Review fix F24: wsl with no arguments at all starts the default distribution's shell reading stdin
+        // (wsl --list, --status, --version stay allowed); an attached exec form (--exec=cmd, -ecmd) names the command
+        // inside its own option, which the walk can't follow, so it is refused fail-closed (as su's --command=).
+        if (program.Equals("wsl", StringComparison.OrdinalIgnoreCase))
+        {
+            if (args.Count == 0)
+                return NoCommandShell(program);
+            var attached = OwnOptions(program, args).FirstOrDefault(a => a.StartsWith("--exec=", StringComparison.Ordinal)
+                || (a.StartsWith("-e", StringComparison.Ordinal) && a.Length > 2));
+            if (attached is not null)
+                return new(program, $"'{program} {attached}' names its command inside the option, which this check can't follow. {WayOut}");
+        }
+
         // sudo -s/-i run a shell (with any command through its -c), npx -c and flock -c run shell
         // code. Only the wrapper's own options count, before its command (sudo mv -i a b passes).
         var ownOptions = OwnOptions(program, args);
@@ -809,10 +822,11 @@ public static class Validation
             return null;
         }
         // No command at all: these wrappers then start a shell that reads stdin.
-        return ShellWhenNoCommand.Contains(program)
-            ? new(program, $"'{program}' with no command starts a shell reading stdin, which can transform and print secrets past redaction. {WayOut}")
-            : null;
+        return ShellWhenNoCommand.Contains(program) ? NoCommandShell(program) : null;
     }
+
+    private static BlockedInvocation NoCommandShell(string program) =>
+        new(program, $"'{program}' with no command starts a shell reading stdin, which can transform and print secrets past redaction. {WayOut}");
 
     // Review fix F18: in a wrapper's command (CheckWrapper, find -exec), a word whose last path component, with a
     // trailing '@<digest>' (F21) and ':<tag>' removed, names a checked program is a container image of it (python:3.12,
