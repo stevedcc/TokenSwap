@@ -33,12 +33,58 @@ public sealed class SecretMatcher(FingerprintIndex index, IReadOnlySet<string> b
     /// <summary>A taken occurrence; <see cref="Token"/> and <see cref="Kind"/> are its entry's (brief T22).</summary>
     private sealed record Span(int Start, int End, string Replacement, string Token, VariantKind Kind);
 
-    /// <summary><c>redact</c>: every recognised value in <paramref name="content"/> replaced by its label (CRLF becomes LF).</summary>
+    /// <summary>
+    /// <c>redact</c>: every recognised value in <paramref name="content"/> replaced by its label, then every
+    /// <c>\r\n</c> left in the output turned into <c>\n</c>. Brief T50a (#398): values are matched on the raw
+    /// content and on its line-ending views (<see cref="ViewHits"/>), so a value is found whatever its line
+    /// endings and the file's; the raw span is what is replaced.
+    /// </summary>
     public string Redact(string content)
     {
-        var text = content.Replace("\r\n", "\n");
-        var taken = Select(text, (entry, start) => (start, start + entry.Length, RedactProcessor.Label(entry.Token, entry.Kind)));
-        return Replace(text, taken);
+        var taken = Select(content);
+        return Replace(content, taken).Replace("\r\n", "\n");
+    }
+
+    /// <summary>A hit with the text it matched (in its view) and its span in the raw text.</summary>
+    private readonly record struct ViewHit(FingerprintHit Hit, string Text, int RawStart, int RawEnd);
+
+    /// <summary>The hits of <paramref name="text"/> itself, each with its own span.</summary>
+    private List<ViewHit> RawHits(string text) =>
+        [.. index.Scan(text).Select(hit => new ViewHit(hit, text.Substring(hit.Start, hit.Length), hit.Start, hit.Start + hit.Length))];
+
+    /// <summary>
+    /// Brief T50a (#398): the hits of <paramref name="text"/> in its raw form, its folded view and its unfolded
+    /// view (<see cref="LineEndingViews"/>), each with its raw span. A view's hit is kept only when it holds a
+    /// folded <c>\n</c> or an inserted <c>\r</c> (its raw length differs from its own; any other is the raw
+    /// view's hit again) and its raw span isn't empty.
+    /// </summary>
+    private List<ViewHit> ViewHits(string text)
+    {
+        var hits = RawHits(text);
+        if (LineEndingViews.HasCrLf(text))
+            AddViewHits(text, text.Length, LineEndingViews.Fold, hits);
+        if (LineEndingViews.HasBareLf(text))
+            AddViewHits(text, 2 * text.Length, LineEndingViews.Unfold, hits);
+        return hits;
+    }
+
+    private delegate int ViewBuilder(ReadOnlySpan<char> text, Span<char> view, Span<int> rawStart, Span<int> rawEnd);
+
+    private void AddViewHits(string text, int capacity, ViewBuilder build, List<ViewHit> hits)
+    {
+        var view = new char[capacity];
+        var rawStart = new int[capacity];
+        var rawEnd = new int[capacity];
+        var m = build(text, view, rawStart, rawEnd);
+        var viewText = new string(view, 0, m);
+        foreach (var hit in index.Scan(viewText))
+        {
+            var start = rawStart[hit.Start];
+            var end = rawEnd[hit.Start + hit.Length - 1];
+            if (end - start == hit.Length || end <= start)
+                continue;
+            hits.Add(new ViewHit(hit, viewText.Substring(hit.Start, hit.Length), start, end));
+        }
     }
 
     /// <summary>
@@ -140,30 +186,39 @@ public sealed class SecretMatcher(FingerprintIndex index, IReadOnlySet<string> b
     }
 
     /// <summary>
-    /// The hits of <paramref name="text"/> grouped into entries, in priority order, each with its starts left
-    /// to right. With <paramref name="wholeTokenShortValues"/> (brief T30, <c>redact</c>) a hit of a short
-    /// value version that isn't delimited in <paramref name="text"/> is left out before grouping, so it never
-    /// takes a span from another value.
+    /// The <paramref name="hits"/> of <paramref name="text"/> grouped into entries, in priority order, each with
+    /// its raw spans left to right (one per raw start: the first found). An entry's length and text are its
+    /// hit's own (brief T50a: in its view). With <paramref name="wholeTokenShortValues"/> (brief T30,
+    /// <c>redact</c>) a hit of a short value version whose raw span isn't delimited in <paramref name="text"/>
+    /// is left out before grouping, so it never takes a span from another value.
     /// </summary>
-    private List<(Entry Entry, List<int> Starts)> Entries(string text, bool wholeTokenShortValues)
+    private List<(Entry Entry, List<(int Start, int End)> Spans)> Entries(string text, List<ViewHit> hits, bool wholeTokenShortValues)
     {
-        Dictionary<Entry, List<int>> byEntry = [];
-        foreach (var hit in index.Scan(text))
+        Dictionary<Entry, List<(int Start, int End)>> byEntry = [];
+        foreach (var (hit, matched, rawStart, rawEnd) in hits)
         {
-            if (wholeTokenShortValues && index.IsShortValue(hit) && !TokenBoundary.IsDelimited(text, hit.Start, hit.Length))
+            if (wholeTokenShortValues && index.IsShortValue(hit) && !TokenBoundary.IsDelimited(text, rawStart, rawEnd - rawStart))
                 continue;
             var token = hit.IsPrevious ? hit.Name + SecretsDb.PreviousSuffix : hit.Name;
-            var entry = new Entry(hit.Length, text.Substring(hit.Start, hit.Length), !hit.IsPrevious && burned.Contains(hit.Name),
+            var entry = new Entry(hit.Length, matched, !hit.IsPrevious && burned.Contains(hit.Name),
                 token, SecretProcessor.TypeOf(hit.Kind), hit.Kind);
-            if (!byEntry.TryGetValue(entry, out var starts))
-                byEntry[entry] = starts = [];
-            if (starts.Count == 0 || starts[^1] != hit.Start)
-                starts.Add(hit.Start);
+            if (!byEntry.TryGetValue(entry, out var spans))
+                byEntry[entry] = spans = [];
+            spans.Add((rawStart, rawEnd));
         }
-        List<(Entry Entry, List<int> Starts)> entries = [.. byEntry.Select(kv => (kv.Key, kv.Value))];
+        List<(Entry Entry, List<(int Start, int End)> Spans)> entries = [];
+        foreach (var (entry, spans) in byEntry)
+        {
+            // Stable: of two spans at one raw start, the first found stays.
+            List<(int Start, int End)> ordered = [];
+            foreach (var span in spans.OrderBy(static s => s.Start))
+            {
+                if (ordered.Count == 0 || ordered[^1].Start != span.Start)
+                    ordered.Add(span);
+            }
+            entries.Add((entry, ordered));
+        }
         entries.Sort(static (x, y) => Compare(x.Entry, y.Entry));
-        foreach (var (_, starts) in entries)
-            starts.Sort();
         return entries;
     }
 
@@ -181,19 +236,20 @@ public sealed class SecretMatcher(FingerprintIndex index, IReadOnlySet<string> b
         return cmp != 0 ? cmp : a.Kind.CompareTo(b.Kind);
     }
 
-    /// <summary>Selection for spans that are exactly the occurrence (<c>redact</c>; short values whole-token only, brief T30).</summary>
-    private SortedList<int, Span> Select(string text, Func<Entry, int, (int Start, int End, string Replacement)> span)
+    /// <summary>
+    /// Selection for <c>redact</c>: each occurrence's raw span, replaced by its label (short values whole-token
+    /// only, brief T30). Overlaps and an entry's previous taken occurrence are checked on raw positions.
+    /// </summary>
+    private SortedList<int, Span> Select(string text)
     {
         SortedList<int, Span> taken = [];
-        foreach (var (entry, starts) in Entries(text, wholeTokenShortValues: true))
+        foreach (var (entry, spans) in Entries(text, ViewHits(text), wholeTokenShortValues: true))
         {
+            var replacement = RedactProcessor.Label(entry.Token, entry.Kind);
             var position = 0;
-            foreach (var start in starts)
+            foreach (var (s, e) in spans)
             {
-                if (start < position)
-                    continue;
-                var (s, e, replacement) = span(entry, start);
-                if (Overlaps(taken, s, e))
+                if (s < position || Overlaps(taken, s, e))
                     continue;
                 taken.Add(s, new Span(s, e, replacement, entry.Token, entry.Kind));
                 position = e;
@@ -211,12 +267,12 @@ public sealed class SecretMatcher(FingerprintIndex index, IReadOnlySet<string> b
     {
         SortedList<int, Span> taken = [];
         // tocomment's own [-\w] boundary (AnchoredPatterns) already rejects every hit T30's rule rejects.
-        foreach (var (entry, starts) in Entries(line, wholeTokenShortValues: false))
+        foreach (var (entry, spans) in Entries(line, RawHits(line), wholeTokenShortValues: false))
         {
             var patterns = ToCommentProcessor.AnchoredPatterns(entry.Text);
             var replacement = ToCommentProcessor.Replacement(entry.Token);
             List<(int At, int Alternative)> attempts = [];
-            foreach (var start in starts)
+            foreach (var (start, _) in spans)
             {
                 attempts.Add((start - 1, 0));
                 attempts.Add((start - 1, 1));

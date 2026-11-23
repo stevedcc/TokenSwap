@@ -175,7 +175,6 @@ public static class EvilValues
     public static readonly IReadOnlyDictionary<(string Case, string Invariant), (int Number, string Line)> KnownFindings =
         new Dictionary<(string, string), (int, string)>
         {
-            [("crlf-inside", RedactMasks)] = (1, Finding1),
             [("lf-inside", TocommentDryrun)] = (2, Finding2),
             [("crlf-inside", TocommentDryrun)] = (2, Finding2),
             // Brief T47 Task 2f: Git Bash (MSYS2) on Windows, CI run 45021236991, both legs unless the line says so (#402).
@@ -190,7 +189,6 @@ public static class EvilValues
             [("cr-inside", GitBashExact)] = (5, Finding5),
         };
 
-    private const string Finding1 = "redact turns the file's CRLF into LF before matching, so a value holding CRLF is not masked (#398)";
     private const string Finding2 = "tocomment matches line by line, so a value holding a line break inside a line is not found (#399)";
 
     // Brief T47 Task 2f (#402): public, so the skipped facts' Skip text is built from the same line.

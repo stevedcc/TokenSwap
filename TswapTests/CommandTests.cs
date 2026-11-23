@@ -2013,6 +2013,25 @@ password2: """"  # tswap: missing-mixed-secret");
         Assert.Contains("[REDACTED: my-burned]", stdout);
     }
 
+    /// <summary>Brief T50a (#398): a value stored with <c>\r\n</c> is masked in a file with <c>\n</c> line endings.</summary>
+    [Fact]
+    public void Redact_CrLfValue_InLfFile_Masked()
+    {
+        const string value = "line-one\r\nline-two";
+        RunTswap("init", "--yubikey");
+        RunTswapWithStdin(value, "ingest", "pem");
+
+        var file = Path.Combine(_tempDir, "key.txt");
+        File.WriteAllText(file, "key: line-one\nline-two\n");
+
+        var (exit, stdout, stderr) = RunTswap("redact", file);
+
+        Assert.Equal(0, exit);
+        Assert.Equal("key: [REDACTED: pem]\n", stdout);
+        Assert.True(EvilValues.FirstWindowOf(value, stdout) < 0, "an 8-character window of the value appears in stdout");
+        Assert.True(EvilValues.FirstWindowOf(value, stderr) < 0, "an 8-character window of the value appears in stderr");
+    }
+
     // --- brief T45 (#389): suspected unknown secrets are masked, the warning names no value ---
 
     [Fact]

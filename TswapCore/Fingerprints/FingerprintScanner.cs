@@ -502,17 +502,7 @@ public sealed class FingerprintScanner
         var counts = ArrayPool<int>.Shared.Rent(n + 1);
         try
         {
-            var m = 0;
-            for (var i = 0; i < n; i++)
-            {
-                // A folded "\n" stands for the raw "\r\n": its raw span starts at the "\r".
-                var pair = text[i] == '\r' && i + 1 < n && text[i + 1] == '\n';
-                folded[m] = pair ? '\n' : text[i];
-                rawStart[m] = i;
-                if (pair) i++;
-                rawEnd[m] = i + 1;
-                m++;
-            }
+            var m = LineEndingViews.Fold(text, folded, rawStart, rawEnd);
             var view = folded.AsSpan(0, m);
             PrefixHashes(view, b, prefix);
             counts[0] = 0;
