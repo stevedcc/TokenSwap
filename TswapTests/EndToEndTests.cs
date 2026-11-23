@@ -996,7 +996,8 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
                 }
                 init.WaitForExit(); // the exit is known; this only lets the two reads finish
                 Assert.True(Task.WaitAll([stdout, stderr], TimeSpan.FromSeconds(10)), "the host's init output wasn't read to its end");
-                Assert.Equal(0, init.ExitCode);
+                if (init.ExitCode != 0)
+                    Assert.Fail($"the host's init exited {init.ExitCode}\nstdout:\n{stdout.Result}\nstderr:\n{stderr.Result}");
             }
 
             // ProcessSshTransport's two shapes (BuildArgv, EndSession): 'ssh -T|-t [-o ControlMaster=auto -o ControlPath=<p>
@@ -1348,12 +1349,14 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     /// tswap's stdio is a genuine console (IsOutputRedirected == false) and
     /// PtyRunnerFactory selects WindowsPty for the child it spawns. Output is captured
     /// from the outer ConPTY pipe — it carries VT sequences, so assertions use
-    /// substring checks on the rendered text.
+    /// substring checks on the rendered text. Skipped off Windows and before Windows 10 1809
+    /// (no ConPTY there) by [WindowsConPtyFact].
     /// </summary>
-    [Fact]
+    [WindowsConPtyFact]
     public void Run_CompoundCommand_RedactedOutput_WindowsConPty()
     {
-        if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 17763)) return; // ConPTY requires Win10 1809+
+        if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 17763))
+            throw new UnreachableException("[WindowsConPtyFact] runs this test only on Windows 10 1809 or later");
 
         RunTswap("init", "--yubikey", "--no-recovery");
         RunTswapWithStdin("s3cr3t-conpty-value", "ingest", "my-secret");
@@ -1395,14 +1398,15 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     /// <summary>
     /// Brief T35 Task 3 (#348.2, #294.4): tswap's glyphs reach a console as themselves. Before the change tswap
     /// wrote the OEM code page's best fit, which the outer pseudo console renders as '?' and 'V'. Windows only
-    /// (CI); returns early elsewhere, as <see cref="Run_CompoundCommand_RedactedOutput_WindowsConPty"/> does.
+    /// (CI): skipped off Windows and before Windows 10 1809 by [WindowsConPtyFact].
     /// Two captures, each waiting for an ASCII sentinel printed before and after the change (A8); short fragments
     /// only, since ConPTY may wrap long lines, and no banner wording (A18).
     /// </summary>
-    [Fact]
+    [WindowsConPtyFact]
     public void Glyphs_ReachTheConsole_WindowsConPty()
     {
-        if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 17763)) return; // ConPTY requires Win10 1809+
+        if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 17763))
+            throw new UnreachableException("[WindowsConPtyFact] runs this test only on Windows 10 1809 or later");
 
         // A refused run (no token, nothing is opened): the error line's ❌.
         var (refusedExit, refused) = RunTswapInConPty(waitForOutput: "No {{tokens}}", "run", "tool", "{x}");
@@ -1424,12 +1428,14 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     /// <summary>
     /// Brief T35 Task 3 (#355, A4): a secret value with non-ASCII characters is redacted on the ConPTY path.
     /// RedactingPty's WindowsPty decodes ConPTY's UTF-8 with Console.OutputEncoding; before the change that was the
-    /// OEM code page, so the value didn't match and its bytes reached the console. Windows only (CI).
+    /// OEM code page, so the value didn't match and its bytes reached the console. Windows only (CI): skipped off
+    /// Windows and before Windows 10 1809 by [WindowsConPtyFact].
     /// </summary>
-    [Fact]
+    [WindowsConPtyFact]
     public void NonAsciiValue_Redacted_WindowsConPty()
     {
-        if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 17763)) return; // ConPTY requires Win10 1809+
+        if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 17763))
+            throw new UnreachableException("[WindowsConPtyFact] runs this test only on Windows 10 1809 or later");
 
         const string value = "pässwört-conpty";
         RunTswap("init", "--yubikey", "--no-recovery");
@@ -1460,13 +1466,15 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     /// Brief T35 Task 4 (#349): the child's pseudo console sets the window title to the child's path (OSC 0); on a
     /// Windows console run drops it, so it reaches the outer capture neither as text (VT off) nor re-emitted by the
     /// outer pseudo console (VT on). No ESC printed as the '←' glyph either (A3; the outer pseudo console's own
-    /// start-up sequences are in every capture, so those fragments can't be asserted). Windows only (CI). If the
+    /// start-up sequences are in every capture, so those fragments can't be asserted). Windows only (CI): skipped off
+    /// Windows and before Windows 10 1809 by [WindowsConPtyFact]. If the
     /// outer pseudo console turns out to emit a title naming pwsh by itself, report the dump; never loosen this.
     /// </summary>
-    [Fact]
+    [WindowsConPtyFact]
     public void Run_NoChildTitle_WindowsConPty()
     {
-        if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 17763)) return; // ConPTY requires Win10 1809+
+        if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 17763))
+            throw new UnreachableException("[WindowsConPtyFact] runs this test only on Windows 10 1809 or later");
 
         RunTswap("init", "--yubikey", "--no-recovery");
         RunTswapWithStdin("s3cr3t-title-value", "ingest", "my-secret");

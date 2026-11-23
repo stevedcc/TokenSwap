@@ -58,6 +58,15 @@ internal static class PlatformFacts
     }
 
     public static string? SkipHere(PlatformRequirement requirement, string? why) => SkipReason(requirement, Current, why);
+
+    /// <summary>
+    /// Null where ConPTY exists (Windows 10 1809, build 17763, or later); otherwise the skip reason, naming
+    /// <paramref name="windowsVersion"/>.
+    /// </summary>
+    public static string? ConPtySkipReason(Version windowsVersion) =>
+        windowsVersion >= new Version(10, 0, 17763)
+            ? null
+            : $"Needs ConPTY (Windows 10 1809, build 17763, or later); this Windows is {windowsVersion}.";
 }
 
 /// <summary>A fact that runs on Linux and macOS and is skipped on Windows.</summary>
@@ -100,4 +109,15 @@ public sealed class WindowsFactAttribute : FactAttribute
 public sealed class NotLinuxFactAttribute : FactAttribute
 {
     public NotLinuxFactAttribute(string? why = null) => Skip = PlatformFacts.SkipHere(PlatformRequirement.NotLinux, why);
+}
+
+/// <summary>
+/// A fact that needs ConPTY: runs on Windows 10 1809 (build 17763) or later, and is skipped with a reason off Windows and
+/// on older Windows (#362), instead of returning early and reporting Passed.
+/// </summary>
+public sealed class WindowsConPtyFactAttribute : FactAttribute
+{
+    // The second part is reached only on Windows, where .NET reports the real version.
+    public WindowsConPtyFactAttribute(string? why = null) =>
+        Skip = PlatformFacts.SkipHere(PlatformRequirement.Windows, why) ?? PlatformFacts.ConPtySkipReason(Environment.OSVersion.Version);
 }
