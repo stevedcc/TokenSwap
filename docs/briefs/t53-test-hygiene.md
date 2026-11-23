@@ -194,9 +194,9 @@ no release-note line (tests only).
   `EndToEndTests.Run_SecretRedactedFromErrorOutput` becomes `[UnixFact(...)]` and `RunEnv_ValueNotInArgv`
   `[LinuxFact("/proc/<pid>/cmdline is Linux's")]` (use the attribute names `PlatformFacts.cs` actually has; if `LinuxFact`
   doesn't exist, use the existing mechanism for a Linux-only fact or stop and report). Each early `return;` becomes
-  `throw new UnreachableException(...)` as in Task 3. No assertion changes. One commit (Task 3b), break-it-once: make one
-  of these attributes not skip on the wrong OS in a local reasoning check is impossible on Linux, so instead show the
-  test list on Linux is unchanged (they still run) and name the Windows/macOS skips the controller checks in CI.
+  `throw new UnreachableException(...)` as in Task 3. No assertion changes. One commit (Task 3b). Evidence instead of a break-it-once (the skips only show off Linux): the
+  Linux test list still runs all ten (show their Passed lines), and the report names the skips the controller checks in
+  the Windows and macOS CI logs.
 - **A2 (MiMo M1).** Update the doc comments of the four ConPTY tests (`EndToEndTests.cs` near 1376, 1405, 1441, and the
   fourth) to say they are skipped off Windows and before 1809 by `[WindowsConPtyFact]`.
 - **A3 (MiMo M2, GLM M1).** The flaky test's class is `BrokerInternalErrorTests` (declared inside
