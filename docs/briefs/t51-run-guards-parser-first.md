@@ -309,6 +309,6 @@ Don't change `TswapCore/Prompt.cs` (its hash is pinned).
   missing value. Task 5 mirrors them.
 - **A9 (MiMo M5): reason wording.** The three existing reasons the widened rule now also triggers (Validation.cs near
   1157, 1203, 1230) change "reads code from stdin" to "reads code from stdin or the terminal". That changes their text:
-  any test asserting the old text exactly changes with it (owner-sanctioned rule change; name each in the commit).
+  any test asserting the old text exactly changes with it (a rule change the controller ruled: the wording must match the widened rule; name each in the commit, and stop and list them if there are more than three).
 - **A10 (MiMo M6).** Restate the standing rule: no **new** reason interpolates a command word, except the existing
   `Wrapped` inner-program prefix (`'wsl' runs '<program>': …`).
