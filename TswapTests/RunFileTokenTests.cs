@@ -825,6 +825,24 @@ public sealed class RunFileTokenTests : IDisposable
         Assert.Equal(Apply.ApplySecrets(ValuesYaml, Db()), seenCopy);
     }
 
+    // Review fix F15: a container image tag is not a :stream suffix, so python:3.12 or node:20 next to a {{@file}}
+    // token is an image, not the interpreter (F12 had cut every word at its first ':').
+    [Theory]
+    [InlineData("python:3.12")]
+    [InlineData("node:20")]
+    public void RunFileToken_ImageTagIsNotAnInterpreter_Allowed(string image)
+    {
+        WriteFile("cfg.yaml", ValuesYaml);
+
+        var (exit, _, err) = Run("run", "docker", "run", "-v", "{{@cfg.yaml}}:/c.yaml", image, "app");
+
+        Assert.Null(Validation.GetFileTokenRefusal(["docker", "run", "-v", "{{@cfg.yaml}}:/c.yaml", image, "app"]));
+        Assert.True(exit == 0, err);
+        Assert.Equal(1, _pty.Starts);
+        Assert.Equal(["docker", "run", "-v"], _pty.Argv![..3]);
+        Assert.Equal(image, _pty.Argv[4]);
+    }
+
     // 'install' copies files as the program, but as an argument it is Helm's headline subcommand, so
     // it is refused only as the program (owner decision 2026-11-07: helm install has to work).
     [Fact]
@@ -976,7 +994,8 @@ public sealed class RunFileTokenTests : IDisposable
     [InlineData("node x.js {{@f}}", "'node'")]
     [InlineData("php x.php {{@f}}", "'php'")]
     [InlineData("pwsh x.ps1 {{@f}}", "'pwsh'")]
-    [InlineData("powershell x.ps1 {{@f}}", "'powershell'")]
+    [InlineData("powershell x.ps1 {{@f}}", "'powershell'")] // brief T49: now refused by the -File rule first
+    [InlineData("powershell -File x.ps1 {{@f}}", "'powershell'")] // T49 lets it through; the file-token rule refuses
     [InlineData("cmd x.bat {{@f}}", "'cmd'")]
     [InlineData("lua x.lua {{@f}}", "'lua'")]
     [InlineData("gawk -f x.awk {{@f}}", "'gawk'")]
@@ -990,6 +1009,24 @@ public sealed class RunFileTokenTests : IDisposable
 
         Assert.NotEqual(0, exit);
         Assert.Contains(named, err);
+        Assert.Equal(0, _pty.Starts);
+        Assert.Empty(RunFolders());
+    }
+
+    /// <summary>
+    /// Review fix G3: <c>powershell -File x.ps1 {{@f}}</c> passes T49's -File rule, so it is the file-token rule that
+    /// refuses it (a theory row of <see cref="RunFileToken_InterpreterAnywhereRefused"/> can't show which rule fired).
+    /// </summary>
+    [Fact]
+    public void RunFileToken_PowerShellWithFile_IsRefusedByTheFileTokenRule()
+    {
+        WriteFile("f", ValuesYaml);
+
+        var (exit, _, err) = Run(["run", "powershell", "-File", "x.ps1", "{{@f}}"]);
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("'powershell'", err);
+        Assert.Contains("filled copy", err);
         Assert.Equal(0, _pty.Starts);
         Assert.Empty(RunFolders());
     }
@@ -1357,6 +1394,8 @@ public sealed class RunFileTokenEndToEndTests(TswapBinaryFixture binary)
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             RedirectStandardInput = true,
+            // Brief T48 (A4): tswap reads piped stdin as UTF-8 on every OS.
+            StandardInputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
             UseShellExecute = false,
             WorkingDirectory = _tempDir,
         };

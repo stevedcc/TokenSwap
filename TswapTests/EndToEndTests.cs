@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using TswapCore;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace TswapTests;
 
@@ -25,9 +26,11 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     private readonly string _tempDir;
     private readonly string _testKeyHex;
     private readonly string _binaryPath;
+    private readonly ITestOutputHelper _output;
 
-    public EndToEndTests(TswapBinaryFixture binary)
+    public EndToEndTests(TswapBinaryFixture binary, ITestOutputHelper output)
     {
+        _output = output;
         _tempDir = Path.Combine(Path.GetTempPath(), "tswap-prog-test-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(_tempDir);
 
@@ -53,10 +56,37 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
             UseShellExecute = false,
             CreateNoWindow = true
         };
+        // Brief T48 (A4): tswap reads piped stdin as UTF-8 on every OS, so the test writes UTF-8 (on Windows the
+        // default would be the console's code page, which hid the bug).
+        if (redirectStdin)
+            psi.StandardInputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
         psi.Environment["TSWAP_TEST_KEY"] = _testKeyHex;
         psi.Environment["TSWAP_TEST_SUDO_BYPASS"] = "1";
         psi.Environment["TSWAP_CONFIG_DIR"] = _tempDir;
         return psi;
+    }
+
+    /// <summary>Brief T46 (A13): <see cref="MakePsi(bool)"/> with tswap (and so its child) started in <paramref name="workingDirectory"/>.</summary>
+    private ProcessStartInfo MakePsi(DirectoryInfo workingDirectory, bool redirectStdin = false)
+    {
+        var psi = MakePsi(redirectStdin);
+        psi.WorkingDirectory = workingDirectory.FullName;
+        return psi;
+    }
+
+    /// <summary>Brief T46 (A13): <see cref="RunTswap"/> started in <paramref name="workingDirectory"/>.</summary>
+    private (int exitCode, string stdout, string stderr) RunTswapIn(DirectoryInfo workingDirectory, params ReadOnlySpan<string> args)
+    {
+        var psi = MakePsi(workingDirectory);
+        foreach (var arg in args)
+            psi.ArgumentList.Add(arg);
+
+        using var process = Process.Start(psi)!;
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+
+        return (process.ExitCode, stdout, stderr);
     }
 
     private (int exitCode, string stdout, string stderr) RunTswap(params ReadOnlySpan<string> args)
@@ -1434,6 +1464,680 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         Assert.False(output.Contains("←["), $"an escape sequence was printed as text. {dump}");
     }
 
+    // --- Brief T46 Task 3 (#392): Windows batch files, "BatBadBut" (CVE-2024-24576) ---
+
+    /// <summary>
+    /// Brief T46 Task 3 (A6, A9, A10, A12): <c>tswap run &lt;batch&gt; {{name}}</c> with each of
+    /// <see cref="EvilValues.BatchCases"/>, through two legs: the redirected harness (tswap's stdout a pipe, so its child
+    /// starts through .NET's process start, FallbackPty) and an outer pseudo console (tswap's stdout a console, so
+    /// RedactingPty's WindowsPty builds the child's command line). Two batch files:
+    /// <list type="bullet">
+    /// <item><c>inert.cmd</c> and its twin <c>inert.bat</c> (<c>@exit /b 0</c>) never expand an argument, so a
+    /// <c>marker.txt</c> can only come from how the batch was launched. Invariant (batch-inert): <c>marker.txt</c> never
+    /// exists, whether tswap ran the batch or refused it.</item>
+    /// <item><c>capture.cmd</c>, for the values without <c>"</c> only (no batch can capture a quote-bearing argument
+    /// safely): reads <c>%~1</c> with delayed expansion off, then prints it with delayed expansion on, which parses no
+    /// character of the expanded text. Invariant (batch-capture): <c>out.txt</c> holds exactly the value, or tswap refused
+    /// the run with a message naming batch files; an altered value (e.g. <c>%PATH%</c> expanded at launch) fails.</item>
+    /// </list>
+    /// tswap starts in the test's work folder, the batch files' folder (A6), so a marker lands where the test looks;
+    /// the test process's own folder is checked too. Every failure names the case, the leg and the batch, and whether
+    /// <c>marker.txt</c> appeared; the outcome of every run (ran, refused) goes to the test output for the report.
+    /// </summary>
+    /// <remarks>
+    /// Break-it-once (the controller's, on Windows CI; A6, A9): in place of the tswap run, start the batch with the
+    /// vulnerable wrapping, outside tswap (wrapper quotes added, embedded quotes not escaped):
+    /// <code>
+    /// using var p = Process.Start(new ProcessStartInfo("cmd.exe", "/c inert.cmd \"" + value + "\"")
+    ///     { WorkingDirectory = work.FullName, UseShellExecute = false })!;   // A9: Process.Start("cmd.exe", "/c inert.cmd \"" + value + "\"")
+    /// p.WaitForExit();
+    /// var (exit, output) = (p.ExitCode, "");
+    /// </code>
+    /// With it the two quote-bearing values (<c>batch-quote-ampersand</c>, <c>batch-quote-spaced</c>) must create
+    /// <c>marker.txt</c>: that proves the detector works on the runner. A marker from <c>batch-caret-ampersand</c> would be
+    /// a stray redirection at launch (cmd.exe reading <c>&gt;marker.txt</c> as a redirection of the batch's own output):
+    /// the same invariant fails, by another mechanism.
+    /// </remarks>
+    [WindowsFact("batch files and cmd.exe's argument parsing exist only on Windows (BatBadBut, CVE-2024-24576)")]
+    public void Run_BatchFile_EvilValues_NeverInject_Windows()
+    {
+        var work = Directory.CreateDirectory(Path.Combine(_tempDir, "work"));
+        var inertCmd = Path.Combine(work.FullName, "inert.cmd");
+        var inertBat = Path.Combine(work.FullName, "inert.bat");
+        var capture = Path.Combine(work.FullName, "capture.cmd");
+        File.WriteAllText(inertCmd, "@exit /b 0\r\n");
+        File.WriteAllText(inertBat, "@exit /b 0\r\n");
+        File.WriteAllText(capture,
+            "@echo off\r\nsetlocal DisableDelayedExpansion\r\nset \"arg=%~1\"\r\nsetlocal EnableDelayedExpansion\r\n>\"%~dp0out.txt\" echo(!arg!\r\n");
+        var outFile = Path.Combine(work.FullName, "out.txt");
+        // Anywhere under the test folder, and in the test process's folder (where a launch that ignored the working
+        // directory would put it).
+        (string Folder, SearchOption Depth)[] markerPlaces =
+            [(_tempDir, SearchOption.AllDirectories), (Environment.CurrentDirectory, SearchOption.TopDirectoryOnly)];
+        IEnumerable<string> Markers() =>
+            markerPlaces.SelectMany(place => Directory.EnumerateFiles(place.Folder, "marker.txt", place.Depth));
+        Assert.Empty(Markers());
+        void RemoveMarkers()
+        {
+            foreach (var marker in Markers().ToList())
+                File.Delete(marker);
+        }
+
+        var (initExit, _, initErr) = RunTswap("init", "--yubikey", "--no-recovery");
+        Assert.True(initExit == 0, $"init failed: {initErr}");
+
+        // A12: the ConPTY leg only where ConPTY exists (Windows 10 1809+).
+        List<string> legs = ["redirected"];
+        if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 17763))
+            legs.Add("conpty");
+        else
+            _output.WriteLine("T46 batch: no ConPTY (before Windows 10 1809), the conpty leg is not run");
+
+        List<string> failures = [];
+        var index = 0;
+        foreach (var c in EvilValues.BatchCases)
+        {
+            // A secret per case (A11: 'b1'… holds no part of any batch value).
+            var name = $"b{++index}";
+            var (ingestExit, _, ingestErr) = RunTswapWithStdin(c.Value, "ingest", name);
+            Assert.True(ingestExit == 0, $"{c.Name}: ingest failed: {ingestErr}");
+
+            List<string> batches = [inertCmd, inertBat];
+            if (!c.Value.Contains('"'))
+                batches.Add(capture);
+            foreach (var leg in legs)
+            foreach (var batch in batches)
+            {
+                RemoveMarkers();
+                File.Delete(outFile);
+                var where = $"{c.Name} [{leg} leg, {Path.GetFileName(batch)}]";
+
+                int exit;
+                string output;
+                string refusalStream; // review fix F2: stderr on the redirected leg, the one combined stream on ConPTY
+                if (leg == "redirected")
+                {
+                    var (e, stdout, stderr) = RunTswapIn(work, "run", batch, "{{" + name + "}}");
+                    (exit, output, refusalStream) = (e, stdout + stderr, stderr);
+                }
+                else
+                {
+                    (exit, output) = RunTswapInConPty(work, waitForOutput: $"Found tokens: {name}", "-v", "run", batch, "{{" + name + "}}");
+                    refusalStream = output;
+                }
+
+                var marker = Markers().Any();
+                // F2: tswap's own refusal, not cmd's "... operable program or batch file." (which says "batch" too).
+                var refusedForBatch = exit != 0 && refusalStream.Contains("Refused: tswap won't pass", StringComparison.Ordinal)
+                                      && refusalStream.Contains("to a batch file", StringComparison.Ordinal);
+                var outcome = exit == 0 ? "ran" : refusedForBatch ? "refused, naming batch files" : $"exit {exit}";
+                if (marker)
+                    failures.Add($"{where}: marker.txt APPEARED (an injection; {outcome})");
+                if (batch == capture)
+                {
+                    if (File.Exists(outFile))
+                    {
+                        var captured = File.ReadAllText(outFile);
+                        outcome += captured == c.Value + "\r\n" ? ", out.txt holds the value exactly" : ", out.txt holds an ALTERED value";
+                        if (captured != c.Value + "\r\n")
+                            failures.Add($"{where}: out.txt holds an altered value ({captured.Length} chars, expected {c.Value.Length + 2}); marker.txt {(marker ? "appeared" : "did not appear")}");
+                    }
+                    else if (!refusedForBatch)
+                        failures.Add($"{where}: neither out.txt nor a refusal naming batch files (exit {exit}); marker.txt {(marker ? "appeared" : "did not appear")}");
+                }
+                _output.WriteLine($"T46 batch: {where}: {outcome}; marker.txt {(marker ? "APPEARED" : "absent")}");
+            }
+        }
+        RemoveMarkers();
+
+        Assert.True(failures.Count == 0, string.Join("\n", failures));
+    }
+
+    // --- Brief T47 Tasks 2b-2d: the ways out of the batch refusal, and the Unix shells ---
+
+    /// <summary>
+    /// Brief T47: a work folder under the test folder (tswap starts there, so a relative script and a marker resolve
+    /// there), the <c>marker.txt</c> finder T46's batch test uses (anywhere under the test folder and in the test
+    /// process's own folder) and its remover.
+    /// </summary>
+    private (DirectoryInfo Work, Func<bool> AnyMarker, Action RemoveMarkers) ScriptWork()
+    {
+        var work = Directory.CreateDirectory(Path.Combine(_tempDir, "work"));
+        (string Folder, SearchOption Depth)[] places =
+            [(_tempDir, SearchOption.AllDirectories), (Environment.CurrentDirectory, SearchOption.TopDirectoryOnly)];
+        IEnumerable<string> Markers() => places.SelectMany(p => Directory.EnumerateFiles(p.Folder, "marker.txt", p.Depth));
+        Assert.Empty(Markers());
+        return (work, () => Markers().Any(), () =>
+        {
+            foreach (var marker in Markers().ToList())
+                File.Delete(marker);
+        });
+    }
+
+    /// <summary>Brief T47: T46's two Windows legs, redirected always and ConPTY where it exists (A12 of T46).</summary>
+    private List<string> WindowsLegs(string tag)
+    {
+        List<string> legs = ["redirected"];
+        if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 17763))
+            legs.Add("conpty");
+        else
+            _output.WriteLine($"{tag}: no ConPTY (before Windows 10 1809), the conpty leg is not run");
+        return legs;
+    }
+
+    /// <summary>Brief T47: <c>tswap run …</c> in <paramref name="work"/> through one of <see cref="WindowsLegs"/>.</summary>
+    private (int Exit, string Output) RunWindowsLeg(DirectoryInfo work, string leg, string name, params string[] runArgs)
+    {
+        if (leg == "redirected")
+        {
+            var (exit, stdout, stderr) = RunTswapIn(work, ["run", .. runArgs]);
+            return (exit, stdout + stderr);
+        }
+        return RunTswapInConPty(work, waitForOutput: $"Found tokens: {name}", ["-v", "run", .. runArgs]);
+    }
+
+    /// <summary>Brief T47: ingests each case under its own name (<c>v1</c>, … : A11 of T46, checked), returning the names.</summary>
+    private List<(EvilValues.Case Case, string Name)> IngestEach(IEnumerable<EvilValues.Case> cases, string prefix)
+    {
+        List<(EvilValues.Case, string)> named = [];
+        foreach (var c in cases)
+        {
+            var name = $"{prefix}{named.Count + 1}";
+            Assert.True(EvilValues.NameIsSafeFor(name, c.Value), $"{c.Name}: the name {name} holds part of the value");
+            var (exit, _, err) = RunTswapWithStdin(c.Value, "ingest", name);
+            Assert.True(exit == 0, $"{c.Name}: ingest failed: {err}");
+            named.Add((c, name));
+        }
+        return named;
+    }
+
+    /// <summary>
+    /// Brief T47 Task 2b: the refusal's first way out, a PowerShell script run with <c>-File</c>, on real Windows.
+    /// <c>capture.ps1</c> writes <c>$args[0]</c> to <c>out.txt</c> exactly (no newline added); it runs as
+    /// <c>tswap run powershell -File capture.ps1 {{name}}</c> and the same with <c>pwsh</c>, on both legs, for every
+    /// T46 batch case and the corpus's quote and shell-character cases. Invariant: <c>out.txt</c> holds exactly the
+    /// value, and <c>marker.txt</c> never appears. Every failure names the case, the leg and the host; if either
+    /// PowerShell re-parses a value, the refusal's advice is wrong: report it at once (the brief).
+    /// </summary>
+    /// <remarks>
+    /// Break-it-once (A18, A23; the controller's, on Windows CI): with this <c>capture.ps1</c>, and the one value
+    /// <c>;New-Item -Path marker.txt;</c> in place of the cases, <c>marker.txt</c> must appear:
+    /// <code>
+    /// File.WriteAllText(capture, "Invoke-Expression \"Write-Output $($args[0])\"\r\n");
+    /// // cases: [new EvilValues.Case("break-new-item", ";New-Item -Path marker.txt;", "break")]
+    /// </code>
+    /// </remarks>
+    [WindowsFact("PowerShell -File as the way out of the batch-file refusal is a Windows path (powershell and pwsh on the runners)")]
+    public void Run_PowerShellFile_EvilValues_ArriveExactly_Windows()
+    {
+        var (work, anyMarker, removeMarkers) = ScriptWork();
+        var capture = Path.Combine(work.FullName, "capture.ps1");
+        File.WriteAllText(capture, "[IO.File]::WriteAllText(\"$PSScriptRoot\\out.txt\", $args[0])\r\n");
+        var outFile = Path.Combine(work.FullName, "out.txt");
+
+        var (initExit, _, initErr) = RunTswap("init", "--yubikey", "--no-recovery");
+        Assert.True(initExit == 0, $"init failed: {initErr}");
+        var legs = WindowsLegs("T47 powershell");
+        var named = IngestEach(EvilValues.BatchCases.Concat(EvilValues.Cases.Where(c => c.Class == "shell")), "v");
+
+        List<string> failures = [];
+        foreach (var (c, name) in named)
+        foreach (var host in new[] { "powershell", "pwsh" })
+        foreach (var leg in legs)
+        {
+            removeMarkers();
+            File.Delete(outFile);
+            var where = $"{c.Name} [{leg} leg, {host}]";
+            var (exit, output) = RunWindowsLeg(work, leg, name, host, "-File", "capture.ps1", "{{" + name + "}}");
+            var marker = anyMarker();
+            if (marker)
+                failures.Add($"{where}: marker.txt APPEARED (exit {exit})");
+            if (!File.Exists(outFile))
+                failures.Add($"{where}: no out.txt (exit {exit}): {EscapeVt(output)}");
+            else if (File.ReadAllText(outFile) is var captured && captured != c.Value)
+                failures.Add($"{where}: out.txt holds an ALTERED value ({captured.Length} chars, expected {c.Value.Length})");
+            _output.WriteLine($"T47 powershell: {where}: exit {exit}; marker.txt {(marker ? "APPEARED" : "absent")}");
+        }
+        removeMarkers();
+
+        Assert.True(failures.Count == 0, string.Join("\n", failures));
+    }
+
+    /// <summary>
+    /// Brief T47 Task 2c: the refusal's second way out, for an existing batch script: <c>run --env PW={{name}}
+    /// capture-env.cmd</c>, read inside with <c>setlocal EnableDelayedExpansion</c> and <c>!PW!</c> (delayed expansion
+    /// never parses the value as command text). For every T46 batch case (<c>x&amp;echo.&gt;marker.txt</c>, unquoted,
+    /// included), on both legs. Invariant: <c>out.txt</c> holds the value exactly, T46's comparison
+    /// (<c>captured == value + "\r\n"</c>: <c>echo(</c> appends CRLF, A17), and <c>marker.txt</c> never appears.
+    /// </summary>
+    /// <remarks>
+    /// Break-it-once (A18; the controller's, on Windows CI): the batch reading <c>%PW%</c> instead of <c>!PW!</c>, which
+    /// cmd.exe expands before it parses the line, so the quote-bearing and the unquoted ampersand values must create
+    /// <c>marker.txt</c>:
+    /// <code>
+    /// File.WriteAllText(capture, "@echo off\r\nsetlocal EnableDelayedExpansion\r\n&gt;\"%~dp0out.txt\" echo(%PW%\r\n");
+    /// </code>
+    /// </remarks>
+    [WindowsFact("batch files and cmd.exe's delayed expansion exist only on Windows")]
+    public void Run_EnvWithDelayedExpansion_BatchCases_ArriveExactly_Windows()
+    {
+        var (work, anyMarker, removeMarkers) = ScriptWork();
+        var capture = Path.Combine(work.FullName, "capture-env.cmd");
+        File.WriteAllText(capture, "@echo off\r\nsetlocal EnableDelayedExpansion\r\n>\"%~dp0out.txt\" echo(!PW!\r\n");
+        var outFile = Path.Combine(work.FullName, "out.txt");
+
+        var (initExit, _, initErr) = RunTswap("init", "--yubikey", "--no-recovery");
+        Assert.True(initExit == 0, $"init failed: {initErr}");
+        var legs = WindowsLegs("T47 batch env");
+        var named = IngestEach(EvilValues.BatchCases, "e");
+
+        List<string> failures = [];
+        foreach (var (c, name) in named)
+        foreach (var leg in legs)
+        {
+            removeMarkers();
+            File.Delete(outFile);
+            var where = $"{c.Name} [{leg} leg, capture-env.cmd]";
+            var (exit, output) = RunWindowsLeg(work, leg, name, "--env", "PW={{" + name + "}}", "--", capture);
+            var marker = anyMarker();
+            if (marker)
+                failures.Add($"{where}: marker.txt APPEARED (exit {exit})");
+            if (!File.Exists(outFile))
+                failures.Add($"{where}: no out.txt (exit {exit}): {EscapeVt(output)}");
+            else if (File.ReadAllText(outFile) is var captured && captured != c.Value + "\r\n")
+                failures.Add($"{where}: out.txt holds an ALTERED value ({captured.Length} chars, expected {c.Value.Length + 2})");
+            _output.WriteLine($"T47 batch env: {where}: exit {exit}; marker.txt {(marker ? "APPEARED" : "absent")}");
+        }
+        removeMarkers();
+
+        Assert.True(failures.Count == 0, string.Join("\n", failures));
+    }
+
+    /// <summary>A program on PATH (no extension search: these tests are Unix-only), or null.</summary>
+    private static string? FindOnPath(string program) =>
+        (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+            .Select(dir => Path.Combine(dir, program))
+            .FirstOrDefault(File.Exists);
+
+    /// <summary>
+    /// Brief T47 Task 2d (A24): bash, and zsh where installed (macOS has it; a Linux runner may not, and then the zsh
+    /// leg is left out with a line saying why, never an early return).
+    /// </summary>
+    private List<string> UnixShells(string tag)
+    {
+        List<string> shells = ["bash"];
+        if (FindOnPath("zsh") is not null)
+            shells.Add("zsh");
+        else
+            _output.WriteLine($"{tag}: zsh is not installed on this host, the zsh leg is not run");
+        return shells;
+    }
+
+    /// <summary>
+    /// Brief T47 Task 2d, the target: <c>capture.sh</c> and <c>capture.zsh</c> write <c>"$1"</c> to <c>out.txt</c>
+    /// exactly (<c>printf '%s' "$1" &gt; out.txt</c>), run as <c>tswap run bash ./capture.sh {{name}}</c> and
+    /// <c>tswap run zsh -f ./capture.zsh {{name}}</c>, for every corpus value (T46's cases and its batch cases).
+    /// Invariant: <c>out.txt</c> holds exactly the stored value (ingest trims trailing whitespace, T46's A3), and no
+    /// <c>marker.txt</c> appears. Every failure names the case and the shell.
+    /// </summary>
+    /// <remarks>
+    /// Break-it-once (A18; the controller's): a <c>capture.sh</c> that runs the value, so <c>x&amp;echo.&gt;marker.txt</c>
+    /// must create <c>marker.txt</c> (bash makes the redirection's file before it finds no <c>echo.</c>):
+    /// <code>
+    /// File.WriteAllText(Path.Combine(work.FullName, "capture.sh"), "eval \"$1\"\nprintf '%s' \"$1\" &gt; out.txt\n");
+    /// </code>
+    /// </remarks>
+    [UnixFact("bash and zsh as the targets of run")]
+    public void Run_UnixShellScripts_EvilValues_ArriveExactly()
+    {
+        var (work, anyMarker, removeMarkers) = ScriptWork();
+        File.WriteAllText(Path.Combine(work.FullName, "capture.sh"), "printf '%s' \"$1\" > out.txt\n");
+        File.WriteAllText(Path.Combine(work.FullName, "capture.zsh"), "printf '%s' \"$1\" > out.txt\n");
+        var outFile = Path.Combine(work.FullName, "out.txt");
+
+        var (initExit, _, initErr) = RunTswap("init", "--yubikey", "--no-recovery");
+        Assert.True(initExit == 0, $"init failed: {initErr}");
+        // The tswap-syntax cases name the corpus's other secret.
+        var (otherExit, _, otherErr) = RunTswapWithStdin(EvilValues.OtherSecretValue, "ingest", EvilValues.OtherSecretName);
+        Assert.True(otherExit == 0, otherErr);
+        var shells = UnixShells("T47 unix target");
+        var named = IngestEach(EvilValues.Cases.Concat(EvilValues.BatchCases), "u");
+
+        List<string> failures = [];
+        foreach (var (c, name) in named)
+        foreach (var shell in shells)
+        {
+            removeMarkers();
+            File.Delete(outFile);
+            var where = $"{c.Name} [{shell}]";
+            string[] command = shell == "bash"
+                ? ["run", "bash", "./capture.sh", "{{" + name + "}}"]
+                : ["run", "zsh", "-f", "./capture.zsh", "{{" + name + "}}"];
+            var (exit, stdout, stderr) = RunTswapIn(work, command);
+            var expected = c.Value.TrimEnd();
+            if (anyMarker())
+                failures.Add($"{where}: marker.txt APPEARED (exit {exit})");
+            if (!File.Exists(outFile))
+                failures.Add($"{where}: no out.txt (exit {exit}): {stderr}{stdout}");
+            else if (File.ReadAllText(outFile, Encoding.UTF8) is var captured && captured != expected)
+                failures.Add($"{where}: out.txt holds an ALTERED value ({captured.Length} chars, expected {expected.Length})");
+        }
+        removeMarkers();
+
+        Assert.True(failures.Count == 0, string.Join("\n", failures));
+    }
+
+    /// <summary>
+    /// Brief T48: <paramref name="bytes"/> written as they are to tswap's stdin (through
+    /// <see cref="Process.StandardInput"/>'s base stream, so no helper's encoding is involved), then stdin closed.
+    /// </summary>
+    private (int exitCode, string stdout, string stderr) RunTswapWithStdinBytes(byte[] bytes, params ReadOnlySpan<string> args)
+    {
+        var psi = MakePsi(redirectStdin: true);
+        foreach (var arg in args)
+            psi.ArgumentList.Add(arg);
+
+        using var process = Process.Start(psi)!;
+        process.StandardInput.BaseStream.Write(bytes);
+        process.StandardInput.BaseStream.Flush();
+        process.StandardInput.Close();
+        var stdoutTask = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        return (process.ExitCode, stdoutTask.Result, stderr);
+    }
+
+    /// <summary>
+    /// Brief T48 Task 2: invalid UTF-8 piped into <c>ingest</c> (an invalid continuation byte) is refused with the fixed
+    /// message, exit code 1, and nothing is stored. On every OS: before, Linux and macOS stored U+FFFD.
+    /// </summary>
+    /// <remarks>Break-it-once (A11): a lenient reader (replacement fallback) makes it fail on Linux (exit 0, bad1 stored).</remarks>
+    [Fact]
+    public void Ingest_InvalidUtf8_IsRefused_AndStoresNothing()
+    {
+        const string refusal =
+            "stdin is not valid UTF-8 (tswap reads piped input as UTF-8). Nothing was changed. In Windows PowerShell 5.1, run $OutputEncoding = [System.Text.UTF8Encoding]::new($false) first, or use PowerShell 7.";
+        var (initExit, _, initErr) = RunTswap("init", "--yubikey", "--no-recovery");
+        Assert.True(initExit == 0, $"init failed: {initErr}");
+
+        var (exit, _, stderr) = RunTswapWithStdinBytes([0x63, 0x61, 0x66, 0xC3, 0x28], "ingest", "bad1");
+
+        Assert.True(exit == 1, $"exit {exit}: {stderr}");
+        Assert.Contains(refusal, stderr);
+        var (namesExit, names, namesErr) = RunTswap("names");
+        Assert.True(namesExit == 0, namesErr);
+        Assert.DoesNotContain("bad1", names);
+    }
+
+    /// <summary>
+    /// Brief T48 Task 2: every non-ASCII corpus value, piped into <c>ingest</c> as raw UTF-8 bytes (as
+    /// <c>kubectl … | jq … | tswap ingest</c> delivers it), is stored exactly: <c>tswap run &lt;Git Bash&gt; ./capture.sh
+    /// {{name}}</c> (<c>printf '%s' "$1" &gt; out.txt</c>) writes it, trimmed at the end as ingest does. Before, Windows
+    /// decoded stdin with the console code page (437 on the runner): <c>café-value</c> arrived as <c>caf├⌐-value</c>.
+    /// No <c>tswap get</c> check (A12/A20 withdrawn): get's redirected stdout on Windows is the console code page (T35 A1).
+    /// </summary>
+    /// <remarks>
+    /// Break-it-once (the controller's, on Windows CI): <c>SystemConsole.In</c> back to <c>Console.In</c>; the test must
+    /// fail with the mangled values.
+    /// </remarks>
+    [WindowsFact("the console code page decoded piped stdin on Windows only; Git Bash (MSYS2) exists only on Windows")]
+    public void Ingest_RawUtf8Bytes_StoresTheValueExactly_Windows()
+    {
+        var bash = FindGitBash();
+        Assert.True(bash is not null, "no Git Bash (a bash.exe under a \\Git\\ folder) on PATH: it is on every GitHub Windows runner");
+        var (work, _, _) = ScriptWork();
+        File.WriteAllText(Path.Combine(work.FullName, "capture.sh"), "printf '%s' \"$1\" > out.txt\n");
+        var outFile = Path.Combine(work.FullName, "out.txt");
+        var (initExit, _, initErr) = RunTswap("init", "--yubikey", "--no-recovery");
+        Assert.True(initExit == 0, $"init failed: {initErr}");
+
+        static string Shown(string s) => EscapeVt(s).Length <= 80 ? EscapeVt(s) : EscapeVt(s)[..80] + "...";
+        var cases = EvilValues.Cases.Where(c => c.Value.Any(ch => ch > '\x7F')).ToList();
+        Assert.NotEmpty(cases);
+        List<string> failures = [];
+        foreach (var (c, i) in cases.Select((c, i) => (c, i)))
+        {
+            var name = $"r{i + 1}";
+            Assert.True(EvilValues.NameIsSafeFor(name, c.Value), $"{c.Name}: the name {name} holds part of the value");
+            var expected = c.Value.TrimEnd();
+            var (ingestExit, _, ingestErr) = RunTswapWithStdinBytes(new UTF8Encoding(false).GetBytes(c.Value), "ingest", name);
+            if (ingestExit != 0)
+            {
+                failures.Add($"{c.Name}: ingest failed (exit {ingestExit}): {ingestErr}");
+                continue;
+            }
+
+            File.Delete(outFile);
+            var (runExit, runOut, runErr) = RunTswapIn(work, "run", bash!, "./capture.sh", "{{" + name + "}}");
+            if (!File.Exists(outFile))
+                failures.Add($"{c.Name}: no out.txt (exit {runExit}): {Shown(runErr + runOut)}");
+            else if (File.ReadAllText(outFile, Encoding.UTF8) is var captured && captured != expected)
+                failures.Add($"{c.Name}: out.txt ALTERED: expected [{Shown(expected)}], got [{Shown(captured)}]");
+            _output.WriteLine($"T48 raw utf-8: {c.Name}: ingest exit {ingestExit}, run exit {runExit}");
+        }
+
+        Assert.True(failures.Count == 0, $"{failures.Count} failure(s):\n" + string.Join("\n", failures));
+    }
+
+    /// <summary>
+    /// Brief T47 Task 2e: Git Bash's <c>bash.exe</c> (MSYS2) from PATH: the first one under a <c>\Git\</c> folder, never
+    /// System32's <c>bash.exe</c> (WSL's launcher), or null.
+    /// </summary>
+    private static string? FindGitBash() =>
+        (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+            .Where(dir => dir.Contains(@"\Git\", StringComparison.OrdinalIgnoreCase) || dir.EndsWith(@"\Git", StringComparison.OrdinalIgnoreCase))
+            .Select(dir => Path.Combine(dir, "bash.exe"))
+            .FirstOrDefault(File.Exists);
+
+    /// <summary>
+    /// Brief T47 Task 2e (owner: "And bash on Windows"): <c>tswap run &lt;Git Bash&gt; ./capture.sh {{name}}</c>, where
+    /// <c>capture.sh</c> writes <c>"$1"</c> to <c>out.txt</c> exactly (<c>printf '%s' "$1"</c>), on both legs (redirected
+    /// and ConPTY, as T46's batch test), for every corpus value (T46's cases and batch cases) and three built here: an
+    /// absolute Unix-looking path, a glob star and a glob question mark (with <c>abcXdef-value-2</c> in the work folder,
+    /// so a glob has something to match). Invariant (git-bash-exact): <c>out.txt</c> holds exactly the stored value, and
+    /// <c>marker.txt</c> never appears. MSYS2 converts path-like arguments when a non-MSYS program starts it, and may
+    /// glob: an alteration is a finding (T46's mechanism, <see cref="EvilValues.KnownFindings"/>, pairs left out here),
+    /// never a reason to weaken this test; the failure lists every altered case with its leg, for the controller's ruling.
+    /// </summary>
+    /// <remarks>
+    /// <para>Git Bash is started by its full path: CreateProcess searches System32 before PATH, where <c>bash.exe</c> is
+    /// WSL's launcher. Without Git Bash on PATH the test fails with a message saying so (review fix F7).
+    /// <c>max-length</c> (65,536 characters) is left out: a Windows command line holds at most 32,767.</para>
+    /// <para>Break-it-once (the controller's, on Windows CI): a <c>capture.sh</c> that runs the value, so the ampersand
+    /// batch values must create <c>marker.txt</c>:</para>
+    /// <code>
+    /// File.WriteAllText(Path.Combine(work.FullName, "capture.sh"), "eval \"$1\"\nprintf '%s' \"$1\" &gt; out.txt\n");
+    /// </code>
+    /// </remarks>
+    [WindowsFact("Git Bash (MSYS2) started by a Windows program exists only on Windows")]
+    public void Run_GitBashScript_EvilValues_ArriveExactly_Windows()
+    {
+        // Task 2f: the extras are local to this test, outside the corpus KnownFindings checks, so glob-star (altered
+        // on CI, #402) is left out here with a line, not registered.
+        _output.WriteLine("T47 git bash: glob-star is left out (Git Bash expands the glob, #402; T47 Task 2f)");
+        var cases = EvilValues.Cases.Concat(EvilValues.BatchCases).Concat(GitBashExtras.Where(c => c.Name != "glob-star"))
+            .Where(c => !EvilValues.KnownFindings.ContainsKey((c.Name, EvilValues.GitBashExact)));
+        var failures = RunGitBashCases(cases, viaEnv: false);
+        Assert.True(failures.Count == 0, $"{failures.Count} finding(s):\n" + string.Join("\n", failures));
+    }
+
+    /// <summary>
+    /// Brief T47 Task 2f: the guide's and the prompt's way with Git Bash, <c>tswap run --env PW={{name}} -- &lt;Git
+    /// Bash&gt; ./capture-env.sh</c>, where <c>capture-env.sh</c> writes <c>"$PW"</c> to <c>out.txt</c> exactly
+    /// (<c>printf '%s' "$PW"</c>), on both legs, for every corpus value, the batch cases and the three extras (#402's spike:
+    /// all 73 values intact). Invariant: <c>out.txt</c> holds exactly the stored value, and <c>marker.txt</c> never
+    /// appears. Left out, with a line (<see cref="RunGitBashCases"/>): max-length.
+    /// </summary>
+    /// <remarks>
+    /// Break-it-once (the controller's, on Windows CI): a <c>capture-env.sh</c> that runs the value, so the ampersand
+    /// batch values must create <c>marker.txt</c>:
+    /// <code>
+    /// File.WriteAllText(Path.Combine(work.FullName, "capture-env.sh"), "eval \"$PW\"\nprintf '%s' \"$PW\" &gt; out.txt\n");
+    /// </code>
+    /// </remarks>
+    [WindowsFact("Git Bash (MSYS2) started by a Windows program exists only on Windows")]
+    public void Run_GitBashScript_EnvValue_EvilValues_ArriveExactly_Windows()
+    {
+        var failures = RunGitBashCases(EvilValues.Cases.Concat(EvilValues.BatchCases).Concat(GitBashExtras), viaEnv: true);
+        Assert.True(failures.Count == 0, $"{failures.Count} failure(s):\n" + string.Join("\n", failures));
+    }
+
+    /// <summary>Brief T47 Task 2e: the three values built for Git Bash (a Unix-looking path, a glob star, a glob question mark).</summary>
+    private static readonly EvilValues.Case[] GitBashExtras =
+    [
+        new("unix-absolute-path", "/abc/def-value-1", "git-bash"),
+        new("glob-star", "abc*def-value-2", "git-bash"),
+        new("glob-question-mark", "abc?def-value-3", "git-bash"),
+    ];
+
+    /// <summary>
+    /// Brief T47 Tasks 2e and 2f: runs Git Bash through tswap for each case on both Windows legs and returns every
+    /// failure (marker.txt, no out.txt, an altered value), naming case and leg. With <paramref name="viaEnv"/> the value
+    /// goes in <c>--env PW</c> to <c>capture-env.sh</c> (<c>"$PW"</c>), else as an argument to <c>capture.sh</c>
+    /// (<c>"$1"</c>). An empty <c>abcXdef-value-2</c> in the work folder gives a glob something to match. Without Git
+    /// Bash on PATH it fails with a message saying so (review fix F7). <c>max-length</c> is always left out, with a line:
+    /// a Windows command line holds at most 32,767 characters.
+    /// </summary>
+    private List<string> RunGitBashCases(IEnumerable<EvilValues.Case> cases, bool viaEnv)
+    {
+        var (work, anyMarker, removeMarkers) = ScriptWork();
+        var script = viaEnv ? "capture-env.sh" : "capture.sh";
+        File.WriteAllText(Path.Combine(work.FullName, script), viaEnv ? "printf '%s' \"$PW\" > out.txt\n" : "printf '%s' \"$1\" > out.txt\n");
+        File.WriteAllText(Path.Combine(work.FullName, "abcXdef-value-2"), "");
+        var outFile = Path.Combine(work.FullName, "out.txt");
+
+        var (initExit, _, initErr) = RunTswap("init", "--yubikey", "--no-recovery");
+        Assert.True(initExit == 0, $"init failed: {initErr}");
+        var (otherExit, _, otherErr) = RunTswapWithStdin(EvilValues.OtherSecretValue, "ingest", EvilValues.OtherSecretName);
+        Assert.True(otherExit == 0, otherErr);
+
+        var tag = viaEnv ? "T47 git bash env" : "T47 git bash";
+        // Review fix F7: without Git Bash the test fails (it is on every GitHub Windows runner), never passes empty.
+        var bash = FindGitBash();
+        Assert.True(bash is not null, $"{tag}: no Git Bash (a bash.exe under a \\Git\\ folder) on PATH: it is on every GitHub Windows runner");
+        var legs = WindowsLegs(tag);
+        _output.WriteLine($"{tag}: max-length is left out (a Windows command line holds at most 32,767 characters)");
+        // Brief T48: ingest reads stdin as UTF-8 on Windows too, so the non-ASCII values run here as well.
+        var named = IngestEach(cases.Where(c => c.Name != "max-length"), "g");
+
+        static string Shown(string s) => EscapeVt(s).Length <= 80 ? EscapeVt(s) : EscapeVt(s)[..80] + "...";
+        List<string> failures = [];
+        foreach (var (c, name) in named)
+        foreach (var leg in legs)
+        {
+            removeMarkers();
+            File.Delete(outFile);
+            var where = $"{c.Name} [{leg} leg, git bash{(viaEnv ? ", --env" : "")}]";
+            var (exit, output) = viaEnv
+                ? RunWindowsLeg(work, leg, name, "--env", "PW={{" + name + "}}", "--", bash!, "./" + script)
+                : RunWindowsLeg(work, leg, name, bash!, "./" + script, "{{" + name + "}}");
+            var expected = c.Value.TrimEnd();
+            var marker = anyMarker();
+            if (marker)
+                failures.Add($"{where}: marker.txt APPEARED (exit {exit})");
+            if (!File.Exists(outFile))
+                failures.Add($"{where}: no out.txt (exit {exit}): {Shown(output)}");
+            else if (File.ReadAllText(outFile, Encoding.UTF8) is var captured && captured != expected)
+                failures.Add($"{where}: ALTERED: expected [{Shown(expected)}] ({expected.Length} chars), got [{Shown(captured)}] ({captured.Length} chars)");
+            _output.WriteLine($"{tag}: {where}: exit {exit}; marker.txt {(marker ? "APPEARED" : "absent")}");
+        }
+        removeMarkers();
+        return failures;
+    }
+
+    /// <summary>
+    /// Brief T47 Task 2f: a git-bash-exact finding's full assertion, the one case through <see cref="RunGitBashCases"/>
+    /// as an argument. Its facts are plain skipped <c>[Fact]</c>s (T46's protocol); un-skipping one means making it a
+    /// <c>[WindowsFact]</c> as well (#402).
+    /// </summary>
+    private void AssertGitBashArrivesExactly(string caseName)
+    {
+        var failures = RunGitBashCases([EvilValues.Get(caseName)], viaEnv: false);
+        Assert.True(failures.Count == 0, string.Join("\n", failures));
+    }
+
+    // Brief T47 Task 2f: the git-bash-exact findings of CI run 45021236991 (#402), one fact per (case, invariant).
+    [Fact(Skip = "T46 finding 3: " + EvilValues.Finding3)]
+    public void Finding3_SingleQuote_GitBashExact() => AssertGitBashArrivesExactly("single-quote");
+
+    [Fact(Skip = "T46 finding 3: " + EvilValues.Finding3)]
+    public void Finding3_OwnerEscapingSet_GitBashExact() => AssertGitBashArrivesExactly("owner-escaping-set");
+
+    [Fact(Skip = "T46 finding 4: " + EvilValues.Finding4)]
+    public void Finding4_TokenSyntax_GitBashExact() => AssertGitBashArrivesExactly("token-syntax");
+
+    [Fact(Skip = "T46 finding 4: " + EvilValues.Finding4)]
+    public void Finding4_FileTokenSyntax_GitBashExact() => AssertGitBashArrivesExactly("file-token-syntax");
+
+    [Fact(Skip = "T46 finding 4: " + EvilValues.Finding4)]
+    public void Finding4_EmbeddedTokenSyntax_GitBashExact() => AssertGitBashArrivesExactly("embedded-token-syntax");
+
+    [Fact(Skip = "T46 finding 5: " + EvilValues.Finding5)]
+    public void Finding5_LfInside_GitBashExact() => AssertGitBashArrivesExactly("lf-inside");
+
+    [Fact(Skip = "T46 finding 5: " + EvilValues.Finding5)]
+    public void Finding5_CrlfInside_GitBashExact() => AssertGitBashArrivesExactly("crlf-inside");
+
+    [Fact(Skip = "T46 finding 5: " + EvilValues.Finding5)]
+    public void Finding5_CrInside_GitBashExact() => AssertGitBashArrivesExactly("cr-inside");
+
+    /// <summary>
+    /// Brief T47 Task 2d, the calling shell (A11): a script that itself runs <c>tswap -v run true {{pw}}</c>, the token
+    /// written literally in its source, unquoted and quoted (<c>'{{pw}}'</c>). tswap substitutes; the calling shell only
+    /// decides whether the token arrives. bash (plain, <c>set -B</c>, <c>shopt -s extglob</c>) and zsh (<c>zsh -f</c>,
+    /// plain): the token arrives unchanged either way (tswap's <c>-v</c> line <c>Found tokens: pw</c>). zsh with
+    /// <c>setopt BRACE_CCL</c> expands the unquoted <c>{pw}</c> to its characters (zsh's documentation, Brace
+    /// Expansion), so unquoted the token does not arrive; quoted it does. Every failure names the shell, its options and
+    /// the quoting.
+    /// </summary>
+    [UnixFact("bash and zsh as the shell that calls tswap")]
+    public void Run_TheCallingShell_PassesTheTokenOn_UnlessZshBraceCcl()
+    {
+        var (work, _, _) = ScriptWork();
+        var (initExit, _, initErr) = RunTswap("init", "--yubikey", "--no-recovery");
+        Assert.True(initExit == 0, $"init failed: {initErr}");
+        var (ingestExit, _, ingestErr) = RunTswapWithStdin("calling-shell-value-7Hq", "ingest", "pw");
+        Assert.True(ingestExit == 0, ingestErr);
+
+        // (shell, its options' line, whether the unquoted token arrives)
+        List<(string Shell, string Options, bool UnquotedArrives)> variants =
+        [
+            ("bash", "", true),
+            ("bash", "set -B", true),
+            ("bash", "shopt -s extglob", true),
+        ];
+        if (UnixShells("T47 calling shell").Contains("zsh"))
+            variants.AddRange([("zsh", "", true), ("zsh", "setopt BRACE_CCL", false)]);
+
+        List<string> failures = [];
+        foreach (var (shell, options, unquotedArrives) in variants)
+        foreach (var (quoting, token, arrives) in new[] { ("unquoted", "{{pw}}", unquotedArrives), ("quoted", "'{{pw}}'", true) })
+        {
+            var where = $"{shell}{(options.Length > 0 ? $" ({options})" : "")}, {quoting}";
+            var script = Path.Combine(work.FullName, "call." + shell);
+            File.WriteAllText(script, $"{options}\n\"$TSWAP_BIN\" -v run true {token}\n");
+            var psi = MakePsi(work);
+            psi.FileName = shell;
+            if (shell == "zsh")
+                psi.ArgumentList.Add("-f");
+            psi.ArgumentList.Add(script);
+            psi.Environment["TSWAP_BIN"] = _binaryPath;
+            using var process = Process.Start(psi)!;
+            var stdout = process.StandardOutput.ReadToEndAsync();
+            var stderr = process.StandardError.ReadToEnd();
+            process.WaitForExit();
+            var lines = stdout.Result.Split('\n').Select(l => l.TrimEnd('\r')).ToList();
+            var found = lines.Contains("Found tokens: pw");
+            if (arrives && (!found || process.ExitCode != 0))
+                failures.Add($"{where}: the token did not arrive unchanged (exit {process.ExitCode}): {stdout.Result}{stderr}");
+            if (!arrives && found)
+                failures.Add($"{where}: the token arrived, though the shell should have expanded it: {stdout.Result}");
+            _output.WriteLine($"T47 calling shell: {where}: exit {process.ExitCode}; Found tokens: pw {(found ? "seen" : "not seen")}");
+        }
+
+        Assert.True(failures.Count == 0, string.Join("\n", failures));
+    }
+
     // --- ConPTY P/Invoke helpers (used by Run_CompoundCommand_RedactedOutput_WindowsConPty) ---
 
     [StructLayout(LayoutKind.Sequential)]
@@ -1514,7 +2218,11 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     /// setting them on this process (inherited by the child); safe because the suite
     /// runs with parallelism disabled.
     /// </summary>
-    private (int exitCode, string output) RunTswapInConPty(string waitForOutput, params string[] args)
+    private (int exitCode, string output) RunTswapInConPty(string waitForOutput, params string[] args) =>
+        RunTswapInConPty(workingDirectory: null, waitForOutput, args);
+
+    /// <summary>Brief T46 (A13): <see cref="RunTswapInConPty(string, string[])"/> with tswap started in <paramref name="workingDirectory"/>.</summary>
+    private (int exitCode, string output) RunTswapInConPty(DirectoryInfo? workingDirectory, string waitForOutput, params string[] args)
     {
         const uint EXTENDED_STARTUPINFO_PRESENT        = 0x00080000;
         const int  PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE = 0x00020016;
@@ -1582,7 +2290,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
             SetEnv("TSWAP_CONFIG_DIR", _tempDir);
 
             if (!CreateProcess(null, cmdLine, IntPtr.Zero, IntPtr.Zero, false,
-                    EXTENDED_STARTUPINFO_PRESENT, IntPtr.Zero, null, ref six, out var pi))
+                    EXTENDED_STARTUPINFO_PRESENT, IntPtr.Zero, workingDirectory?.FullName, ref six, out var pi))
                 throw new Exception($"CreateProcess failed ({Marshal.GetLastWin32Error()})");
             hProcess = pi.hProcess;
             CloseHandle(pi.hThread);

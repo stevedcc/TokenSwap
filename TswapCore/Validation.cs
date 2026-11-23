@@ -253,19 +253,24 @@ public static class Validation
     // argv[0] and, through simple wrappers (nice, timeout, sudo, ...: their options and leading
     // positional skipped as CheckWrapper does) and find's -exec family, the command each runs. Tools
     // with subcommands (docker, npm, ...) end the walk: their later words aren't a program on this machine.
-    private static IEnumerable<string> ProgramWords(IReadOnlyList<string> argv)
+    // Normalised (ProgramName), for GetFileTokenRefusal; ProgramPositions keeps the raw word (brief T47, A20).
+    internal static IEnumerable<string> ProgramWords(IReadOnlyList<string> argv) =>
+        ProgramPositions(argv).Select(i => ProgramName(argv[i]));
+
+    /// <summary>Brief T47 (A20): the walk of <see cref="ProgramWords"/>, as positions in <paramref name="argv"/>.</summary>
+    internal static IEnumerable<int> ProgramPositions(IReadOnlyList<string> argv)
     {
         var i = 0;
         while (i < argv.Count)
         {
             var program = ProgramName(argv[i]);
-            yield return program;
+            yield return i;
             if (program.Equals("find", StringComparison.OrdinalIgnoreCase))
             {
                 for (var j = i + 1; j < argv.Count; j++)
                     if (FindExecOptions.Contains(argv[j]))
-                        foreach (var word in ProgramWords(argv.Skip(j + 1).TakeWhile(a => a is not (";" or "+")).ToList()))
-                            yield return word;
+                        foreach (var position in ProgramPositions(argv.Skip(j + 1).TakeWhile(a => a is not (";" or "+")).ToList()))
+                            yield return j + 1 + position;
                 yield break;
             }
             if (!Wrappers.Contains(program) || SubcommandTools.Contains(program))
@@ -298,6 +303,112 @@ public static class Validation
             i = next;
         }
     }
+
+    /// <summary>
+    /// Brief T47: a token <c>run</c> substituted into argv: a secret token (<c>name</c> or <c>name:previous</c>) or,
+    /// with <paramref name="IsFile"/>, a <c>{{@path}}</c> token (<paramref name="Name"/> is the path as typed); the
+    /// argv index it went into, and the text it was replaced with (the value, or the filled copy's path).
+    /// </summary>
+    public readonly record struct SubstitutedToken(string Name, int ArgIndex, string Value, bool IsFile = false);
+
+    /// <summary>
+    /// Brief T47: every token of <paramref name="args"/> (the command as typed) that
+    /// <see cref="SubstituteAllTokensInArgs"/> replaces, in argv order, with the text it is replaced with.
+    /// </summary>
+    public static IReadOnlyList<SubstitutedToken> SubstitutedTokens(IReadOnlyList<string> args,
+        IReadOnlyDictionary<string, string> secretValues, IReadOnlyDictionary<string, string> filePaths)
+    {
+        List<SubstitutedToken> tokens = [];
+        for (var i = 0; i < args.Count; i++)
+            foreach (Match m in AnyTokenRegex.Matches(args[i]))
+            {
+                if (m.Groups[1].Success && filePaths.TryGetValue(m.Groups[1].Value, out var path))
+                    tokens.Add(new(m.Groups[1].Value, i, path, IsFile: true));
+                else if (m.Groups[2].Success && secretValues.TryGetValue(m.Groups[2].Value, out var value))
+                    tokens.Add(new(m.Groups[2].Value, i, value));
+            }
+        return tokens;
+    }
+
+    // Brief T47 (A3): what cmd.exe interprets in a batch file's arguments, which it parses again at launch.
+    private static readonly System.Buffers.SearchValues<char> BatchCharacters =
+        System.Buffers.SearchValues.Create("\"&|<>^%!()\r\n");
+
+    private const string BatchCharacterList = "one of \" & | < > ^ % ! ( ) or a line break";
+
+    /// <summary>
+    /// Brief T47 (A4): whether <paramref name="program"/> starts as a batch file or is cmd itself: its last component,
+    /// normalised as Windows does (<see cref="WindowsFileName"/>: a drive prefix and trailing dots and spaces dropped,
+    /// and a <c>:stream</c> suffix dropped only after a name ending in <c>.exe</c>, <c>.cmd</c>, <c>.bat</c> or
+    /// <c>.com</c>, or a head Windows trimmed (F23), reviews F15 and F17), ends in <c>.cmd</c> or <c>.bat</c>, or is <c>cmd</c> (<c>cmd.exe</c>), ignoring
+    /// case.
+    /// </summary>
+    public static bool IsBatchTarget(string program)
+    {
+        var name = WindowsFileName(program);
+        return name.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase)
+            || name.EndsWith(".bat", StringComparison.OrdinalIgnoreCase)
+            || ProgramName(name).Equals("cmd", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Brief T47 (A13, A20): the refusal of a command line that hands a batch file (or cmd) a substituted text holding
+    /// a character cmd.exe interprets (batch files re-parse arguments), or null. Review fix F11: every word of the
+    /// command, raw and trimmed, is tested with <see cref="IsBatchTarget"/>, whatever program or position it is in.
+    /// With a batch target, every substituted token counts (failing closed: any program's arguments can reach it). Names every refused token in argv order, never a value or which character.
+    /// </summary>
+    /// <remarks>
+    /// The given name is checked, not one resolved through PATH and PATHEXT: neither of run's start paths (RedactingPty's
+    /// FallbackPty through .NET's process start, WindowsPty through CreateProcessW with no application name) starts a
+    /// batch file from a name without its extension; CreateProcess appends only ".exe". If a start path ever resolves
+    /// PATHEXT, this check must resolve the name the same way first, or it fails open.
+    /// </remarks>
+    public static string? BatchArgumentRefusal(IReadOnlyList<string> argv, IReadOnlyList<SubstitutedToken> tokens)
+    {
+        if (!BatchTargets(argv).Any())
+            return null;
+        var refused = tokens.Where(t => t.Value.AsSpan().ContainsAny(BatchCharacters))
+            .OrderBy(t => t.ArgIndex)
+            .DistinctBy(t => (t.Name, t.IsFile))
+            .ToList();
+        if (refused.Count == 0)
+            return null;
+
+        // Controller ruling 3: a copy's path is the temporary folder and the source's base name; say which holds the
+        // character, and never print the folder's path.
+        var files = refused.Where(t => t.IsFile).ToList();
+        var nameToBlame = files.Any(t => FileNamePart(t.Value).AsSpan().ContainsAny(BatchCharacters));
+        var folderToBlame = files.Any(t => t.Value[..^FileNamePart(t.Value).Length].AsSpan().ContainsAny(BatchCharacters));
+        var secrets = refused.Where(t => !t.IsFile).ToList();
+        if (secrets.Count == 0)
+        {
+            var copies = $"Refused: tswap won't pass the copy of {string.Join(", ", refused.Select(t => $"'{Printable(t.Name)}'"))} to a batch file: ";
+            return folderToBlame
+                ? copies + $"the temporary folder's path (%TEMP%) contains characters cmd.exe interprets ({BatchCharacterList}). " +
+                  "Set TMP and TEMP to a folder without them, or use a PowerShell script." + (nameToBlame ? " Rename the file." : "")
+                : copies + $"its name contains characters cmd.exe interprets ({BatchCharacterList}). Rename the file.";
+        }
+
+        var names = string.Join(", ", refused.Select(t => t.IsFile ? $"'{{{{@{Printable(t.Name)}}}}}'" : $"'{t.Name}'"));
+        var first = secrets[0].Name;
+        var message =
+            $"Refused: tswap won't pass secret(s) {names} to a batch file. cmd.exe parses a batch file's arguments again, " +
+            $"and their values contain characters it interprets ({BatchCharacterList}; tswap's generated values often do). " +
+            $"Use a PowerShell script ('run powershell -File .\\script.ps1 {{{{{first}}}}}', read as $args[0]), or the " +
+            $"environment ('run --env PW={{{{{first}}}}} deploy.cmd', read with setlocal EnableDelayedExpansion as !PW!).";
+        return message + (nameToBlame ? " Rename the file." : "") +
+               (folderToBlame ? " The temporary folder's path (%TEMP%) contains such characters too: set TMP and TEMP to a folder without them." : "");
+    }
+
+    // The last component of a path, either separator.
+    private static string FileNamePart(string path) => path[(path.LastIndexOfAny(['/', '\\']) + 1)..];
+
+    // Review fix F11 (replaces the program walk and F10's PowerShell rule): every word of the command, raw and
+    // trimmed, that is a batch target, whatever program or position it is in. Which program starts a word can't be
+    // told from the text (Windows normalises "pwsh.exe.", "pwsh.exe::$DATA", 8.3 names; an unknown wrapper runs its
+    // arguments), so failing closed: a batch file's name passed as plain data next to such a secret is refused too.
+    private static IEnumerable<int> BatchTargets(IReadOnlyList<string> argv) =>
+        Enumerable.Range(0, argv.Count).Where(i => IsBatchTarget(argv[i].Trim()));
 
     private static string FileTokenWayOut(string word) =>
         $"With a {{{{@file}}}} token no word of the command may be '{word}': rename the file if that is its name, " +
@@ -409,7 +520,7 @@ public static class Validation
           "xvfb-run", "dbus-run-session", "systemd-run", "firejail", "bwrap", "unshare", "nsenter",
           "chroot", "caffeinate", "uv", "uvx", "poetry", "pipenv", "pdm", "hatch", "conda", "pixi",
           "npx", "pnpx", "bunx", "npm", "pnpm", "yarn", "bundle", "docker", "podman", "nerdctl",
-          "kubectl", "oc", "lxc", "incus", "flatpak", "snap", "machinectl", "toolbox", "distrobox" };
+          "kubectl", "oc", "lxc", "incus", "flatpak", "snap", "machinectl", "toolbox", "distrobox", "wsl" };
 
     // Run their -c/--command argument through the target user's shell.
     private static readonly HashSet<string> ShellAsUser = new(StringComparer.OrdinalIgnoreCase)
@@ -418,9 +529,71 @@ public static class Validation
     // ssh options that take a value; a non-option argument after the host is a remote command.
     private const string SshValued = "BbcDEeFIiJLlmOoPpQRSWw";
 
-    // Script paths that are really stdin.
-    private static readonly HashSet<string> StdinScripts = new(StringComparer.Ordinal)
-        { "-", "/dev/stdin", "/dev/fd/0", "/proc/self/fd/0" };
+    // Script paths that are really stdin, resolved (IsStdinScript). Review fix G1: compared ignoring case (fail closed:
+    // a case-insensitive file system, or /dev/STDIN given on purpose).
+    private static readonly HashSet<string> StdinPaths = new(StringComparer.OrdinalIgnoreCase)
+        { "/dev/stdin", "/dev/fd/0", "/proc/self/fd/0", "/proc/thread-self/fd/0" };
+
+    private static readonly Regex ProcPidStdin = new("^/proc/[0-9]+/fd/0$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// Review fix I1: whether <paramref name="word"/>, as a script path, is stdin: <c>-</c> (after trimming), or a path
+    /// that resolves to <c>/dev/stdin</c>, <c>/dev/fd/0</c>, <c>/proc/self/fd/0</c>, <c>/proc/thread-self/fd/0</c> or
+    /// <c>/proc/&lt;pid&gt;/fd/0</c>, ignoring case. The path is resolved as the kernel walks it (relative to the current
+    /// folder, repeated separators and <c>.</c>/<c>..</c> collapsed) with <see cref="Path.GetFullPath(string)"/>, so
+    /// <c>/dev/./stdin</c>, <c>//dev//stdin</c> and <c>../../dev/stdin</c> count; a word it can't resolve is no path. A
+    /// symbolic link to stdin under another name is not followed. Every stdin check of <see cref="GetBlockedInvocation"/>
+    /// uses this.
+    /// </summary>
+    public static bool IsStdinScript(string word)
+    {
+        var trimmed = word.Trim();
+        if (trimmed == "-")
+            return true;
+        if (trimmed.Length == 0)
+            return false;
+        string full;
+        if (OperatingSystem.IsWindows())
+        {
+            // Windows' GetFullPath maps /dev/stdin to a drive path; resolve a '/'-rooted word by the Unix rules
+            // instead, so the check is the same on every OS (fail closed). A relative word has no Unix
+            // folder to resolve against there.
+            if (trimmed[0] != '/')
+                return false;
+            full = ResolveUnixPath(trimmed);
+        }
+        else
+        {
+            try
+            {
+                full = Path.GetFullPath(trimmed);
+            }
+            catch (Exception e) when (e is ArgumentException or NotSupportedException or PathTooLongException)
+            {
+                return false;
+            }
+        }
+        return StdinPaths.Contains(full) || ProcPidStdin.IsMatch(full);
+    }
+
+    // '/'-rooted path, resolved as Path.GetFullPath does on Unix: empty and '.' segments dropped, '..' pops (not past /).
+    private static string ResolveUnixPath(string path)
+    {
+        List<string> parts = [];
+        foreach (var segment in path.Split('/'))
+        {
+            if (segment is "" or ".")
+                continue;
+            if (segment == "..")
+            {
+                if (parts.Count > 0)
+                    parts.RemoveAt(parts.Count - 1);
+                continue;
+            }
+            parts.Add(segment);
+        }
+        return "/" + string.Join('/', parts);
+    }
 
     private const string WayOut =
         "Put the commands in a script file and run that instead, e.g. 'run ./script.sh {{secret}}' " +
@@ -451,7 +624,8 @@ public static class Validation
         if (argv.Count == 0)
             return null;
 
-        var program = ProgramName(argv[0]);
+        // Review fix F23: an image tag or digest as the program itself (python:3.12 -c ...) is that program.
+        var program = ImageProgram(argv[0]) ?? ProgramName(argv[0]);
         var args = argv.Skip(1).ToList();
 
         if (BlockedCommands.Contains(program))
@@ -520,7 +694,7 @@ public static class Validation
                     }
                 }
             }
-            if (programFiles.Any(f => StdinScripts.Contains(f) || f.Length == 0))
+            if (programFiles.Any(f => IsStdinScript(f) || f.Length == 0))
                 return new(program, $"'{program} -f -' reads its program from stdin, which can transform and print secrets past redaction. Put the program in a file.");
             var fromFile = programFiles.Count > 0;
             return fromFile && !inlineSource ? null
@@ -534,7 +708,7 @@ public static class Validation
             {
                 if (!FindExecOptions.Contains(args[i]))
                     continue;
-                var command = args.Skip(i + 1).TakeWhile(a => a is not (";" or "+")).ToList();
+                var command = WithImageProgram(args.Skip(i + 1).TakeWhile(a => a is not (";" or "+")).ToList());
                 var inner = command.Count == 0 ? null : GetBlockedInvocation(command);
                 if (inner is not null)
                     return inner with { Reason = $"'find {args[i]}' runs '{inner.Program}': {inner.Reason}" };
@@ -546,17 +720,37 @@ public static class Validation
             return CheckSsh(args);
 
         if (program.Equals("deno", StringComparison.OrdinalIgnoreCase))
-            return args.FirstOrDefault(a => !a.StartsWith('-')) is "eval" or "repl"
-                ? new(program, InlineReason(program, "eval")) : null;
+        {
+            var sub = args.FindIndex(a => !a.StartsWith('-'));
+            if (sub < 0)
+                return null;
+            if (args[sub] is "eval" or "repl")
+                return new(program, InlineReason(program, "eval"));
+            // Review fix G2: 'deno run -' (or another stdin path) reads the script from stdin. The script is the first
+            // word after 'run' that is a stdin path or no option.
+            var script = args.Skip(sub + 1).FirstOrDefault(a => IsStdinScript(a) || !a.StartsWith('-'));
+            return args[sub] == "run" && script is not null && IsStdinScript(script)
+                ? new(program, $"'{program} run -' reads code from stdin, which can transform and print secrets past redaction. {WayOut}")
+                : null;
+        }
 
-        if (program.Equals("cmd", StringComparison.OrdinalIgnoreCase)
-            && args.Any(a => a.Equals("/c", StringComparison.OrdinalIgnoreCase) || a.Equals("/k", StringComparison.OrdinalIgnoreCase)))
-            return new(program, InlineReason(program, "/c"));
+        if (program.Equals("cmd", StringComparison.OrdinalIgnoreCase))
+            // Review fix G2: with /c or /k cmd runs inline code; without them it starts a shell reading stdin.
+            return args.Any(a => a.Equals("/c", StringComparison.OrdinalIgnoreCase) || a.Equals("/k", StringComparison.OrdinalIgnoreCase))
+                ? new(program, InlineReason(program, "/c")) : NoCommandShell(program);
 
         if (program.Equals("pwsh", StringComparison.OrdinalIgnoreCase) || program.Equals("powershell", StringComparison.OrdinalIgnoreCase))
         {
             var flag = args.FirstOrDefault(IsPowerShellInline);
-            return flag is not null ? new(program, InlineReason(program, flag)) : null;
+            if (flag is not null)
+                return new(program, InlineReason(program, flag));
+            // Review fix H1: a stdin path anywhere after PowerShell is refused, whatever parameter comes before it
+            // (pwsh reads -i as -Interactive, not -InputFormat), fail closed; a script argument that is literally '-'
+            // is refused too (accepted over-refusal).
+            if (args.Any(IsStdinScript))
+                return PowerShellStdin(program);
+            return program.Equals("powershell", StringComparison.OrdinalIgnoreCase)
+                ? CheckWindowsPowerShell(program, args) : CheckPwsh(program, args);
         }
 
         if (PythonName.IsMatch(program))
@@ -588,6 +782,8 @@ public static class Validation
         ["runuser"] = ["-u", "-g", "-G", "--user", "--group", "--supp-group", "-s", "--shell"],
         ["npx"] = ["-p", "--package"],
         ["systemd-run"] = ["-p", "--property", "-u", "--unit", "-E", "--setenv", "-M", "--machine"],
+        // Review fix F19: wsl's -e/--exec take no value of their own: the word after them is the command.
+        ["wsl"] = ["-d", "--distribution", "-u", "--user", "--cd"],
     };
 
     // Wrappers whose first positional argument is not the command (timeout DURATION cmd,
@@ -614,12 +810,25 @@ public static class Validation
     {
         BlockedInvocation? Wrapped(int from)
         {
-            var inner = GetBlockedInvocation(args.Skip(from).ToList());
+            var inner = GetBlockedInvocation(WithImageProgram(args.Skip(from).ToList()));
             return inner is null ? null : inner with { Reason = $"'{program}' runs '{inner.Program}': {inner.Reason}" };
         }
 
         if (program.Equals("command", StringComparison.OrdinalIgnoreCase) && args.Any(a => a is "-v" or "-V"))
             return null; // command -v only looks the name up
+
+        // Review fix F24: wsl with no arguments at all starts the default distribution's shell reading stdin
+        // (wsl --list, --status, --version stay allowed); an attached exec form (--exec=cmd, -ecmd) names the command
+        // inside its own option, which the walk can't follow, so it is refused fail-closed (as su's --command=).
+        if (program.Equals("wsl", StringComparison.OrdinalIgnoreCase))
+        {
+            if (args.Count == 0)
+                return NoCommandShell(program);
+            var attached = OwnOptions(program, args).FirstOrDefault(a => a.StartsWith("--exec=", StringComparison.Ordinal)
+                || (a.StartsWith("-e", StringComparison.Ordinal) && a.Length > 2));
+            if (attached is not null)
+                return new(program, $"'{program} {attached}' names its command inside the option, which this check can't follow. {WayOut}");
+        }
 
         // sudo -s/-i run a shell (with any command through its -c), npx -c and flock -c run shell
         // code. Only the wrapper's own options count, before its command (sudo mv -i a b passes).
@@ -647,7 +856,7 @@ public static class Validation
                 && !args.Skip(sub + 1).Where(a => !a.StartsWith('-')).Skip(1).Any())
                 return new(program, $"'machinectl {args[sub]}' with no command starts a shell reading stdin, which can transform and print secrets past redaction. {WayOut}");
             for (var i = sub + 1; i < args.Count; i++)
-                if (IsCheckedProgram(ProgramName(args[i])) && Wrapped(i) is { } blocked)
+                if (IsWrappedCheckedProgram(args[i]) && Wrapped(i) is { } blocked)
                     return blocked;
             return null;
         }
@@ -679,24 +888,55 @@ public static class Validation
                 continue;
             }
             // The wrapped command, checked in full (a bare interpreter reading stdin is refused).
-            if (IsCheckedProgram(ProgramName(arg)))
-                return Wrapped(i);
-            // Not a checked program. For a wrapper whose options this check knows completely,
-            // it is the command (sudo apt install python3 passes). For any other wrapper it may
-            // be the value of an unknown option (bwrap --ro-bind / / python), so keep scanning
-            // and refuse any later checked program that would be refused on its own, a bare
-            // interpreter reading stdin included: failing closed.
+            if (IsWrappedCheckedProgram(arg) && Wrapped(i) is { } wrapped)
+                return wrapped;
+            // Not a checked program, or one that passes. For a wrapper whose options this check knows
+            // completely, it is the command (sudo apt install python3 passes). For any other wrapper it
+            // may be the value of an unknown option (bwrap --ro-bind / / python; review fix F22:
+            // bwrap --tmpfs /python bash -c ..., whatever word the value is), so keep scanning and refuse
+            // any later checked program that would be refused on its own, a bare interpreter reading
+            // stdin included: failing closed.
             if (TrustedWrappers.Contains(program))
                 return null;
             for (var k = i + 1; k < args.Count; k++)
-                if (IsCheckedProgram(ProgramName(args[k])) && Wrapped(k) is { } later)
+                if (IsWrappedCheckedProgram(args[k]) && Wrapped(k) is { } later)
                     return later;
             return null;
         }
         // No command at all: these wrappers then start a shell that reads stdin.
-        return ShellWhenNoCommand.Contains(program)
-            ? new(program, $"'{program}' with no command starts a shell reading stdin, which can transform and print secrets past redaction. {WayOut}")
-            : null;
+        return ShellWhenNoCommand.Contains(program) ? NoCommandShell(program) : null;
+    }
+
+    private static BlockedInvocation NoCommandShell(string program) =>
+        new(program, $"'{program}' with no command starts a shell reading stdin, which can transform and print secrets past redaction. {WayOut}");
+
+    // Review fix F18: in a wrapper's command (CheckWrapper, find -exec), a word whose last path component, with a
+    // trailing '@<digest>' (F21) and ':<tag>' removed, names a checked program is a container image of it (python:3.12,
+    // mcr.microsoft.com/powershell:7.4), checked as that program with the words after it as its arguments. Null when
+    // the word isn't such a tag, or already names a checked program as it is.
+    private static string? ImageProgram(string word)
+    {
+        if (IsCheckedProgram(ProgramName(word)))
+            return null;
+        var last = word.Replace('\\', '/');
+        last = last[(last.LastIndexOf('/') + 1)..];
+        // F21: a digest first (python@sha256:..., python:3.12@sha256:...), then the tag.
+        if (last.LastIndexOf('@') is var at and > 0)
+            last = last[..at];
+        if (last.IndexOf(':') is var colon and > 0)
+            last = last[..colon];
+        return ProgramName(last) is var name && IsCheckedProgram(name) ? name : null;
+    }
+
+    private static bool IsWrappedCheckedProgram(string word) =>
+        IsCheckedProgram(ProgramName(word)) || ImageProgram(word) is not null;
+
+    // The wrapped command with an image tag's program (ImageProgram) in place of its first word.
+    private static List<string> WithImageProgram(List<string> command)
+    {
+        if (command.Count > 0 && ImageProgram(command[0]) is { } program)
+            command[0] = program;
+        return command;
     }
 
     private static readonly HashSet<string> ShellWhenNoCommand = new(StringComparer.OrdinalIgnoreCase)
@@ -769,16 +1009,155 @@ public static class Validation
         || name.Equals("pwsh", StringComparison.OrdinalIgnoreCase) || name.Equals("powershell", StringComparison.OrdinalIgnoreCase)
         || name.Equals("cmd", StringComparison.OrdinalIgnoreCase) || name.Equals("deno", StringComparison.OrdinalIgnoreCase);
 
-    // PowerShell accepts unambiguous prefixes of its parameters (-comm = -Command).
-    private static bool IsPowerShellInline(string arg)
+    /// <summary>
+    /// Review fix F9: a PowerShell host parameter as PowerShell 7's own parser reads it
+    /// (<c>CommandLineParameterParser.GetSwitchKey</c>, <c>CharExtensions.IsDash</c>): surrounding whitespace trimmed,
+    /// then every leading <c>/</c>, <c>-</c>, U+2013, U+2014 or U+2015 stripped (any number of them, which fails
+    /// closed where Windows PowerShell 5.1's closed parser may take fewer), lower-cased. Null when nothing was stripped
+    /// (not a parameter) or nothing is left.
+    /// </summary>
+    private static string? PowerShellParameterKey(string arg)
     {
-        var a = arg.ToLowerInvariant();
-        if (a is "-c" or "-e" or "-ec" or "-cwa")
-            return true;
-        return (a.Length >= 4 && "-command".StartsWith(a, StringComparison.Ordinal))
-            || (a.Length >= 4 && "-encodedcommand".StartsWith(a, StringComparison.Ordinal))
-            || (a.Length >= 9 && "-commandwithargs".StartsWith(a, StringComparison.Ordinal));
+        var trimmed = arg.Trim();
+        var key = trimmed.TrimStart('/', '-', '\u2013', '\u2014', '\u2015');
+        return key.Length == trimmed.Length || key.Length == 0 ? null : key.ToLowerInvariant();
     }
+
+    // PowerShell takes any prefix of a parameter's name down to its short form, and resolves -c and -e (and -co, -en)
+    // to -Command and -EncodedCommand itself (F9: PowerShell's own rule, fail closed): every prefix of the three
+    // inline-code parameters counts, as do their aliases -ec and -cwa.
+    private static bool IsPowerShellInline(string arg) =>
+        PowerShellParameterKey(arg) is { } key
+        && (key is "ec" or "cwa"
+            || "command".StartsWith(key, StringComparison.Ordinal)
+            || "encodedcommand".StartsWith(key, StringComparison.Ordinal)
+            || "commandwithargs".StartsWith(key, StringComparison.Ordinal));
+
+    /// <summary>
+    /// Brief T49 (#401, A1): Windows PowerShell 5.1's own parameters as tswap trusts them, after exactly one leading
+    /// <c>-</c> or <c>/</c> (case-insensitive): the full names, and the widely used short forms only. 5.1's parser is
+    /// closed source and its docs document no abbreviations, so any other prefix, alias or spelling (a Unicode dash,
+    /// <c>--</c>) is not a 5.1 parameter here (fail closed). <c>-Help</c>, <c>-?</c>, <c>/?</c> and
+    /// <c>-EncodedArguments</c> are deliberately left out, so they are refused too. The value says whether the
+    /// parameter takes the next word as its value.
+    /// </summary>
+    private static readonly Dictionary<string, (string Name, bool Valued)> WindowsPowerShellParameters =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["PSConsoleFile"] = ("PSConsoleFile", true),
+            ["Version"] = ("Version", true),
+            ["NoLogo"] = ("NoLogo", false),
+            ["nol"] = ("NoLogo", false),
+            ["NoExit"] = ("NoExit", false),
+            ["noe"] = ("NoExit", false),
+            ["Sta"] = ("Sta", false),
+            ["Mta"] = ("Mta", false),
+            ["NoProfile"] = ("NoProfile", false),
+            ["nop"] = ("NoProfile", false),
+            ["NonInteractive"] = ("NonInteractive", false),
+            ["noni"] = ("NonInteractive", false),
+            ["InputFormat"] = ("InputFormat", true),
+            ["if"] = ("InputFormat", true),
+            ["OutputFormat"] = ("OutputFormat", true),
+            ["of"] = ("OutputFormat", true),
+            ["WindowStyle"] = ("WindowStyle", true),
+            ["w"] = ("WindowStyle", true),
+            ["ConfigurationName"] = ("ConfigurationName", true),
+            ["ExecutionPolicy"] = ("ExecutionPolicy", true),
+            ["ep"] = ("ExecutionPolicy", true),
+            ["ex"] = ("ExecutionPolicy", true),
+            ["File"] = ("File", true),
+            ["f"] = ("File", true),
+        };
+
+    // pwsh parameters that take the next word as a value (CommandLineParameterParser), by full name; a key that is a
+    // prefix of one of them, or one of the aliases, consumes the next word (fail closed: an ambiguous prefix such as
+    // -i, which pwsh reads as -Interactive, then needs a script after the word it consumed).
+    private static readonly string[] PwshValuedParameters =
+    [
+        "configurationname", "configurationfile", "custompipename", "encodedarguments", "executionpolicy",
+        "inputformat", "outputformat", "settingsfile", "windowstyle", "workingdirectory",
+    ];
+
+    private static readonly string[] PwshValuedAliases = ["ep", "if", "of", "wd"];
+
+    // Review fix G1: pwsh's parameters that take no value (CommandLineParameterParser), by full name, and its '?' alias.
+    // A key that is a prefix of none of these, of the valued ones and of file is no parameter: pwsh reads that word as
+    // its positional script file (GetSwitchKey, ParseFile), so '/dev/stdin' or '/opt/x.ps1' is the script.
+    private static readonly string[] PwshSwitchParameters =
+    [
+        "version", "help", "?", "login", "interactive", "noexit", "noprofile", "noprofileloadtime", "nologo",
+        "noninteractive", "servermode", "namedpipeservermode", "sshservermode", "socketservermode", "mta", "sta",
+        "removeworkingdirectorytrailingcharacter",
+    ];
+
+    /// <summary>
+    /// Brief T49 (#401): Windows PowerShell 5.1 reads its first argument that is not one of its own parameters as
+    /// -Command. Its parameters are walked (each valued one consumes the next word, A1's strict spellings only); the
+    /// first other word decides: the word after a <c>-File</c> is the script (allowed, unless it is stdin), anything
+    /// else is refused, as is <c>-NoExit</c> before the script and the end of the words with no script. No reason
+    /// repeats a word: the walk also runs after substitution, so the word could be a secret's value.
+    /// </summary>
+    private static BlockedInvocation? CheckWindowsPowerShell(string program, List<string> args)
+    {
+        for (var i = 0; i < args.Count; i++)
+        {
+            var word = args[i];
+            if (word.Length < 2 || word[0] is not ('-' or '/')
+                || !WindowsPowerShellParameters.TryGetValue(word[1..], out var parameter))
+            {
+                return word.Length > 0 && word[0] is '-' or '/' or '\u2013' or '\u2014' or '\u2015'
+                    ? new(program, $"'{program}': a parameter spelling tswap doesn't trust (it trusts one - or / before Windows PowerShell 5.1's full parameter names and its common short forms), and 5.1 would read it as -Command, which can transform and print secrets past redaction. {WayOut}")
+                    : new(program, $"'{program}' without -File runs its first argument as code (Windows PowerShell 5.1 reads it as -Command), which can transform and print secrets past redaction. {WayOut}");
+            }
+            if (parameter.Name == "NoExit")
+                return PowerShellNoScript(program);
+            if (parameter.Name == "File")
+                return PowerShellScript(program, args, i + 1);
+            if (parameter.Valued)
+                i++;
+        }
+        return PowerShellNoScript(program);
+    }
+
+    /// <summary>
+    /// Brief T49 (A2, A7): PowerShell 7 reads a plain first argument as the script file (-File), so only the stdin
+    /// shapes are refused: a script from stdin, <c>-NoExit</c> before the script, and no script at all. Its parameters
+    /// are read with <see cref="PowerShellParameterKey"/> (any spelling pwsh accepts).
+    /// </summary>
+    private static BlockedInvocation? CheckPwsh(string program, List<string> args)
+    {
+        for (var i = 0; i < args.Count; i++)
+        {
+            var key = PowerShellParameterKey(args[i]);
+            if (key is null)
+                return PowerShellScript(program, args, i);
+            if ("file".StartsWith(key, StringComparison.Ordinal))
+                return PowerShellScript(program, args, i + 1);
+            if (key.Length >= 3 && "noexit".StartsWith(key, StringComparison.Ordinal))
+                return PowerShellNoScript(program);
+            if (PwshValuedAliases.Contains(key) || PwshValuedParameters.Any(p => p.StartsWith(key, StringComparison.Ordinal)))
+                i++;
+            else if (!PwshSwitchParameters.Any(p => p.StartsWith(key, StringComparison.Ordinal)))
+                return PowerShellScript(program, args, i); // G1: no parameter, so the positional script
+        }
+        return PowerShellNoScript(program);
+    }
+
+    // The script word at args[at]: missing is no script; stdin (or empty, fail closed) reads code from stdin.
+    private static BlockedInvocation? PowerShellScript(string program, List<string> args, int at)
+    {
+        if (at >= args.Count)
+            return PowerShellNoScript(program);
+        var script = args[at];
+        return IsStdinScript(script) || script.Trim().Length == 0 ? PowerShellStdin(program) : null;
+    }
+
+    private static BlockedInvocation PowerShellStdin(string program) =>
+        new(program, $"'{program} -File -' reads code from stdin, which can transform and print secrets past redaction. {WayOut}");
+
+    private static BlockedInvocation PowerShellNoScript(string program) =>
+        new(program, $"'{program}' with no script (or -NoExit) reads code from stdin, which can transform and print secrets past redaction. {WayOut}");
 
     // ssh host [command]: a remote command is remote shell code.
     private static BlockedInvocation? CheckSsh(List<string> args)
@@ -820,7 +1199,7 @@ public static class Validation
             var arg = args[i];
             if (arg == "--")
                 continue;
-            if (StdinScripts.Contains(arg))
+            if (IsStdinScript(arg))
                 return new(program, $"'{program} {arg}' reads code from stdin, which can transform and print secrets past redaction. {WayOut}");
             if (arg.StartsWith("--", StringComparison.Ordinal))
             {
@@ -847,7 +1226,7 @@ public static class Validation
                         // The value is the script file: attached, or the next argument. Options
                         // after it can still carry inline code (expect -f s.exp -c '...').
                         var script = j < arg.Length - 1 ? arg[(j + 1)..] : (i + 1 < args.Count ? args[i + 1] : "");
-                        if (StdinScripts.Contains(script) || script.Length == 0)
+                        if (IsStdinScript(script) || script.Length == 0)
                             return new(program, $"'{program} {arg} {script}' reads code from stdin, which can transform and print secrets past redaction. {WayOut}");
                         var later = args.Skip(i + (j < arg.Length - 1 ? 1 : 2))
                             .FirstOrDefault(a => a.StartsWith('-') && !a.StartsWith("--", StringComparison.Ordinal) && a.Skip(1).Any(syntax.Inline.Contains));
@@ -880,10 +1259,36 @@ public static class Validation
         || name.Equals("pwsh", StringComparison.OrdinalIgnoreCase) || name.Equals("powershell", StringComparison.OrdinalIgnoreCase);
 
     // Basename without a Windows executable extension: /bin/sh → sh, cmd.exe → cmd.
+    /// <summary>
+    /// Brief T47 (A4), review fix F12: the last component of <paramref name="path"/> as Windows names the file it
+    /// starts: a drive prefix (<c>C:</c>) dropped, either separator, a <c>:stream</c> suffix dropped (F15: only after
+    /// a name ending in .exe, .cmd, .bat or .com, or a head Windows trimmed (F23)), and trailing dots
+    /// and spaces dropped (<c>pwsh.exe.</c>, <c>pwsh.exe </c>, <c>pwsh.exe::$DATA</c> are <c>pwsh.exe</c>). Shared by
+    /// <see cref="IsBatchTarget"/> and <see cref="ProgramName"/>, on every OS (fail closed).
+    /// </summary>
+    private static string WindowsFileName(string path)
+    {
+        var name = path.Length >= 2 && path[1] == ':' && char.IsAsciiLetter(path[0]) ? path[2..] : path;
+        name = name.Replace('\\', '/');
+        name = name[(name.LastIndexOf('/') + 1)..];
+        // Review fix F15: a ':stream' suffix only on a name that is a program file before its first ':', so an image
+        // tag (python:3.12, node:20) keeps its ':' and is not read as the interpreter. F17: that head is tested as
+        // Windows names it, trailing dots and spaces dropped (x.cmd.:s, pwsh.exe ::$DATA).
+        // F23: also when Windows had to trim the head, extension or not (cmd.:s, pwsh.:s); an untrimmed head without
+        // a program extension keeps its ':' (python:3.12, node:20, cmd:x).
+        if (name.IndexOf(':') is var colon and >= 0 && name[..colon] is var raw && raw.TrimEnd('.', ' ') is var head
+            && (HasProgramExtension(head) || head != raw))
+            name = head;
+        return name.TrimEnd('.', ' ');
+    }
+
+    private static bool HasProgramExtension(string name) =>
+        name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase)
+        || name.EndsWith(".bat", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".com", StringComparison.OrdinalIgnoreCase);
+
     private static string ProgramName(string path)
     {
-        var name = path.Replace('\\', '/');
-        name = name[(name.LastIndexOf('/') + 1)..];
+        var name = WindowsFileName(path);
         foreach (var ext in new[] { ".exe", ".cmd", ".bat", ".com" })
             if (name.EndsWith(ext, StringComparison.OrdinalIgnoreCase))
                 return name[..^ext.Length];

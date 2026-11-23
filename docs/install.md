@@ -287,6 +287,9 @@ pwsh installTswap.ps1
   Unquoted, PowerShell reads `{...}` as a script block: Windows PowerShell 5.1 and PowerShell 7 pass it on as
   `-encodedCommand <Base64>` (and an unquoted `{{@file}}` doesn't parse at all); `run` then finds no token and
   shows the quoted form. cmd needs no quotes.
+- **Batch files.** `tswap run` refuses to pass a secret whose value holds `"` `&` `|` `<` `>` `^` `%` `!` `(` `)` or a
+  line break to a `.cmd` or `.bat` file, because cmd.exe parses a batch file's arguments again. Use a PowerShell
+  script with `-File`, or `--env` and delayed expansion: [Passing secrets to scripts](scripts.md#cmd-and-batch-files).
 - **Privileged commands** (`add`, `get`, `list`, `delete`, `export`, `import`, and the others that
   need sudo, listed in [commands.md](commands.md#which-commands-need-sudo)) run from an **elevated
   command prompt** (right-click → "Run as administrator") instead of `sudo`.

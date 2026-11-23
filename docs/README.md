@@ -28,6 +28,8 @@ Every page about tswap, one line each. New to tswap? Start with the
   `restore`, and the steps after a secret is exposed.
 - [Examples](examples.md): an AI agent workflow, a backup script, secrets out of config files,
   Helm.
+- [Passing secrets to scripts](scripts.md): an argument, the environment or a file; reading a value safely in
+  bash, zsh, PowerShell and batch files, and why `run` refuses some values for a batch file.
 
 ## Security
 

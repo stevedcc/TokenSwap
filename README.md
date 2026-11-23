@@ -167,7 +167,8 @@ All pages, one line each: [docs/README.md](docs/README.md).
 - **Using tswap:** [several machines](docs/multi-machine.md),
   [the vault password and the agent](docs/vault-password-and-agent.md),
   [the broker for containers](docs/BROKER.md), [AI agents](docs/agent-integration.md),
-  [rotating and burning](docs/rotating-and-burning.md), [examples](docs/examples.md).
+  [rotating and burning](docs/rotating-and-burning.md), [examples](docs/examples.md),
+  [passing secrets to scripts](docs/scripts.md).
 - **Security:** [the security model](docs/security-model.md),
   [the broker's threat model](docs/broker-threat-model.md).
 - **Reference:** [commands, environment variables and files](docs/commands.md).

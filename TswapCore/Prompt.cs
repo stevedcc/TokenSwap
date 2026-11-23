@@ -104,7 +104,10 @@ Rules for fields:
    shells and interpreters given inline code (`sh -c`, `bash -c`, `python -c`, `perl -e`, `node -e`,
    `awk` without `-f`, `xargs`, `ssh host <command>`, also behind `timeout`/`sudo`/`uv run`/`docker run`):
    for several commands, write a script file and run it, e.g. `%CMD% run ./deploy.sh {{secret-name}}`
-   (the script reads it as $1; on Windows: `%CMD% run powershell -File .\deploy.ps1 '{{secret-name}}'`, read as $args[0])
+   (the script reads it quoted: ""$1"" in bash or zsh, $args[0] in a PowerShell script run with -File, e.g.
+   `%CMD% run powershell -File .\deploy.ps1 '{{secret-name}}'`; never pass a secret to a batch file or cmd:
+   cmd.exe parses their arguments again)
+   With Git Bash on Windows, pass the secret as `--env NAME={{secret-name}}` and read it as ""$NAME"" (its arguments may arrive altered)
 4. If you see a plaintext secret value in ANY context (file contents, command output,
    log messages, error messages), you MUST IMMEDIATELY run `%CMD% burn <name> <reason>`
    BEFORE continuing any other work. Do not finish your current task first.

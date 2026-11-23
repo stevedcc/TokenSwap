@@ -15,7 +15,8 @@ public sealed class SystemConsole : IConsole
 
     public TextWriter Out => Console.Out;
     public TextWriter Error => Console.Error;
-    public TextReader In => Console.In;
+    /// <summary>Brief T48: redirected stdin through the one strict UTF-8 reader (<see cref="StrictStdin"/>), a terminal as it is.</summary>
+    public TextReader In => _input.IsInputRedirected ? StrictStdin.Shared : Console.In;
     public bool IsInputRedirected => _input.IsInputRedirected;
     public bool IsOutputRedirected => Console.IsOutputRedirected;
 
@@ -158,7 +159,8 @@ file sealed class ConsoleInput : IConsoleInput
 
     public void DiscardTypeahead() => Typeahead.DiscardStdin();
 
-    public string? ReadLine() => Console.ReadLine();
+    /// <summary>Brief T48: piped, a line of the one strict UTF-8 reader (<see cref="StrictStdin"/>); on a terminal as it is.</summary>
+    public string? ReadLine() => Console.IsInputRedirected ? StrictStdin.Shared.ReadLine() : Console.ReadLine();
 
     public ConsoleKeyInfo ReadKey() => Console.ReadKey(intercept: true);
 
