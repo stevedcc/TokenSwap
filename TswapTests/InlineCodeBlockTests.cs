@@ -442,7 +442,7 @@ public class InlineCodeBlockTests
     {
         PositionalKind => $"'{program}' without -File runs its first argument as code (Windows PowerShell 5.1 reads it as -Command), which can transform and print secrets past redaction. {UnixWayOut}",
         UntrustedKind => $"'{program}': a parameter spelling tswap doesn't trust (it trusts one - or / before Windows PowerShell 5.1's full parameter names and its common short forms), and 5.1 would read it as -Command, which can transform and print secrets past redaction. {UnixWayOut}",
-        StdinKind => $"'{program} -File -' reads code from stdin, which can transform and print secrets past redaction. {UnixWayOut}",
+        StdinKind => $"'{program} -File -' reads code from stdin or the terminal, which can transform and print secrets past redaction. {UnixWayOut}",
         NoScriptKind => $"'{program}' with no script (or -NoExit) reads code from stdin, which can transform and print secrets past redaction. {UnixWayOut}",
         _ => throw new ArgumentOutOfRangeException(nameof(kind)),
     };
@@ -653,6 +653,120 @@ public class InlineCodeBlockTests
         Assert.True(Validation.IsStdinScript(word), word);
         Assert.NotNull(Validation.GetBlockedInvocation(["pwsh", word, "{{pw}}"]));
         Assert.False(Validation.IsStdinScript(string.Concat(Enumerable.Repeat("../", depth)) + "dev/stdout"));
+    }
+
+    // ── Brief T51 Task 2 (#407): one input-path predicate, fail-closed ─────────────────────────────────
+
+    // Every word IsStdinScript_AStdinPathInAnySpelling_IsTrue accepts, read from its own rows.
+    public static TheoryData<string> StdinScriptRows()
+    {
+        var method = typeof(InlineCodeBlockTests).GetMethod(nameof(IsStdinScript_AStdinPathInAnySpelling_IsTrue))!;
+        var data = new TheoryData<string>();
+        foreach (var row in method.GetCustomAttributes(typeof(InlineDataAttribute), false).Cast<InlineDataAttribute>()
+                     .SelectMany(a => a.GetData(method)))
+            data.Add((string)row[0]);
+        return data;
+    }
+
+    [Theory]
+    [MemberData(nameof(StdinScriptRows))]
+    public void IsInputPath_EveryStdinScriptWord_IsTrue(string word)
+    {
+        Assert.True(Validation.IsInputPath(word));
+    }
+
+    /// <summary>
+    /// proc(5): <c>/proc/&lt;pid&gt;/root</c>, <c>cwd</c> and <c>task/&lt;tid&gt;/</c> reach any path, and under a
+    /// pseudo-terminal stdin, stdout, stderr and <c>/dev/tty</c> are one device whose reads are the terminal's input;
+    /// Windows opens the console for <c>CON</c>, <c>CONIN$</c> and <c>CONOUT$</c> in any folder, extension or stream.
+    /// </summary>
+    [Theory]
+    [InlineData("/proc/self/root/dev/stdin")]
+    [InlineData("/proc/1/root/dev/stdin")]
+    [InlineData("/proc/thread-self/root/dev/stdin")]
+    [InlineData("/proc/self/cwd/dev/stdin")]
+    [InlineData("/proc/self/task/1/fd/0")]
+    [InlineData("/proc/4242/task/4243/fd/0")]
+    [InlineData("/dev/stdout")]
+    [InlineData("/dev/stderr")]
+    [InlineData("/dev/tty")]
+    [InlineData("/dev/fd/1")]
+    [InlineData("/dev/pts/0")]
+    [InlineData("/proc/self/fd/2")]
+    [InlineData("/proc/self/root/proc/self/root/dev/stdin")]
+    [InlineData("/proc")]
+    [InlineData("CON")]
+    [InlineData("con.ps1")]
+    [InlineData("CONIN$")]
+    [InlineData(@"C:\x\CONIN$")]
+    [InlineData(@"\\.\CONIN$")]
+    [InlineData("//./CONIN$")]
+    [InlineData(@"\\?\C:\x\CON")]
+    [InlineData("CONOUT$ ")]
+    // A1: a drive-relative name, an extension after a space, a stream.
+    [InlineData("C:CON")]
+    [InlineData("C:CONIN$")]
+    [InlineData("CON .x")]
+    [InlineData("CON:x")]
+    [InlineData("CON::$DATA")]
+    public void IsInputPath_AnInputOrTerminalPath_IsTrue(string word)
+    {
+        Assert.True(Validation.IsInputPath(word));
+    }
+
+    [Theory]
+    [InlineData("./x.py")]
+    [InlineData("/opt/x.ps1")]
+    [InlineData("x.py")]
+    [InlineData("--")]
+    [InlineData("")]
+    [InlineData("{{pw}}")]
+    [InlineData("/dev/null")]
+    [InlineData("/DEV/NULL")]
+    [InlineData("/dev/shm/x.py")]
+    [InlineData("console.py")]
+    [InlineData("icon")]
+    [InlineData("conf.ps1")]
+    [InlineData("/opt/CONTEXT")]
+    [InlineData(@"C:\scripts\deploy.ps1")]
+    public void IsInputPath_AnyOtherWord_IsFalse(string word)
+    {
+        Assert.False(Validation.IsInputPath(word));
+    }
+
+    /// <summary>I1's relative pattern: from the real current folder, enough <c>../</c> to reach <c>/</c>, then
+    /// <c>proc/self/cwd/dev/stdin</c>.</summary>
+    [UnixFact("a relative path into /proc needs a Unix current folder")]
+    public void IsInputPath_ARelativePathIntoProc_IsTrue()
+    {
+        var depth = Environment.CurrentDirectory.Split('/', StringSplitOptions.RemoveEmptyEntries).Length;
+        var word = string.Concat(Enumerable.Repeat("../", depth)) + "proc/self/cwd/dev/stdin";
+
+        Assert.True(Validation.IsInputPath(word), word);
+    }
+
+    [Theory]
+    [InlineData("python3", "/proc/self/root/dev/stdin", "{{x}}")]
+    [InlineData("python3", "/dev/stdout", "{{x}}")]
+    [InlineData("bash", "/dev/tty", "{{x}}")]
+    [InlineData("awk", "-f", "/proc/self/fd/0")]
+    [InlineData("pwsh", "-i", "/proc/self/root/dev/stdin", "{{x}}")]
+    [InlineData("pwsh", "CONIN$", "{{x}}")]
+    [InlineData("docker", "run", "-i", "python:3.12", "/proc/self/root/dev/stdin")]
+    public void InputPath_AsAScript_IsRefused(params string[] argv)
+    {
+        var blocked = Validation.GetBlockedInvocation(argv);
+
+        Assert.NotNull(blocked);
+        Assert.Contains("from stdin or the terminal", blocked!.Reason);
+    }
+
+    [Theory]
+    [InlineData("python3", "/dev/shm/job.py", "{{x}}")]
+    [InlineData("pwsh", "-File", "./x.ps1", "/dev/null", "{{x}}")]
+    public void NullOrShmPath_IsAllowed(params string[] argv)
+    {
+        Assert.Null(Validation.GetBlockedInvocation(argv));
     }
 
     // ── Review fix G2: cmd without /c or /k is a shell reading stdin; deno run - reads its script from stdin ──

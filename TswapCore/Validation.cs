@@ -542,38 +542,80 @@ public static class Validation
     /// <c>/proc/&lt;pid&gt;/fd/0</c>, ignoring case. The path is resolved as the kernel walks it (relative to the current
     /// folder, repeated separators and <c>.</c>/<c>..</c> collapsed) with <see cref="Path.GetFullPath(string)"/>, so
     /// <c>/dev/./stdin</c>, <c>//dev//stdin</c> and <c>../../dev/stdin</c> count; a word it can't resolve is no path. A
-    /// symbolic link to stdin under another name is not followed. Every stdin check of <see cref="GetBlockedInvocation"/>
-    /// uses this.
+    /// symbolic link to stdin under another name is not followed. Brief T51: every stdin check of
+    /// <see cref="GetBlockedInvocation"/> uses the wider <see cref="IsInputPath"/>, which includes this.
     /// </summary>
     public static bool IsStdinScript(string word)
     {
         var trimmed = word.Trim();
         if (trimmed == "-")
             return true;
+        return ResolveScriptPath(trimmed) is { } full && (StdinPaths.Contains(full) || ProcPidStdin.IsMatch(full));
+    }
+
+    /// <summary>
+    /// Brief T51 (#407): whether <paramref name="word"/>, as a script or program file, can read <c>run</c>'s stdin or
+    /// the terminal. True for every <see cref="IsStdinScript"/> word, for a path that resolves (as
+    /// <see cref="IsStdinScript"/> resolves it) to <c>/dev</c> or <c>/proc</c> or anything under them, ignoring case,
+    /// except <c>/dev/null</c> and <c>/dev/shm/</c> (proc(5): <c>/proc/&lt;pid&gt;/root</c>, <c>cwd</c> and
+    /// <c>task/&lt;tid&gt;/</c> reach any path, and under a pseudo-terminal fds 0, 1, 2 and <c>/dev/tty</c> read the
+    /// terminal's input), and on every OS for a Win32 device path (<c>\\.\</c>) or a Windows console name (<c>CON</c>,
+    /// <c>CONIN$</c>, <c>CONOUT$</c>) as the last component, with a drive prefix, an extension or a stream ignored.
+    /// Fail closed: a symbolic link elsewhere isn't followed, and a relative word is resolved against this process's
+    /// folder only.
+    /// </summary>
+    public static bool IsInputPath(string word)
+    {
+        if (IsStdinScript(word))
+            return true;
+        var trimmed = word.Trim();
+        if (ResolveScriptPath(trimmed) is { } full
+            && (full.Equals("/dev", StringComparison.OrdinalIgnoreCase) || full.Equals("/proc", StringComparison.OrdinalIgnoreCase)
+                || full.StartsWith("/dev/", StringComparison.OrdinalIgnoreCase) || full.StartsWith("/proc/", StringComparison.OrdinalIgnoreCase))
+            && !full.Equals("/dev/null", StringComparison.OrdinalIgnoreCase)
+            && !full.StartsWith("/dev/shm/", StringComparison.OrdinalIgnoreCase))
+            return true;
+        return IsWindowsConsolePath(trimmed);
+    }
+
+    // CreateFileW ("Consoles"): CON opened for reading is the console's input, CONIN$ always is, CONOUT$ the screen
+    // buffer; a DOS device name ignores a folder, an extension and a stream. Amendment A1: both separators, an X: drive
+    // prefix dropped, the last component cut at its first '.' or ':', then trailing dots and spaces trimmed.
+    private static readonly HashSet<string> ConsoleNames = new(StringComparer.OrdinalIgnoreCase) { "CON", "CONIN$", "CONOUT$" };
+
+    private static bool IsWindowsConsolePath(string word)
+    {
+        var path = word.Replace('\\', '/');
+        if (path.StartsWith("//./", StringComparison.Ordinal))
+            return true; // the Win32 device namespace
+        if (path.Length >= 2 && path[1] == ':' && char.IsAsciiLetter(path[0]))
+            path = path[2..];
+        var name = path[(path.LastIndexOf('/') + 1)..];
+        if (name.IndexOfAny(['.', ':']) is var cut and >= 0)
+            name = name[..cut];
+        return ConsoleNames.Contains(name.TrimEnd('.', ' '));
+    }
+
+    // The trimmed word as a path, resolved as the kernel walks it (IsStdinScript); null when it can't be resolved.
+    private static string? ResolveScriptPath(string trimmed)
+    {
         if (trimmed.Length == 0)
-            return false;
-        string full;
+            return null;
         if (OperatingSystem.IsWindows())
         {
             // Windows' GetFullPath maps /dev/stdin to a drive path; resolve a '/'-rooted word by the Unix rules
             // instead, so the check is the same on every OS (fail closed). A relative word has no Unix
             // folder to resolve against there.
-            if (trimmed[0] != '/')
-                return false;
-            full = ResolveUnixPath(trimmed);
+            return trimmed[0] == '/' ? ResolveUnixPath(trimmed) : null;
         }
-        else
+        try
         {
-            try
-            {
-                full = Path.GetFullPath(trimmed);
-            }
-            catch (Exception e) when (e is ArgumentException or NotSupportedException or PathTooLongException)
-            {
-                return false;
-            }
+            return Path.GetFullPath(trimmed);
         }
-        return StdinPaths.Contains(full) || ProcPidStdin.IsMatch(full);
+        catch (Exception e) when (e is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return null;
+        }
     }
 
     // '/'-rooted path, resolved as Path.GetFullPath does on Unix: empty and '.' segments dropped, '..' pops (not past /).
@@ -694,8 +736,8 @@ public static class Validation
                     }
                 }
             }
-            if (programFiles.Any(f => IsStdinScript(f) || f.Length == 0))
-                return new(program, $"'{program} -f -' reads its program from stdin, which can transform and print secrets past redaction. Put the program in a file.");
+            if (programFiles.Any(f => IsInputPath(f) || f.Length == 0))
+                return new(program, $"'{program} -f -' reads its program from stdin or the terminal, which can transform and print secrets past redaction. Put the program in a file.");
             var fromFile = programFiles.Count > 0;
             return fromFile && !inlineSource ? null
                 : new(program, $"'{program}' with an inline program can transform and print secrets past redaction. Put the program in a file and use '{program} -f prog.awk'.");
@@ -744,10 +786,10 @@ public static class Validation
             var flag = args.FirstOrDefault(IsPowerShellInline);
             if (flag is not null)
                 return new(program, InlineReason(program, flag));
-            // Review fix H1: a stdin path anywhere after PowerShell is refused, whatever parameter comes before it
-            // (pwsh reads -i as -Interactive, not -InputFormat), fail closed; a script argument that is literally '-'
-            // is refused too (accepted over-refusal).
-            if (args.Any(IsStdinScript))
+            // Review fix H1, brief T51: an input path (IsInputPath) anywhere after PowerShell is refused, whatever
+            // parameter comes before it (pwsh reads -i as -Interactive, not -InputFormat), fail closed; a script
+            // argument that is literally '-' or an input path is refused too (accepted over-refusal).
+            if (args.Any(IsInputPath))
                 return PowerShellStdin(program);
             return program.Equals("powershell", StringComparison.OrdinalIgnoreCase)
                 ? CheckWindowsPowerShell(program, args) : CheckPwsh(program, args);
@@ -1144,17 +1186,18 @@ public static class Validation
         return PowerShellNoScript(program);
     }
 
-    // The script word at args[at]: missing is no script; stdin (or empty, fail closed) reads code from stdin.
+    // The script word at args[at]: missing is no script; an input path (or empty, fail closed) reads code from stdin or
+    // the terminal.
     private static BlockedInvocation? PowerShellScript(string program, List<string> args, int at)
     {
         if (at >= args.Count)
             return PowerShellNoScript(program);
         var script = args[at];
-        return IsStdinScript(script) || script.Trim().Length == 0 ? PowerShellStdin(program) : null;
+        return IsInputPath(script) || script.Trim().Length == 0 ? PowerShellStdin(program) : null;
     }
 
     private static BlockedInvocation PowerShellStdin(string program) =>
-        new(program, $"'{program} -File -' reads code from stdin, which can transform and print secrets past redaction. {WayOut}");
+        new(program, $"'{program} -File -' reads code from stdin or the terminal, which can transform and print secrets past redaction. {WayOut}");
 
     private static BlockedInvocation PowerShellNoScript(string program) =>
         new(program, $"'{program}' with no script (or -NoExit) reads code from stdin, which can transform and print secrets past redaction. {WayOut}");
@@ -1199,8 +1242,8 @@ public static class Validation
             var arg = args[i];
             if (arg == "--")
                 continue;
-            if (IsStdinScript(arg))
-                return new(program, $"'{program} {arg}' reads code from stdin, which can transform and print secrets past redaction. {WayOut}");
+            if (IsInputPath(arg))
+                return new(program, $"'{program} {arg}' reads code from stdin or the terminal, which can transform and print secrets past redaction. {WayOut}");
             if (arg.StartsWith("--", StringComparison.Ordinal))
             {
                 var name = arg.Split('=', 2)[0];
@@ -1226,8 +1269,8 @@ public static class Validation
                         // The value is the script file: attached, or the next argument. Options
                         // after it can still carry inline code (expect -f s.exp -c '...').
                         var script = j < arg.Length - 1 ? arg[(j + 1)..] : (i + 1 < args.Count ? args[i + 1] : "");
-                        if (IsStdinScript(script) || script.Length == 0)
-                            return new(program, $"'{program} {arg} {script}' reads code from stdin, which can transform and print secrets past redaction. {WayOut}");
+                        if (IsInputPath(script) || script.Length == 0)
+                            return new(program, $"'{program} {arg} {script}' reads code from stdin or the terminal, which can transform and print secrets past redaction. {WayOut}");
                         var later = args.Skip(i + (j < arg.Length - 1 ? 1 : 2))
                             .FirstOrDefault(a => a.StartsWith('-') && !a.StartsWith("--", StringComparison.Ordinal) && a.Skip(1).Any(syntax.Inline.Contains));
                         return later is not null ? new(program, InlineReason(program, later)) : null;
