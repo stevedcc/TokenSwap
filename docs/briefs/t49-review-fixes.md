@@ -51,3 +51,23 @@ doesn't, stop and list it). Break-it-once: drop the any-word rule; the `-i /dev/
 ### H3 (Minor, MiMo): G2's deno break-it-once
 Run it now: drop the `deno run` stdin rule, the `deno run - {{pw}}` row must fail; restore. Record it in H1's commit
 message (or a separate empty-diff note in the report if H1 doesn't touch deno).
+
+## Round 3 (MiMo: one Important; GLM: ready, no findings)
+
+### I1 (Important, MiMo): a stdin path in any spelling the system resolves
+`StdinScripts` is an exact (ignore-case) match, so `/dev/./stdin`, `/dev//stdin`, `//dev//stdin`, `/dev/../dev/stdin`,
+`/dev/fd/./0`, `//proc//self//fd//0` (and the same relative to the working folder, `../../dev/stdin`) pass every stdin
+check while the kernel opens stdin. Add one `Validation.IsStdinScript(string word)` and use it in **every** place that
+consults `StdinScripts` (H1's rule, `PowerShellScript`, `CheckInterpreter` (both), the awk rule, the `deno run` rule):
+- trim; `-` → true;
+- otherwise resolve the word with `Path.GetFullPath` (relative to the current folder, collapsing repeated separators and
+  `.`/`..`), and compare, ignoring case, with `/dev/stdin`, `/dev/fd/0`, `/proc/self/fd/0`, `/proc/thread-self/fd/0`, or
+  match `^/proc/[0-9]+/fd/0$`; a word `GetFullPath` throws on → false (it is no path the kernel opens).
+Rows refused: `pwsh -File /dev/./stdin {{pw}}`, `pwsh /dev//stdin {{pw}}`, `pwsh //dev//stdin {{pw}}`,
+`pwsh -File /dev/../dev/stdin {{pw}}`, `pwsh -f /dev/fd/./0 {{pw}}`, `pwsh /proc/thread-self/fd/0 {{pw}}`,
+`pwsh /proc/1/fd/0 {{pw}}`, `python3 //dev//stdin {{x}}`, `awk -f /dev/./stdin`, `deno run /dev/./stdin {{x}}`. Existing
+rows unchanged (`pwsh -File ./x.ps1 {{pw}}`, `pwsh /opt/x.ps1 {{pw}}` stay allowed). The relative case needs a known
+working folder: test it in a unit test of `IsStdinScript` with a word built from the real current folder's depth
+(enough `../` to reach `/`, then `dev/stdin`), Unix only. `docs/security-model.md`: a symbolic link to stdin under
+another name is not caught (next to renamed copies). Break-it-once: compare the raw word again; the dot and
+double-slash rows fail.
