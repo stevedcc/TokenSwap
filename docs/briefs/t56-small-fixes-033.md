@@ -298,3 +298,7 @@ break-it-once; it pins that both ways a Ctrl-C can land leave the same state.
 - Batch-mode enrolment's approve file, and a signal handler anywhere.
 - `burned --json`, the agent prompt (`TswapCore/Prompt.cs`), and the `names`/`list`/`check` output.
 - `Redact`, `ToComment`, `SecretMatcher`, `Validation` (other briefs).
+
+## Owner decision (2026-11-23)
+
+The two existing test changes this brief names (`MetadataCommandTests.Burned_DecryptsNoValue`, `SlotEnrolTests.EnterGate_ApproveFileNotDeletable_StillSaysWhatIsLeft`) are sanctioned by the owner.
