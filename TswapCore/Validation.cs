@@ -762,19 +762,7 @@ public static class Validation
             return CheckSsh(args);
 
         if (program.Equals("deno", StringComparison.OrdinalIgnoreCase))
-        {
-            var sub = args.FindIndex(a => !a.StartsWith('-'));
-            if (sub < 0)
-                return null;
-            if (args[sub] is "eval" or "repl")
-                return new(program, InlineReason(program, "eval"));
-            // Review fix G2: 'deno run -' (or another stdin path) reads the script from stdin. The script is the first
-            // word after 'run' that is a stdin path or no option.
-            var script = args.Skip(sub + 1).FirstOrDefault(a => IsStdinScript(a) || !a.StartsWith('-'));
-            return args[sub] == "run" && script is not null && IsStdinScript(script)
-                ? new(program, $"'{program} run -' reads code from stdin, which can transform and print secrets past redaction. {WayOut}")
-                : null;
-        }
+            return CheckDeno(program, args);
 
         if (program.Equals("cmd", StringComparison.OrdinalIgnoreCase))
             // Review fix G2: with /c or /k cmd runs inline code; without them it starts a shell reading stdin.
@@ -1201,6 +1189,56 @@ public static class Validation
 
     private static BlockedInvocation PowerShellNoScript(string program) =>
         new(program, $"'{program}' with no script (or -NoExit) reads code from stdin, which can transform and print secrets past redaction. {WayOut}");
+
+    // Brief T51 (#406): deno's root defaults to 'run' ('deno <script>'), and 'deno' with no script starts its REPL.
+    private const string DenoNoScriptReason =
+        "'deno' with no script starts its REPL, which reads code from stdin and can transform and print secrets past " +
+        "redaction. Write 'deno run <script>'. " + WayOut;
+
+    private const string DenoOptionsReason =
+        "'deno' with options but no subcommand runs a script whose position this check can't find, or starts its REPL. " +
+        "Write 'deno run <options> <script>'. " + WayOut;
+
+    /// <summary>
+    /// Brief T51 Task 3 (#406): <c>deno</c> by deno's own parser (denoland/deno v2.9.8, <c>libs/cli_parser</c>). An input
+    /// path in any word, of any subcommand and in any position (an option's separate value included: <c>run</c>'s
+    /// valued options take even a word starting with <c>-</c>, and their list grows), reads code from stdin or the
+    /// terminal. Otherwise the global options are walked as <c>resolve_subcommand</c> walks them, and the word it stops
+    /// at decides: none is the REPL, <c>eval</c>/<c>repl</c> inline code, an option a run option with no subcommand
+    /// (fail closed), anything else a subcommand or a bare script.
+    /// </summary>
+    private static BlockedInvocation? CheckDeno(string program, List<string> args)
+    {
+        if (args.Any(IsInputPath))
+            return new(program, $"'{program} run -' reads code from stdin or the terminal, which can transform and print secrets past redaction. {WayOut}");
+
+        // resolve_subcommand: a long option counts by its exact global name (--env-file, --help, --version,
+        // --log-level, --quiet); a single-dash word by its second letter only (h, V, L, q). Bare --log-level, --env-file,
+        // --help, -L and -h take the next word; the '=' forms take nothing. resolve_subcommand doesn't match the aliases
+        // --env and -v, but those flags are require_equals(), so this walk matches resolve_subcommand; the resulting
+        // over-refusals (deno -- app.ts, deno --env=x run app.ts, deno -v x) are accepted (A5, A11).
+        var i = 0;
+        while (i < args.Count)
+        {
+            var word = args[i];
+            if (word is "--log-level" or "--env-file" or "--help" or "-L" or "-h")
+                i += 2;
+            else if (word is "--quiet" or "--version"
+                     || word.StartsWith("--help=", StringComparison.Ordinal) || word.StartsWith("--env-file=", StringComparison.Ordinal)
+                     || word.StartsWith("--log-level=", StringComparison.Ordinal)
+                     || (word.Length > 1 && word[0] == '-' && word[1] is 'h' or 'V' or 'L' or 'q'))
+                i++;
+            else
+                break;
+        }
+
+        if (i >= args.Count)
+            return new(program, DenoNoScriptReason);
+        var stop = args[i];
+        if (stop is "eval" or "repl")
+            return new(program, InlineReason(program, "eval"));
+        return stop.StartsWith('-') ? new(program, DenoOptionsReason) : null;
+    }
 
     // ssh host [command]: a remote command is remote shell code.
     private static BlockedInvocation? CheckSsh(List<string> args)

@@ -806,8 +806,84 @@ public class InlineCodeBlockTests
         var blocked = Validation.GetBlockedInvocation(argv);
 
         Assert.Equal(
-            $"'deno run -' reads code from stdin, which can transform and print secrets past redaction. {UnixWayOut}",
+            $"'deno run -' reads code from stdin or the terminal, which can transform and print secrets past redaction. {UnixWayOut}",
             blocked?.Reason);
+    }
+
+    // ── Brief T51 Task 3 (#406): deno by deno's own walk (resolve_subcommand) ─────────────────────────
+
+    private const string DenoStdin = "stdin";
+    private const string DenoNoScript = "no-script";
+    private const string DenoOptions = "options";
+    private const string DenoEval = "eval";
+
+    private static string DenoReason(string kind) => kind switch
+    {
+        DenoStdin => $"'deno run -' reads code from stdin or the terminal, which can transform and print secrets past redaction. {UnixWayOut}",
+        DenoNoScript => $"'deno' with no script starts its REPL, which reads code from stdin and can transform and print secrets past redaction. Write 'deno run <script>'. {UnixWayOut}",
+        DenoOptions => $"'deno' with options but no subcommand runs a script whose position this check can't find, or starts its REPL. Write 'deno run <options> <script>'. {UnixWayOut}",
+        DenoEval => $"'deno eval' runs inline code, which can transform and print secrets past redaction. {UnixWayOut}",
+        _ => throw new ArgumentOutOfRangeException(nameof(kind)),
+    };
+
+    /// <summary>
+    /// Rule 1: an input path in any position (an option's separate value included); then the global options as
+    /// <c>resolve_subcommand</c> skips them, and the word it stops at: none (the REPL), <c>eval</c>/<c>repl</c>, an
+    /// option (no subcommand), or a subcommand or bare script (allowed).
+    /// </summary>
+    [Theory]
+    [InlineData(DenoStdin, "deno", "run", "--config", "deno.json", "-", "{{x}}")]
+    [InlineData(DenoStdin, "deno", "run", "--config", "x", "/dev/stdin")]
+    [InlineData(DenoStdin, "deno", "--log-level", "debug", "run", "-")]
+    [InlineData(DenoStdin, "deno", "-L", "debug", "run", "-")]
+    [InlineData(DenoStdin, "deno", "-q", "run", "-", "{{x}}")]
+    [InlineData(DenoStdin, "deno", "-")]
+    [InlineData(DenoStdin, "deno", "serve", "-")]
+    [InlineData(DenoStdin, "deno", "run", "--seed", "1", "/proc/self/root/dev/stdin")]
+    [InlineData(DenoNoScript, "deno")]
+    [InlineData(DenoNoScript, "deno", "-q")]
+    [InlineData(DenoOptions, "deno", "-A", "main.ts", "{{x}}")]
+    // A11: the word after a bare --env-file, --help or -h is skipped, as resolve_subcommand skips it.
+    [InlineData(DenoEval, "deno", "--env-file", "x", "eval", "code {{x}}")]
+    [InlineData(DenoEval, "deno", "--env-file", "x", "repl")]
+    [InlineData(DenoEval, "deno", "-h", "x", "eval", "code {{x}}")]
+    public void Deno_ByItsOwnWalk_IsRefused(string kind, params string[] argv)
+    {
+        var blocked = Validation.GetBlockedInvocation(argv);
+
+        Assert.NotNull(blocked);
+        Assert.Equal("deno", blocked!.Program);
+        Assert.Equal(DenoReason(kind), blocked.Reason);
+    }
+
+    [Theory]
+    [InlineData("deno", "run", "app.ts", "{{x}}")]
+    [InlineData("deno", "main.ts", "{{x}}")]
+    [InlineData("deno", "-q", "run", "app.ts", "{{x}}")]
+    [InlineData("deno", "--log-level=debug", "run", "app.ts", "{{x}}")]
+    [InlineData("deno", "run", "-A", "--config", "deno.json", "app.ts", "{{x}}")]
+    [InlineData("deno", "task", "build", "{{x}}")]
+    [InlineData("deno", "--env-file", "x", "run", "app.ts", "{{x}}")]
+    [InlineData("deno", "--env-file=x", "run", "app.ts", "{{x}}")]
+    public void Deno_ByItsOwnWalk_IsAllowed(params string[] argv)
+    {
+        Assert.Null(Validation.GetBlockedInvocation(argv));
+    }
+
+    /// <summary>A7: Task 3's two new reasons, written out in full.</summary>
+    [Fact]
+    public void Deno_NewReasons_HaveTheExactText()
+    {
+        Assert.Equal(
+            "'deno' with no script starts its REPL, which reads code from stdin and can transform and print secrets " +
+            "past redaction. Write 'deno run <script>'. Put the commands in a script file and run that instead, e.g. " +
+            "'run ./script.sh {{secret}}' (the script reads the value as $1).",
+            Validation.GetBlockedInvocation(["deno"])?.Reason);
+        Assert.Equal(
+            "'deno' with options but no subcommand runs a script whose position this check can't find, or starts its " +
+            "REPL. Write 'deno run <options> <script>'. Put the commands in a script file and run that instead, e.g. " +
+            "'run ./script.sh {{secret}}' (the script reads the value as $1).",
+            Validation.GetBlockedInvocation(["deno", "-A", "main.ts"])?.Reason);
     }
 
     // ── Brief T49 A2, A7: pwsh reads a plain first argument as a script file, but not stdin ────────────

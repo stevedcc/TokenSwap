@@ -106,6 +106,8 @@ public sealed class RunWindowsWordingTests : IDisposable
         ["powershell", "-File", "-"],
         ["powershell", "-NoExit", "-File", "x.ps1"],
         ["deno", "run", "-"],
+        ["deno"],
+        ["deno", "-A", "main.ts"],
     ];
 
     [Theory]
