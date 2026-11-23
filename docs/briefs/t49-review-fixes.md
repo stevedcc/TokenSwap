@@ -1,0 +1,34 @@
+# Review fixes for T49 (and the last T48 round-4 points)
+
+On `brief/t49`. Same rules as the T49 brief: TDD, one commit per item (G4 and G5 may share), break-it-once per key test in
+the commit message, `./runtests.sh --unit` after each item, the full `./runtests.sh` once at the end, no push, no
+subagents; only add test rows and assertions; if an existing assertion would have to change, stop and list it.
+
+## G1 (Important, MiMo T49 finding 1): pwsh's unmatched word is its script
+In `CheckPwsh`, a word whose `PowerShellParameterKey` matches none of the parameter branches is pwsh's positional script
+file (pwsh's `GetSwitchKey`/`ParseFile` do the same): hand it to the script check (`PowerShellScript(program, args, i)` or
+equivalent), so a `StdinScripts` word is refused with the stdin reason. Make the `StdinScripts` comparison
+`OrdinalIgnoreCase` (also for `CheckInterpreter`). Rows refused: `pwsh /dev/stdin {{pw}}`, `pwsh /dev/fd/0 {{pw}}`,
+`pwsh /proc/self/fd/0 {{pw}}`, `pwsh -NoProfile /dev/stdin {{pw}}`, `pwsh /dev/STDIN {{pw}}`; allowed: `pwsh /opt/x.ps1
+{{pw}}`, `pwsh /opt/x.ps1 -pw={{pw}}`, and every existing allowed pwsh row. Break-it-once: skip unmatched words again;
+the `/dev/stdin` rows fail.
+
+## G2 (Important, MiMo T48 round 4): bare `cmd`, and `deno run -`
+`cmd` never runs a program safely through `run`: with `/c` or `/k` it runs inline code (already refused), without them it
+starts a shell reading stdin. Refuse `cmd` with no `/c`/`/k` with the no-command shell reason (`NoCommandShell` or the
+reason `ShellWhenNoCommand` uses). `deno run` with a `StdinScripts` word as its script: the stdin reason. Rows refused:
+`cmd`, `cmd /q`, `cmd.exe`, `timeout 5 cmd`, `deno run - {{pw}}`; existing `cmd /c` rows unchanged; `deno run app.ts
+{{pw}}` allowed. Break-it-once: drop the `cmd` rule; its rows fail.
+
+## G3 (Minor, MiMo T49 finding 2): the A11 row proves the file-token rule
+In `RunFileTokenTests.RunFileToken_InterpreterAnywhereRefused`, add `Assert.Contains("filled copy", err)` for the
+`powershell -File x.ps1 {{@f}}` row (an added assertion; if the test is a theory where the other rows' messages differ,
+add a separate fact for this row instead).
+
+## G4 (Minor, MiMo T49 finding 3): docs
+`docs/security-model.md`: the Windows PowerShell 5.1 rule goes by the program's name, so a PowerShell 7 binary or image
+named `powershell` gets 5.1's rule (use `-File`, which both accept).
+
+## G5 (Minor, GLM and MiMo T48 round 4): doc comments
+`IsBatchTarget`'s and `WindowsFileName`'s XML summaries: "…only after a name ending in .exe/.cmd/.bat/.com, or a head
+Windows trimmed (F23)".
