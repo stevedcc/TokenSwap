@@ -166,6 +166,11 @@ public class InlineCodeBlockTests
     // Review fix F17: the head before the ':' is trimmed before the stream gate.
     [InlineData("pwsh.exe.:$DATA", "-c", "Write-Host {{x}}")]
     [InlineData("pwsh.exe ::$DATA", "-c", "Write-Host {{x}}")]
+    // Review fix F18: an image tag naming an interpreter, behind a wrapper, is that interpreter.
+    [InlineData("docker", "run", "python:3.12", "-c", "print('{{x}}')")]
+    [InlineData("docker", "run", "node:20", "-e", "console.log('{{x}}')")]
+    [InlineData("docker", "run", "mcr.microsoft.com/powershell:7.4", "-c", "Write-Host {{x}}")]
+    [InlineData("find", ".", "-exec", "python:3.12", "-c", "print('{{x}}')", ";")]
     [InlineData("python.exe.", "-c", "print('{{x}}')")]
     [InlineData("cmd.exe.", "/c", "echo {{x}}")]
     public void InlineCodeOrBlockedProgram_IsRefused(params string[] argv)
@@ -251,6 +256,9 @@ public class InlineCodeBlockTests
     [InlineData("find", ".", "-name", "{{x}}")]
     [InlineData("podman", "push", "--creds", "{{x}}", "img")]
     [InlineData("cmd2", "/c", "{{x}}")] // only cmd itself is the Windows shell
+    // Review fix F18: an image tag naming an interpreter that runs a script file, and F15's mount next to an image.
+    [InlineData("docker", "run", "python:3.12", "app.py", "{{x}}")]
+    [InlineData("docker", "run", "-v", "{{@cfg.yaml}}:/c.yaml", "python:3.12", "app")]
     public void ScriptFileOrOrdinaryProgram_IsAllowed(params string[] argv)
     {
         Assert.Null(Validation.GetBlockedInvocation(argv));

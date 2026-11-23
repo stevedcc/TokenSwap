@@ -643,7 +643,7 @@ public static class Validation
             {
                 if (!FindExecOptions.Contains(args[i]))
                     continue;
-                var command = args.Skip(i + 1).TakeWhile(a => a is not (";" or "+")).ToList();
+                var command = WithImageProgram(args.Skip(i + 1).TakeWhile(a => a is not (";" or "+")).ToList());
                 var inner = command.Count == 0 ? null : GetBlockedInvocation(command);
                 if (inner is not null)
                     return inner with { Reason = $"'find {args[i]}' runs '{inner.Program}': {inner.Reason}" };
@@ -723,7 +723,7 @@ public static class Validation
     {
         BlockedInvocation? Wrapped(int from)
         {
-            var inner = GetBlockedInvocation(args.Skip(from).ToList());
+            var inner = GetBlockedInvocation(WithImageProgram(args.Skip(from).ToList()));
             return inner is null ? null : inner with { Reason = $"'{program}' runs '{inner.Program}': {inner.Reason}" };
         }
 
@@ -756,7 +756,7 @@ public static class Validation
                 && !args.Skip(sub + 1).Where(a => !a.StartsWith('-')).Skip(1).Any())
                 return new(program, $"'machinectl {args[sub]}' with no command starts a shell reading stdin, which can transform and print secrets past redaction. {WayOut}");
             for (var i = sub + 1; i < args.Count; i++)
-                if (IsCheckedProgram(ProgramName(args[i])) && Wrapped(i) is { } blocked)
+                if (IsWrappedCheckedProgram(args[i]) && Wrapped(i) is { } blocked)
                     return blocked;
             return null;
         }
@@ -788,7 +788,7 @@ public static class Validation
                 continue;
             }
             // The wrapped command, checked in full (a bare interpreter reading stdin is refused).
-            if (IsCheckedProgram(ProgramName(arg)))
+            if (IsWrappedCheckedProgram(arg))
                 return Wrapped(i);
             // Not a checked program. For a wrapper whose options this check knows completely,
             // it is the command (sudo apt install python3 passes). For any other wrapper it may
@@ -798,7 +798,7 @@ public static class Validation
             if (TrustedWrappers.Contains(program))
                 return null;
             for (var k = i + 1; k < args.Count; k++)
-                if (IsCheckedProgram(ProgramName(args[k])) && Wrapped(k) is { } later)
+                if (IsWrappedCheckedProgram(args[k]) && Wrapped(k) is { } later)
                     return later;
             return null;
         }
@@ -806,6 +806,31 @@ public static class Validation
         return ShellWhenNoCommand.Contains(program)
             ? new(program, $"'{program}' with no command starts a shell reading stdin, which can transform and print secrets past redaction. {WayOut}")
             : null;
+    }
+
+    // Review fix F18: in a wrapper's command (CheckWrapper, find -exec), a word whose last path component, with a
+    // trailing ':<tag>' removed, names a checked program is a container image of it (python:3.12,
+    // mcr.microsoft.com/powershell:7.4), checked as that program with the words after it as its arguments. Null when
+    // the word isn't such a tag, or already names a checked program as it is.
+    private static string? ImageProgram(string word)
+    {
+        if (IsCheckedProgram(ProgramName(word)))
+            return null;
+        var last = word.Replace('\\', '/');
+        last = last[(last.LastIndexOf('/') + 1)..];
+        return last.IndexOf(':') is var colon and > 0 && ProgramName(last[..colon]) is var name && IsCheckedProgram(name)
+            ? name : null;
+    }
+
+    private static bool IsWrappedCheckedProgram(string word) =>
+        IsCheckedProgram(ProgramName(word)) || ImageProgram(word) is not null;
+
+    // The wrapped command with an image tag's program (ImageProgram) in place of its first word.
+    private static List<string> WithImageProgram(List<string> command)
+    {
+        if (command.Count > 0 && ImageProgram(command[0]) is { } program)
+            command[0] = program;
+        return command;
     }
 
     private static readonly HashSet<string> ShellWhenNoCommand = new(StringComparer.OrdinalIgnoreCase)
