@@ -447,3 +447,10 @@ must fail; (b) accept `=` in check (a): the `TOKEN=` row must fail.
 - **A14 (MiMo M7, M8).** The #394 manifest shape goes into the new command test only (the corpus holds values, not
   files): say so in the commit. `field set`'s secret-in-field refusal and its line-ending gap are out of scope; the
   controller files it.
+- **A15 (owner, 2026-11-23: "that test should never have passed").** `QuotedPipe_NotABlock` pinned today's output
+  without checking that `apply` could fill it back. Add one guard so a pin can't lock in a lost secret again: a test
+  helper `AssertRoundTrips(original, tocommentOutput, vault)` that runs `Apply` on the output and asserts it equals the
+  original for every replaced line, and call it from every existing and new tocomment pin test whose output contains a
+  marker (`ToCommentBlockScalarTests`, `RedactBehaviourPinTests`, `ToCommentDryRunPinTests`, `RedactEngineTests`'
+  tocomment rows, Task 4/5's tables). Adding this call is an added assertion, not a changed one. If any existing pin
+  then fails (a marker apply can't fill), stop and list it: that is another test that should never have passed.
