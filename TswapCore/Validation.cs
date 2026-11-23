@@ -542,38 +542,80 @@ public static class Validation
     /// <c>/proc/&lt;pid&gt;/fd/0</c>, ignoring case. The path is resolved as the kernel walks it (relative to the current
     /// folder, repeated separators and <c>.</c>/<c>..</c> collapsed) with <see cref="Path.GetFullPath(string)"/>, so
     /// <c>/dev/./stdin</c>, <c>//dev//stdin</c> and <c>../../dev/stdin</c> count; a word it can't resolve is no path. A
-    /// symbolic link to stdin under another name is not followed. Every stdin check of <see cref="GetBlockedInvocation"/>
-    /// uses this.
+    /// symbolic link to stdin under another name is not followed. Brief T51: every stdin check of
+    /// <see cref="GetBlockedInvocation"/> uses the wider <see cref="IsInputPath"/>, which includes this.
     /// </summary>
     public static bool IsStdinScript(string word)
     {
         var trimmed = word.Trim();
         if (trimmed == "-")
             return true;
+        return ResolveScriptPath(trimmed) is { } full && (StdinPaths.Contains(full) || ProcPidStdin.IsMatch(full));
+    }
+
+    /// <summary>
+    /// Brief T51 (#407): whether <paramref name="word"/>, as a script or program file, can read <c>run</c>'s stdin or
+    /// the terminal. True for every <see cref="IsStdinScript"/> word, for a path that resolves (as
+    /// <see cref="IsStdinScript"/> resolves it) to <c>/dev</c> or <c>/proc</c> or anything under them, ignoring case,
+    /// except <c>/dev/null</c> and <c>/dev/shm/</c> (proc(5): <c>/proc/&lt;pid&gt;/root</c>, <c>cwd</c> and
+    /// <c>task/&lt;tid&gt;/</c> reach any path, and under a pseudo-terminal fds 0, 1, 2 and <c>/dev/tty</c> read the
+    /// terminal's input), and on every OS for a Win32 device path (<c>\\.\</c>) or a Windows console name (<c>CON</c>,
+    /// <c>CONIN$</c>, <c>CONOUT$</c>) as the last component, with a drive prefix, an extension or a stream ignored.
+    /// Fail closed: a symbolic link elsewhere isn't followed, and a relative word is resolved against this process's
+    /// folder only.
+    /// </summary>
+    public static bool IsInputPath(string word)
+    {
+        if (IsStdinScript(word))
+            return true;
+        var trimmed = word.Trim();
+        if (ResolveScriptPath(trimmed) is { } full
+            && (full.Equals("/dev", StringComparison.OrdinalIgnoreCase) || full.Equals("/proc", StringComparison.OrdinalIgnoreCase)
+                || full.StartsWith("/dev/", StringComparison.OrdinalIgnoreCase) || full.StartsWith("/proc/", StringComparison.OrdinalIgnoreCase))
+            && !full.Equals("/dev/null", StringComparison.OrdinalIgnoreCase)
+            && !full.StartsWith("/dev/shm/", StringComparison.OrdinalIgnoreCase))
+            return true;
+        return IsWindowsConsolePath(trimmed);
+    }
+
+    // CreateFileW ("Consoles"): CON opened for reading is the console's input, CONIN$ always is, CONOUT$ the screen
+    // buffer; a DOS device name ignores a folder, an extension and a stream. Amendment A1: both separators, an X: drive
+    // prefix dropped, the last component cut at its first '.' or ':', then trailing dots and spaces trimmed.
+    private static readonly HashSet<string> ConsoleNames = new(StringComparer.OrdinalIgnoreCase) { "CON", "CONIN$", "CONOUT$" };
+
+    private static bool IsWindowsConsolePath(string word)
+    {
+        var path = word.Replace('\\', '/');
+        if (path.StartsWith("//./", StringComparison.Ordinal))
+            return true; // the Win32 device namespace
+        if (path.Length >= 2 && path[1] == ':' && char.IsAsciiLetter(path[0]))
+            path = path[2..];
+        var name = path[(path.LastIndexOf('/') + 1)..];
+        if (name.IndexOfAny(['.', ':']) is var cut and >= 0)
+            name = name[..cut];
+        return ConsoleNames.Contains(name.TrimEnd('.', ' '));
+    }
+
+    // The trimmed word as a path, resolved as the kernel walks it (IsStdinScript); null when it can't be resolved.
+    private static string? ResolveScriptPath(string trimmed)
+    {
         if (trimmed.Length == 0)
-            return false;
-        string full;
+            return null;
         if (OperatingSystem.IsWindows())
         {
             // Windows' GetFullPath maps /dev/stdin to a drive path; resolve a '/'-rooted word by the Unix rules
             // instead, so the check is the same on every OS (fail closed). A relative word has no Unix
             // folder to resolve against there.
-            if (trimmed[0] != '/')
-                return false;
-            full = ResolveUnixPath(trimmed);
+            return trimmed[0] == '/' ? ResolveUnixPath(trimmed) : null;
         }
-        else
+        try
         {
-            try
-            {
-                full = Path.GetFullPath(trimmed);
-            }
-            catch (Exception e) when (e is ArgumentException or NotSupportedException or PathTooLongException)
-            {
-                return false;
-            }
+            return Path.GetFullPath(trimmed);
         }
-        return StdinPaths.Contains(full) || ProcPidStdin.IsMatch(full);
+        catch (Exception e) when (e is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return null;
+        }
     }
 
     // '/'-rooted path, resolved as Path.GetFullPath does on Unix: empty and '.' segments dropped, '..' pops (not past /).
@@ -694,8 +736,8 @@ public static class Validation
                     }
                 }
             }
-            if (programFiles.Any(f => IsStdinScript(f) || f.Length == 0))
-                return new(program, $"'{program} -f -' reads its program from stdin, which can transform and print secrets past redaction. Put the program in a file.");
+            if (programFiles.Any(f => IsInputPath(f) || f.Length == 0))
+                return new(program, $"'{program} -f -' reads its program from stdin or the terminal, which can transform and print secrets past redaction. Put the program in a file.");
             var fromFile = programFiles.Count > 0;
             return fromFile && !inlineSource ? null
                 : new(program, $"'{program}' with an inline program can transform and print secrets past redaction. Put the program in a file and use '{program} -f prog.awk'.");
@@ -720,19 +762,7 @@ public static class Validation
             return CheckSsh(args);
 
         if (program.Equals("deno", StringComparison.OrdinalIgnoreCase))
-        {
-            var sub = args.FindIndex(a => !a.StartsWith('-'));
-            if (sub < 0)
-                return null;
-            if (args[sub] is "eval" or "repl")
-                return new(program, InlineReason(program, "eval"));
-            // Review fix G2: 'deno run -' (or another stdin path) reads the script from stdin. The script is the first
-            // word after 'run' that is a stdin path or no option.
-            var script = args.Skip(sub + 1).FirstOrDefault(a => IsStdinScript(a) || !a.StartsWith('-'));
-            return args[sub] == "run" && script is not null && IsStdinScript(script)
-                ? new(program, $"'{program} run -' reads code from stdin, which can transform and print secrets past redaction. {WayOut}")
-                : null;
-        }
+            return CheckDeno(program, args);
 
         if (program.Equals("cmd", StringComparison.OrdinalIgnoreCase))
             // Review fix G2: with /c or /k cmd runs inline code; without them it starts a shell reading stdin.
@@ -744,10 +774,10 @@ public static class Validation
             var flag = args.FirstOrDefault(IsPowerShellInline);
             if (flag is not null)
                 return new(program, InlineReason(program, flag));
-            // Review fix H1: a stdin path anywhere after PowerShell is refused, whatever parameter comes before it
-            // (pwsh reads -i as -Interactive, not -InputFormat), fail closed; a script argument that is literally '-'
-            // is refused too (accepted over-refusal).
-            if (args.Any(IsStdinScript))
+            // Review fix H1, brief T51: an input path (IsInputPath) anywhere after PowerShell is refused, whatever
+            // parameter comes before it (pwsh reads -i as -Interactive, not -InputFormat), fail closed; a script
+            // argument that is literally '-' or an input path is refused too (accepted over-refusal).
+            if (args.Any(IsInputPath))
                 return PowerShellStdin(program);
             return program.Equals("powershell", StringComparison.OrdinalIgnoreCase)
                 ? CheckWindowsPowerShell(program, args) : CheckPwsh(program, args);
@@ -782,8 +812,9 @@ public static class Validation
         ["runuser"] = ["-u", "-g", "-G", "--user", "--group", "--supp-group", "-s", "--shell"],
         ["npx"] = ["-p", "--package"],
         ["systemd-run"] = ["-p", "--property", "-u", "--unit", "-E", "--setenv", "-M", "--machine"],
-        // Review fix F19: wsl's -e/--exec take no value of their own: the word after them is the command.
-        ["wsl"] = ["-d", "--distribution", "-u", "--user", "--cd"],
+        // Review fix F19: wsl's -e/--exec take no value of their own: the word after them is the command. Brief T51:
+        // every run option of wsl.exe that takes the next word (WslValued).
+        ["wsl"] = ["-d", "--distribution", "--distribution-id", "-u", "--user", "--cd", "--shell-type", "--parent-console"],
     };
 
     // Wrappers whose first positional argument is not the command (timeout DURATION cmd,
@@ -817,18 +848,9 @@ public static class Validation
         if (program.Equals("command", StringComparison.OrdinalIgnoreCase) && args.Any(a => a is "-v" or "-V"))
             return null; // command -v only looks the name up
 
-        // Review fix F24: wsl with no arguments at all starts the default distribution's shell reading stdin
-        // (wsl --list, --status, --version stay allowed); an attached exec form (--exec=cmd, -ecmd) names the command
-        // inside its own option, which the walk can't follow, so it is refused fail-closed (as su's --command=).
+        // Brief T51 Task 4 (#405): wsl by wsl.exe's own walk, terminal (A6): nothing below runs for wsl.
         if (program.Equals("wsl", StringComparison.OrdinalIgnoreCase))
-        {
-            if (args.Count == 0)
-                return NoCommandShell(program);
-            var attached = OwnOptions(program, args).FirstOrDefault(a => a.StartsWith("--exec=", StringComparison.Ordinal)
-                || (a.StartsWith("-e", StringComparison.Ordinal) && a.Length > 2));
-            if (attached is not null)
-                return new(program, $"'{program} {attached}' names its command inside the option, which this check can't follow. {WayOut}");
-        }
+            return CheckWsl(program, args);
 
         // sudo -s/-i run a shell (with any command through its -c), npx -c and flock -c run shell
         // code. Only the wrapper's own options count, before its command (sudo mv -i a b passes).
@@ -905,6 +927,93 @@ public static class Validation
         }
         // No command at all: these wrappers then start a shell that reads stdin.
         return ShellWhenNoCommand.Contains(program) ? NoCommandShell(program) : null;
+    }
+
+    // wsl.exe (microsoft/WSL at 65719878ad3c, src/windows/common/WslClient.cpp WslMain and ParseLegacyArguments; names in
+    // src/windows/inc/wsl.h): its run options that take the next word as their value.
+    private static readonly HashSet<string> WslValued = new(StringComparer.Ordinal)
+        { "-d", "--distribution", "--distribution-id", "-u", "--user", "--cd", "--parent-console" };
+
+    // Its management options: wsl runs the action and returns, starting no Linux command.
+    private static readonly HashSet<string> WslManagement = new(StringComparer.Ordinal)
+    {
+        "--help", "--list", "-l", "--status", "--version", "-v", "--shutdown", "--terminate", "-t",
+        "--set-default", "-s", "--setdefault", "--set-default-version", "--set-version",
+        "--export", "--import", "--import-in-place", "--unregister",
+        "--mount", "--unmount", "--manage", "--update", "--uninstall",
+    };
+
+    private const string WslShellModeReason =
+        "'wsl' without -e (or --shell-type none) runs its command line through the Linux shell ($SHELL -c), which parses " +
+        "a substituted value again and can transform and print secrets past redaction. Give the command after -e: " +
+        "'wsl -e ./deploy.sh {{secret}}'. " + WayOut;
+
+    private const string WslUnknownReason =
+        "'wsl': an option this check doesn't know (wsl.exe matches its options exactly), so it can't tell what wsl runs. " +
+        "Give the command after -e: 'wsl -e ./deploy.sh {{secret}}'. " + WayOut;
+
+    /// <summary>
+    /// Brief T51 Task 4 (#405): <c>wsl</c> by wsl.exe's own walk, its words compared exactly and case-sensitively as
+    /// wsl.exe compares them. Valued run options skip their value; <c>--shell-type</c> <c>none</c> selects exec mode
+    /// and <c>login</c>/<c>standard</c> shell mode (the last wins); <c>--</c> ends the options in the mode so far;
+    /// <c>-e</c>/<c>--exec</c> select exec mode and end them; a management option runs no Linux command;
+    /// <c>--debug-shell</c> and <c>--install</c> start a shell; any other <c>-</c> word is an error in wsl.exe and
+    /// unknown here (fail closed); any other word (a legacy <c>~</c> or GUID included) begins the command. In shell
+    /// mode wsl.exe runs a command line as <c>$SHELL -c &lt;commandline&gt;</c> and an empty one as a login shell; in
+    /// exec mode it runs the command directly, which is checked as what it runs.
+    /// </summary>
+    private static BlockedInvocation? CheckWsl(string program, List<string> args)
+    {
+        var exec = false;
+        var command = args.Count;
+        for (var i = 0; i < args.Count; i++)
+        {
+            var word = args[i];
+            if (WslValued.Contains(word))
+            {
+                i++;
+                continue;
+            }
+            if (word == "--shell-type")
+            {
+                var mode = i + 1 < args.Count ? args[++i] : null;
+                if (mode == "none")
+                    exec = true;
+                else if (mode is "login" or "standard")
+                    exec = false;
+                else
+                    return new(program, WslUnknownReason);
+                continue;
+            }
+            if (word == "--system")
+                continue;
+            if (word == "--")
+            {
+                command = i + 1;
+                break;
+            }
+            if (word is "-e" or "--exec")
+            {
+                exec = true;
+                command = i + 1;
+                break;
+            }
+            if (WslManagement.Contains(word))
+                return null;
+            if (word is "--debug-shell" or "--install")
+                return NoCommandShell(program);
+            if (word.StartsWith('-'))
+                return new(program, WslUnknownReason);
+            command = i;
+            break;
+        }
+
+        if (command >= args.Count)
+            return exec ? null : NoCommandShell(program); // exec mode with no command: E_INVALIDARG, nothing runs
+        if (!exec)
+            return new(program, WslShellModeReason);
+        var inner = GetBlockedInvocation(WithImageProgram(args.Skip(command).ToList()));
+        return inner is null ? null : inner with { Reason = $"'{program}' runs '{inner.Program}': {inner.Reason}" };
     }
 
     private static BlockedInvocation NoCommandShell(string program) =>
@@ -1144,20 +1253,71 @@ public static class Validation
         return PowerShellNoScript(program);
     }
 
-    // The script word at args[at]: missing is no script; stdin (or empty, fail closed) reads code from stdin.
+    // The script word at args[at]: missing is no script; an input path (or empty, fail closed) reads code from stdin or
+    // the terminal.
     private static BlockedInvocation? PowerShellScript(string program, List<string> args, int at)
     {
         if (at >= args.Count)
             return PowerShellNoScript(program);
         var script = args[at];
-        return IsStdinScript(script) || script.Trim().Length == 0 ? PowerShellStdin(program) : null;
+        return IsInputPath(script) || script.Trim().Length == 0 ? PowerShellStdin(program) : null;
     }
 
     private static BlockedInvocation PowerShellStdin(string program) =>
-        new(program, $"'{program} -File -' reads code from stdin, which can transform and print secrets past redaction. {WayOut}");
+        new(program, $"'{program} -File -' reads code from stdin or the terminal, which can transform and print secrets past redaction. {WayOut}");
 
     private static BlockedInvocation PowerShellNoScript(string program) =>
         new(program, $"'{program}' with no script (or -NoExit) reads code from stdin, which can transform and print secrets past redaction. {WayOut}");
+
+    // Brief T51 (#406): deno's root defaults to 'run' ('deno <script>'), and 'deno' with no script starts its REPL.
+    private const string DenoNoScriptReason =
+        "'deno' with no script starts its REPL, which reads code from stdin and can transform and print secrets past " +
+        "redaction. Write 'deno run <script>'. " + WayOut;
+
+    private const string DenoOptionsReason =
+        "'deno' with options but no subcommand runs a script whose position this check can't find, or starts its REPL. " +
+        "Write 'deno run <options> <script>'. " + WayOut;
+
+    /// <summary>
+    /// Brief T51 Task 3 (#406): <c>deno</c> by deno's own parser (denoland/deno v2.9.8, <c>libs/cli_parser</c>). An input
+    /// path in any word, of any subcommand and in any position (an option's separate value included: <c>run</c>'s
+    /// valued options take even a word starting with <c>-</c>, and their list grows), reads code from stdin or the
+    /// terminal. Otherwise the global options are walked as <c>resolve_subcommand</c> walks them, and the word it stops
+    /// at decides: none is the REPL, <c>eval</c>/<c>repl</c> inline code, an option a run option with no subcommand
+    /// (fail closed), anything else a subcommand or a bare script.
+    /// </summary>
+    private static BlockedInvocation? CheckDeno(string program, List<string> args)
+    {
+        if (args.Any(IsInputPath))
+            return new(program, $"'{program} run -' reads code from stdin or the terminal, which can transform and print secrets past redaction. {WayOut}");
+
+        // resolve_subcommand: a long option counts by its exact global name (--env-file, --help, --version,
+        // --log-level, --quiet); a single-dash word by its second letter only (h, V, L, q). Bare --log-level, --env-file,
+        // --help, -L and -h take the next word; the '=' forms take nothing. resolve_subcommand doesn't match the aliases
+        // --env and -v, but those flags are require_equals(), so this walk matches resolve_subcommand; the resulting
+        // over-refusals (deno -- app.ts, deno --env=x run app.ts, deno -v x) are accepted (A5, A11).
+        var i = 0;
+        while (i < args.Count)
+        {
+            var word = args[i];
+            if (word is "--log-level" or "--env-file" or "--help" or "-L" or "-h")
+                i += 2;
+            else if (word is "--quiet" or "--version"
+                     || word.StartsWith("--help=", StringComparison.Ordinal) || word.StartsWith("--env-file=", StringComparison.Ordinal)
+                     || word.StartsWith("--log-level=", StringComparison.Ordinal)
+                     || (word.Length > 1 && word[0] == '-' && word[1] is 'h' or 'V' or 'L' or 'q'))
+                i++;
+            else
+                break;
+        }
+
+        if (i >= args.Count)
+            return new(program, DenoNoScriptReason);
+        var stop = args[i];
+        if (stop is "eval" or "repl")
+            return new(program, InlineReason(program, "eval"));
+        return stop.StartsWith('-') ? new(program, DenoOptionsReason) : null;
+    }
 
     // ssh host [command]: a remote command is remote shell code.
     private static BlockedInvocation? CheckSsh(List<string> args)
@@ -1199,8 +1359,8 @@ public static class Validation
             var arg = args[i];
             if (arg == "--")
                 continue;
-            if (IsStdinScript(arg))
-                return new(program, $"'{program} {arg}' reads code from stdin, which can transform and print secrets past redaction. {WayOut}");
+            if (IsInputPath(arg))
+                return new(program, $"'{program} {arg}' reads code from stdin or the terminal, which can transform and print secrets past redaction. {WayOut}");
             if (arg.StartsWith("--", StringComparison.Ordinal))
             {
                 var name = arg.Split('=', 2)[0];
@@ -1226,8 +1386,8 @@ public static class Validation
                         // The value is the script file: attached, or the next argument. Options
                         // after it can still carry inline code (expect -f s.exp -c '...').
                         var script = j < arg.Length - 1 ? arg[(j + 1)..] : (i + 1 < args.Count ? args[i + 1] : "");
-                        if (IsStdinScript(script) || script.Length == 0)
-                            return new(program, $"'{program} {arg} {script}' reads code from stdin, which can transform and print secrets past redaction. {WayOut}");
+                        if (IsInputPath(script) || script.Length == 0)
+                            return new(program, $"'{program} {arg} {script}' reads code from stdin or the terminal, which can transform and print secrets past redaction. {WayOut}");
                         var later = args.Skip(i + (j < arg.Length - 1 ? 1 : 2))
                             .FirstOrDefault(a => a.StartsWith('-') && !a.StartsWith("--", StringComparison.Ordinal) && a.Skip(1).Any(syntax.Inline.Contains));
                         return later is not null ? new(program, InlineReason(program, later)) : null;

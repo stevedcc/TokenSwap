@@ -195,6 +195,10 @@ public class InlineCodeBlockTests
     [InlineData("wsl", "--exec=bash", "-c", "echo {{x}}")]
     [InlineData("wsl", "-ebash", "-c", "echo {{x}}")]
     [InlineData("wsl", "-d", "Ubuntu", "--exec=./deploy.sh", "{{x}}")]
+    // Brief T51 (owner's decision 2026-11-23): moved from ScriptFileOrOrdinaryProgram_IsAllowed. Without -e wsl.exe runs
+    // its command line as $SHELL -c "./deploy.sh <value>", the shape sh -c is refused for.
+    [InlineData("wsl", "./deploy.sh", "{{x}}")]
+    [InlineData("wsl", "-d", "Ubuntu", "./deploy.sh", "{{x}}")]
     [InlineData("python.exe.", "-c", "print('{{x}}')")]
     [InlineData("cmd.exe.", "/c", "echo {{x}}")]
     // Review fix G1: the stdin paths compare case-insensitively.
@@ -289,9 +293,10 @@ public class InlineCodeBlockTests
     // Review fix F18: an image tag naming an interpreter that runs a script file, and F15's mount next to an image.
     [InlineData("docker", "run", "python:3.12", "app.py", "{{x}}")]
     [InlineData("docker", "run", "-v", "{{@cfg.yaml}}:/c.yaml", "python:3.12", "app")]
-    // Review fix F19: wsl running a script file.
-    [InlineData("wsl", "./deploy.sh", "{{x}}")]
-    [InlineData("wsl", "-d", "Ubuntu", "./deploy.sh", "{{x}}")]
+    // Review fix F19: wsl running a script file. Brief T51 (owner's decision 2026-11-23): only in exec mode (-e,
+    // --exec); the shell-mode rows moved to InlineCodeOrBlockedProgram_IsRefused.
+    [InlineData("wsl", "-e", "./deploy.sh", "{{x}}")]
+    [InlineData("wsl", "-d", "Ubuntu", "--exec", "./deploy.sh", "{{x}}")]
     // Review fix F24: wsl's own informational commands.
     [InlineData("wsl", "--list")]
     [InlineData("wsl", "--status")]
@@ -442,7 +447,7 @@ public class InlineCodeBlockTests
     {
         PositionalKind => $"'{program}' without -File runs its first argument as code (Windows PowerShell 5.1 reads it as -Command), which can transform and print secrets past redaction. {UnixWayOut}",
         UntrustedKind => $"'{program}': a parameter spelling tswap doesn't trust (it trusts one - or / before Windows PowerShell 5.1's full parameter names and its common short forms), and 5.1 would read it as -Command, which can transform and print secrets past redaction. {UnixWayOut}",
-        StdinKind => $"'{program} -File -' reads code from stdin, which can transform and print secrets past redaction. {UnixWayOut}",
+        StdinKind => $"'{program} -File -' reads code from stdin or the terminal, which can transform and print secrets past redaction. {UnixWayOut}",
         NoScriptKind => $"'{program}' with no script (or -NoExit) reads code from stdin, which can transform and print secrets past redaction. {UnixWayOut}",
         _ => throw new ArgumentOutOfRangeException(nameof(kind)),
     };
@@ -655,6 +660,120 @@ public class InlineCodeBlockTests
         Assert.False(Validation.IsStdinScript(string.Concat(Enumerable.Repeat("../", depth)) + "dev/stdout"));
     }
 
+    // ── Brief T51 Task 2 (#407): one input-path predicate, fail-closed ─────────────────────────────────
+
+    // Every word IsStdinScript_AStdinPathInAnySpelling_IsTrue accepts, read from its own rows.
+    public static TheoryData<string> StdinScriptRows()
+    {
+        var method = typeof(InlineCodeBlockTests).GetMethod(nameof(IsStdinScript_AStdinPathInAnySpelling_IsTrue))!;
+        var data = new TheoryData<string>();
+        foreach (var row in method.GetCustomAttributes(typeof(InlineDataAttribute), false).Cast<InlineDataAttribute>()
+                     .SelectMany(a => a.GetData(method)))
+            data.Add((string)row[0]);
+        return data;
+    }
+
+    [Theory]
+    [MemberData(nameof(StdinScriptRows))]
+    public void IsInputPath_EveryStdinScriptWord_IsTrue(string word)
+    {
+        Assert.True(Validation.IsInputPath(word));
+    }
+
+    /// <summary>
+    /// proc(5): <c>/proc/&lt;pid&gt;/root</c>, <c>cwd</c> and <c>task/&lt;tid&gt;/</c> reach any path, and under a
+    /// pseudo-terminal stdin, stdout, stderr and <c>/dev/tty</c> are one device whose reads are the terminal's input;
+    /// Windows opens the console for <c>CON</c>, <c>CONIN$</c> and <c>CONOUT$</c> in any folder, extension or stream.
+    /// </summary>
+    [Theory]
+    [InlineData("/proc/self/root/dev/stdin")]
+    [InlineData("/proc/1/root/dev/stdin")]
+    [InlineData("/proc/thread-self/root/dev/stdin")]
+    [InlineData("/proc/self/cwd/dev/stdin")]
+    [InlineData("/proc/self/task/1/fd/0")]
+    [InlineData("/proc/4242/task/4243/fd/0")]
+    [InlineData("/dev/stdout")]
+    [InlineData("/dev/stderr")]
+    [InlineData("/dev/tty")]
+    [InlineData("/dev/fd/1")]
+    [InlineData("/dev/pts/0")]
+    [InlineData("/proc/self/fd/2")]
+    [InlineData("/proc/self/root/proc/self/root/dev/stdin")]
+    [InlineData("/proc")]
+    [InlineData("CON")]
+    [InlineData("con.ps1")]
+    [InlineData("CONIN$")]
+    [InlineData(@"C:\x\CONIN$")]
+    [InlineData(@"\\.\CONIN$")]
+    [InlineData("//./CONIN$")]
+    [InlineData(@"\\?\C:\x\CON")]
+    [InlineData("CONOUT$ ")]
+    // A1: a drive-relative name, an extension after a space, a stream.
+    [InlineData("C:CON")]
+    [InlineData("C:CONIN$")]
+    [InlineData("CON .x")]
+    [InlineData("CON:x")]
+    [InlineData("CON::$DATA")]
+    public void IsInputPath_AnInputOrTerminalPath_IsTrue(string word)
+    {
+        Assert.True(Validation.IsInputPath(word));
+    }
+
+    [Theory]
+    [InlineData("./x.py")]
+    [InlineData("/opt/x.ps1")]
+    [InlineData("x.py")]
+    [InlineData("--")]
+    [InlineData("")]
+    [InlineData("{{pw}}")]
+    [InlineData("/dev/null")]
+    [InlineData("/DEV/NULL")]
+    [InlineData("/dev/shm/x.py")]
+    [InlineData("console.py")]
+    [InlineData("icon")]
+    [InlineData("conf.ps1")]
+    [InlineData("/opt/CONTEXT")]
+    [InlineData(@"C:\scripts\deploy.ps1")]
+    public void IsInputPath_AnyOtherWord_IsFalse(string word)
+    {
+        Assert.False(Validation.IsInputPath(word));
+    }
+
+    /// <summary>I1's relative pattern: from the real current folder, enough <c>../</c> to reach <c>/</c>, then
+    /// <c>proc/self/cwd/dev/stdin</c>.</summary>
+    [UnixFact("a relative path into /proc needs a Unix current folder")]
+    public void IsInputPath_ARelativePathIntoProc_IsTrue()
+    {
+        var depth = Environment.CurrentDirectory.Split('/', StringSplitOptions.RemoveEmptyEntries).Length;
+        var word = string.Concat(Enumerable.Repeat("../", depth)) + "proc/self/cwd/dev/stdin";
+
+        Assert.True(Validation.IsInputPath(word), word);
+    }
+
+    [Theory]
+    [InlineData("python3", "/proc/self/root/dev/stdin", "{{x}}")]
+    [InlineData("python3", "/dev/stdout", "{{x}}")]
+    [InlineData("bash", "/dev/tty", "{{x}}")]
+    [InlineData("awk", "-f", "/proc/self/fd/0")]
+    [InlineData("pwsh", "-i", "/proc/self/root/dev/stdin", "{{x}}")]
+    [InlineData("pwsh", "CONIN$", "{{x}}")]
+    [InlineData("docker", "run", "-i", "python:3.12", "/proc/self/root/dev/stdin")]
+    public void InputPath_AsAScript_IsRefused(params string[] argv)
+    {
+        var blocked = Validation.GetBlockedInvocation(argv);
+
+        Assert.NotNull(blocked);
+        Assert.Contains("from stdin or the terminal", blocked!.Reason);
+    }
+
+    [Theory]
+    [InlineData("python3", "/dev/shm/job.py", "{{x}}")]
+    [InlineData("pwsh", "-File", "./x.ps1", "/dev/null", "{{x}}")]
+    public void NullOrShmPath_IsAllowed(params string[] argv)
+    {
+        Assert.Null(Validation.GetBlockedInvocation(argv));
+    }
+
     // ── Review fix G2: cmd without /c or /k is a shell reading stdin; deno run - reads its script from stdin ──
 
     [Theory]
@@ -692,8 +811,84 @@ public class InlineCodeBlockTests
         var blocked = Validation.GetBlockedInvocation(argv);
 
         Assert.Equal(
-            $"'deno run -' reads code from stdin, which can transform and print secrets past redaction. {UnixWayOut}",
+            $"'deno run -' reads code from stdin or the terminal, which can transform and print secrets past redaction. {UnixWayOut}",
             blocked?.Reason);
+    }
+
+    // ── Brief T51 Task 3 (#406): deno by deno's own walk (resolve_subcommand) ─────────────────────────
+
+    private const string DenoStdin = "stdin";
+    private const string DenoNoScript = "no-script";
+    private const string DenoOptions = "options";
+    private const string DenoEval = "eval";
+
+    private static string DenoReason(string kind) => kind switch
+    {
+        DenoStdin => $"'deno run -' reads code from stdin or the terminal, which can transform and print secrets past redaction. {UnixWayOut}",
+        DenoNoScript => $"'deno' with no script starts its REPL, which reads code from stdin and can transform and print secrets past redaction. Write 'deno run <script>'. {UnixWayOut}",
+        DenoOptions => $"'deno' with options but no subcommand runs a script whose position this check can't find, or starts its REPL. Write 'deno run <options> <script>'. {UnixWayOut}",
+        DenoEval => $"'deno eval' runs inline code, which can transform and print secrets past redaction. {UnixWayOut}",
+        _ => throw new ArgumentOutOfRangeException(nameof(kind)),
+    };
+
+    /// <summary>
+    /// Rule 1: an input path in any position (an option's separate value included); then the global options as
+    /// <c>resolve_subcommand</c> skips them, and the word it stops at: none (the REPL), <c>eval</c>/<c>repl</c>, an
+    /// option (no subcommand), or a subcommand or bare script (allowed).
+    /// </summary>
+    [Theory]
+    [InlineData(DenoStdin, "deno", "run", "--config", "deno.json", "-", "{{x}}")]
+    [InlineData(DenoStdin, "deno", "run", "--config", "x", "/dev/stdin")]
+    [InlineData(DenoStdin, "deno", "--log-level", "debug", "run", "-")]
+    [InlineData(DenoStdin, "deno", "-L", "debug", "run", "-")]
+    [InlineData(DenoStdin, "deno", "-q", "run", "-", "{{x}}")]
+    [InlineData(DenoStdin, "deno", "-")]
+    [InlineData(DenoStdin, "deno", "serve", "-")]
+    [InlineData(DenoStdin, "deno", "run", "--seed", "1", "/proc/self/root/dev/stdin")]
+    [InlineData(DenoNoScript, "deno")]
+    [InlineData(DenoNoScript, "deno", "-q")]
+    [InlineData(DenoOptions, "deno", "-A", "main.ts", "{{x}}")]
+    // A11: the word after a bare --env-file, --help or -h is skipped, as resolve_subcommand skips it.
+    [InlineData(DenoEval, "deno", "--env-file", "x", "eval", "code {{x}}")]
+    [InlineData(DenoEval, "deno", "--env-file", "x", "repl")]
+    [InlineData(DenoEval, "deno", "-h", "x", "eval", "code {{x}}")]
+    public void Deno_ByItsOwnWalk_IsRefused(string kind, params string[] argv)
+    {
+        var blocked = Validation.GetBlockedInvocation(argv);
+
+        Assert.NotNull(blocked);
+        Assert.Equal("deno", blocked!.Program);
+        Assert.Equal(DenoReason(kind), blocked.Reason);
+    }
+
+    [Theory]
+    [InlineData("deno", "run", "app.ts", "{{x}}")]
+    [InlineData("deno", "main.ts", "{{x}}")]
+    [InlineData("deno", "-q", "run", "app.ts", "{{x}}")]
+    [InlineData("deno", "--log-level=debug", "run", "app.ts", "{{x}}")]
+    [InlineData("deno", "run", "-A", "--config", "deno.json", "app.ts", "{{x}}")]
+    [InlineData("deno", "task", "build", "{{x}}")]
+    [InlineData("deno", "--env-file", "x", "run", "app.ts", "{{x}}")]
+    [InlineData("deno", "--env-file=x", "run", "app.ts", "{{x}}")]
+    public void Deno_ByItsOwnWalk_IsAllowed(params string[] argv)
+    {
+        Assert.Null(Validation.GetBlockedInvocation(argv));
+    }
+
+    /// <summary>A7: Task 3's two new reasons, written out in full.</summary>
+    [Fact]
+    public void Deno_NewReasons_HaveTheExactText()
+    {
+        Assert.Equal(
+            "'deno' with no script starts its REPL, which reads code from stdin and can transform and print secrets " +
+            "past redaction. Write 'deno run <script>'. Put the commands in a script file and run that instead, e.g. " +
+            "'run ./script.sh {{secret}}' (the script reads the value as $1).",
+            Validation.GetBlockedInvocation(["deno"])?.Reason);
+        Assert.Equal(
+            "'deno' with options but no subcommand runs a script whose position this check can't find, or starts its " +
+            "REPL. Write 'deno run <options> <script>'. Put the commands in a script file and run that instead, e.g. " +
+            "'run ./script.sh {{secret}}' (the script reads the value as $1).",
+            Validation.GetBlockedInvocation(["deno", "-A", "main.ts"])?.Reason);
     }
 
     // ── Brief T49 A2, A7: pwsh reads a plain first argument as a script file, but not stdin ────────────
@@ -775,5 +970,113 @@ public class InlineCodeBlockTests
         Assert.NotNull(blocked);
         Assert.Equal("wsl", blocked!.Program);
         Assert.StartsWith("'wsl' with no command starts a shell reading stdin, which can transform and print secrets past redaction.", blocked.Reason);
+    }
+
+    // ── Brief T51 Task 4 (#405): wsl by wsl.exe's own walk (WslClient.cpp) ─────────────────────────────
+
+    private const string WslShell = "shell";
+    private const string WslUnknown = "unknown";
+    private const string WslNoCommand = "no-command";
+    private const string WslInner = "inner";
+
+    private const string WslShellReason =
+        "'wsl' without -e (or --shell-type none) runs its command line through the Linux shell ($SHELL -c), which " +
+        "parses a substituted value again and can transform and print secrets past redaction. Give the command after " +
+        "-e: 'wsl -e ./deploy.sh {{secret}}'. " + UnixWayOut;
+
+    private const string WslUnknownReason =
+        "'wsl': an option this check doesn't know (wsl.exe matches its options exactly), so it can't tell what wsl " +
+        "runs. Give the command after -e: 'wsl -e ./deploy.sh {{secret}}'. " + UnixWayOut;
+
+    /// <summary>
+    /// wsl.exe compares its own words exactly: valued run options skip their value, <c>--shell-type</c> picks the mode,
+    /// <c>--</c>, <c>-e</c>/<c>--exec</c> or the first plain word begin the command; a management option runs no Linux
+    /// command, <c>--debug-shell</c> and <c>--install</c> start a shell, any other <c>-</c> word is unknown. An empty
+    /// command in shell mode starts the login shell (#405); a command in shell mode runs through <c>$SHELL -c</c>; a
+    /// command in exec mode is checked as what it runs.
+    /// </summary>
+    [Theory]
+    [InlineData(WslNoCommand, "wsl", "-d", "Ubuntu")]
+    [InlineData(WslNoCommand, "wsl", "-u", "root")]
+    [InlineData(WslNoCommand, "wsl", "--cd", "/srv")]
+    [InlineData(WslNoCommand, "wsl", "--")]
+    [InlineData(WslNoCommand, "wsl", "-d", "Ubuntu", "--")]
+    [InlineData(WslShell, "wsl", "~")]
+    [InlineData(WslNoCommand, "wsl", "--system")]
+    [InlineData(WslNoCommand, "wsl", "--debug-shell")]
+    [InlineData(WslNoCommand, "wsl", "--install")]
+    [InlineData(WslShell, "wsl", "--shell-type", "login", "./x.sh", "{{x}}")]
+    [InlineData(WslShell, "wsl", "--shell-type", "none", "--shell-type", "standard", "./x.sh", "{{x}}")]
+    [InlineData(WslUnknown, "wsl", "-D", "Ubuntu", "-e", "./x.sh", "{{x}}")]
+    [InlineData(WslUnknown, "wsl", "--shell-type", "bogus")]
+    [InlineData(WslInner, "wsl", "-e", "python3", "/dev/stdin")]
+    [InlineData(WslInner, "wsl", "--shell-type", "none", "bash", "-c", "echo {{x}}")]
+    [InlineData(WslInner, "wsl", "-e", "bash")]
+    // A8's accepted over-refusals.
+    [InlineData(WslShell, "wsl", "~", "-e", "./x.sh")]
+    [InlineData(WslNoCommand, "wsl", "--install", "--no-launch")]
+    [InlineData(WslShell, "wsl", "{00000000-0000-0000-0000-000000000000}", "-e", "./x.sh")]
+    [InlineData(WslNoCommand, "wsl", "-d")]
+    [InlineData(WslUnknown, "wsl", "--exec=bash")]
+    [InlineData(WslUnknown, "wsl", "-ebash")]
+    [InlineData(WslUnknown, "wsl", "--Exec", "./x.sh")]
+    public void Wsl_ByItsOwnWalk_IsRefused(string kind, params string[] argv)
+    {
+        var blocked = Validation.GetBlockedInvocation(argv);
+
+        Assert.NotNull(blocked);
+        Assert.Equal(kind == WslInner ? argv.SkipWhile(a => a != "-e" && a != "none").ElementAt(1) : "wsl", blocked!.Program);
+        switch (kind)
+        {
+            case WslShell:
+                Assert.Equal(WslShellReason, blocked.Reason);
+                break;
+            case WslUnknown:
+                Assert.Equal(WslUnknownReason, blocked.Reason);
+                break;
+            case WslNoCommand:
+                Assert.Equal(
+                    $"'wsl' with no command starts a shell reading stdin, which can transform and print secrets past redaction. {UnixWayOut}",
+                    blocked.Reason);
+                break;
+            default:
+                var inner = Validation.GetBlockedInvocation(argv.SkipWhile(a => a != "-e" && a != "none").Skip(1).ToArray());
+                Assert.NotNull(inner);
+                Assert.Equal($"'wsl' runs '{inner!.Program}': {inner.Reason}", blocked.Reason);
+                break;
+        }
+    }
+
+    [Theory]
+    [InlineData("wsl", "--list")]
+    [InlineData("wsl", "-l", "-v")]
+    [InlineData("wsl", "--status")]
+    [InlineData("wsl", "--version")]
+    [InlineData("wsl", "--shutdown")]
+    [InlineData("wsl", "-d", "Ubuntu", "--list")]
+    [InlineData("wsl", "-e", "./deploy.sh", "{{x}}")]
+    [InlineData("wsl", "--shell-type", "none", "./deploy.sh", "{{x}}")]
+    [InlineData("wsl", "-d", "Ubuntu", "-u", "app", "--cd", "/srv", "-e", "./deploy.sh", "{{x}}")]
+    [InlineData("wsl", "-e")]
+    public void Wsl_ByItsOwnWalk_IsAllowed(params string[] argv)
+    {
+        Assert.Null(Validation.GetBlockedInvocation(argv));
+    }
+
+    /// <summary>Task 4's two reasons, written out in full.</summary>
+    [Fact]
+    public void Wsl_NewReasons_HaveTheExactText()
+    {
+        Assert.Equal(
+            "'wsl' without -e (or --shell-type none) runs its command line through the Linux shell ($SHELL -c), which " +
+            "parses a substituted value again and can transform and print secrets past redaction. Give the command " +
+            "after -e: 'wsl -e ./deploy.sh {{secret}}'. Put the commands in a script file and run that instead, e.g. " +
+            "'run ./script.sh {{secret}}' (the script reads the value as $1).",
+            Validation.GetBlockedInvocation(["wsl", "./x.sh", "{{x}}"])?.Reason);
+        Assert.Equal(
+            "'wsl': an option this check doesn't know (wsl.exe matches its options exactly), so it can't tell what wsl " +
+            "runs. Give the command after -e: 'wsl -e ./deploy.sh {{secret}}'. Put the commands in a script file and run " +
+            "that instead, e.g. 'run ./script.sh {{secret}}' (the script reads the value as $1).",
+            Validation.GetBlockedInvocation(["wsl", "--exec=bash"])?.Reason);
     }
 }
