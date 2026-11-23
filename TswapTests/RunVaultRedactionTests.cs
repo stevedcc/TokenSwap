@@ -115,6 +115,20 @@ public sealed class RunVaultRedactionTests : IDisposable
         Assert.Equal($"{pad}[REDACTED: pem]\r\nb64: [REDACTED: pem]\r\n", Output);
     }
 
+    /// <summary>Brief T50a (#398): a vault value stored with <c>\r\n</c>, printed with <c>\n</c> only and no ONLCR, is masked.</summary>
+    [Fact]
+    public void Run_CrLfOtherSecret_PrintedWithLfOnly_Masked()
+    {
+        RecordVault();
+        _m.Ok("token-value-1", "ingest", "token");
+        _m.Ok("line-one\r\nline-two", "ingest", "pem");
+        _pty.Child = _ => "before line-one\nline-two after\n";
+
+        Run("curl", "{{token}}");
+
+        Assert.Equal("before [REDACTED: pem] after\n", Output);
+    }
+
     // ── coverage warning (D1) ────────────────────────────────────────────────────────
 
     [Fact]
