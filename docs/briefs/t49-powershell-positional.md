@@ -134,3 +134,39 @@ These replace the brief text they name; where they conflict with it, they win.
   names (and the common short forms `-ep`, `-nop`, `-noni`, `-w`, `-f`) count, and `-File -` (a script from stdin) is
   refused". In `docs/security-model.md`, the row in "What tswap protects against" that lists the inline-code check gets
   the `powershell` sentence. British spelling (`SpellingTests`).
+
+## Amendments (round 2; GLM ready, MiMo ready after these)
+
+- **A7 (MiMo I1, GLM M2; extends A2): `pwsh` gets the same stdin refusals.** For `pwsh` too: refused when it has no
+  script (no word that isn't a parameter, and no `File` parameter: bare `pwsh`, `pwsh -NoProfile`), when `-NoExit`
+  (`PowerShellParameterKey` a prefix of `noexit`, length 3 or more) comes before the script or `-File`, and when `-File`
+  is the last word. `pwsh`'s parameters are recognised with `PowerShellParameterKey` (any spelling pwsh accepts), not
+  A1's strict list (that list is for `powershell` only). Rows: `pwsh`, `pwsh -NoProfile`, `pwsh -NoExit -File ./x.ps1
+  {{pw}}`, `pwsh -noe ./x.ps1 {{pw}}`, `pwsh -File` refused; `pwsh ./x.ps1 {{pw}}`, `pwsh -NoProfile -File ./x.ps1
+  {{pw}}` allowed.
+- **A8 (MiMo M2): a distinct reason for an untrusted spelling.** When `powershell`'s walk stops at a word that starts
+  with `-`, `/` or a Unicode dash but is not in A1's list, the reason is:
+  `$"'{program}': a parameter spelling tswap doesn't trust (it trusts one - or / before Windows PowerShell 5.1's full parameter names and its common short forms), and 5.1 would read it as -Command, which can transform and print secrets past redaction. {WayOut}"`.
+  It never prints the word (the walk also runs after substitution, so the word could be a value).
+- **A9 (both M3): `{program}`** in every new reason is the normalised program name, as `InlineReason` uses it (not the
+  word as typed).
+- **A10 (both M4).** Every new reason (positional, untrusted spelling, stdin script, `-NoExit`, no script, `-File` at the
+  end) ends with the whole `{WayOut}` sentence; the stdin one is `$"'{program} -File -' reads code from stdin, which can transform and print secrets past redaction. {WayOut}"`
+  (also used for the other `StdinScripts` words), and the no-script / `-NoExit` / `-File`-at-end one is
+  `$"'{program}' with no script (or -NoExit) reads code from stdin, which can transform and print secrets past redaction. {WayOut}"`.
+  `RunWindowsWordingTests.WayOutReasons` gains one row per new reason and its comment's count is updated; that adds rows,
+  no assertion changes.
+- **A11 (MiMo M5).** `RunFileTokenTests.RunFileToken_InterpreterAnywhereRefused`'s row `powershell x.ps1 {{@f}}` is now
+  refused by T49 first; add a comment on the row saying so (its assertion still holds), and add a row
+  `powershell -File x.ps1 {{@f}}` that still reaches the file-token rule.
+- **A12 (both M1/M6; replaces A6's docs sentence).** `docs/scripts.md`: update the existing "Leaving out `-File`" bullet
+  in the same edit: "`run` refuses `powershell` unless `-File` comes first (Windows PowerShell 5.1 runs a plain first
+  argument as code), and refuses `-File -` and a shell with no script for both `powershell` and `pwsh` (they read code
+  from stdin). The inline check takes any spelling PowerShell accepts; for `powershell`'s own parameters tswap trusts
+  only one `-` or `/` before the full names and the short forms `-ep`, `-ex`, `-nop`, `-noni`, `-nol`, `-noe`, `-w`,
+  `-f`, `-if`, `-of`." `docs/security-model.md`'s "Casual exfiltration via `run`" row carries the same two clauses.
+- **A13 (MiMo edge note).** A5's allowed `powershell -File {{pw}}` row uses a plain value (a value of `-` would be refused
+  after substitution by A2, fail closed, which is correct).
+- **A14 (merge).** Before Task 1, `git merge --no-edit brief/t48` (local branch, at its tip) into `brief/t49`, resolve any
+  conflict (F23 edits `GetBlockedInvocation`'s entry, F25 edits `docs/security-model.md`), run `./runtests.sh --unit`,
+  commit the merge (say what was resolved). Never rebase.
