@@ -2060,6 +2060,31 @@ password2: """"  # tswap: missing-mixed-secret");
         }
     }
 
+    /// <summary>
+    /// Brief T50a Task 3 (#391): a quoted passphrase after a credential keyword is masked whole, and the label
+    /// <c>redact</c> writes for a known value is no suspected secret.
+    /// </summary>
+    [Fact]
+    public void Redact_QuotedPassphrase_MaskedWhole_KnownValueLabelNotFlagged()
+    {
+        RunTswap("init", "--yubikey");
+        RunTswapWithStdin("known-secret-value-42", "ingest", "db-pw");
+
+        var file = Path.Combine(_tempDir, "config.txt");
+        File.WriteAllText(file, "password: \"known-secret-value-42\"\nphrase: x\ntoken: \"correct horse battery staple\"\n");
+
+        var (exit, stdout, stderr) = RunTswap("redact", file);
+
+        Assert.Equal(0, exit);
+        Assert.Equal("password: \"[REDACTED: db-pw]\"\nphrase: x\ntoken: \"[POSSIBLE SECRET]\"\n", stdout);
+        Assert.Equal("⚠ Line 3: possible unrecognised secret after 'token', masked\n", stderr.Replace("\r\n", "\n"));
+        foreach (var value in new[] { "known-secret-value-42", "correct horse" })
+        {
+            Assert.DoesNotContain(value, stdout);
+            Assert.DoesNotContain(value, stderr);
+        }
+    }
+
     [Fact]
     public void ToComment_IncludesBurnedSecretValues()
     {

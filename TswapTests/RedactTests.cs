@@ -509,8 +509,56 @@ label: myapp-prod";
         { "token: abcdefghijklmnop # a comment", "token: [POSSIBLE SECRET] # a comment", "1:token" },
     };
 
+    /// <summary>
+    /// Brief T50a Task 3 (#391): a quoted value of 12 or more items (an escape counts as one) after a credential keyword,
+    /// spaces included, masked to its closing quote; also after a quoted key (JSON, TOML). Checked by
+    /// <see cref="MaskUnknownSecrets_MasksOnlyTheValueRun"/> (A2 included).
+    /// </summary>
+    public static TheoryData<string, string, string> QuotedMaskRows => new()
+    {
+        { "password: \"correct horse battery staple\"", "password: \"[POSSIBLE SECRET]\"", "1:password" },
+        { "password='correct horse battery staple' next", "password='[POSSIBLE SECRET]' next", "1:password" },
+        { "password: \"it's a long phrase here\"", "password: \"[POSSIBLE SECRET]\"", "1:password" },
+        { "secret: \"see the README file\"", "secret: \"[POSSIBLE SECRET]\"", "1:secret" },
+        { "api_key: \"abc!def$ghi&jkl\"", "api_key: \"[POSSIBLE SECRET]\"", "1:api_key" },
+        { "password: \"aaaa\\\"bbbbbbbbbbbb\"", "password: \"[POSSIBLE SECRET]\"", "1:password" },
+        { "password: 'it''s a long passphrase'", "password: '[POSSIBLE SECRET]'", "1:password" },
+        { "password: 'don\\'t use this one'", "password: '[POSSIBLE SECRET]'", "1:password" },
+        { "password: 'correct horse\\'s battery staple'", "password: '[POSSIBLE SECRET]'", "1:password" },
+        { "password: 'abcdefghijklmn\\'", "password: '[POSSIBLE SECRET]", "1:password" },
+        { "{\"password\": \"correct horse battery staple\"}", "{\"password\": \"[POSSIBLE SECRET]\"}", "1:password" },
+        { "\"api_key\" = \"abcdefghijklmnop\"", "\"api_key\" = \"[POSSIBLE SECRET]\"", "1:api_key" },
+        { "token: \"abcdefghij\\\"k\"", "token: \"[POSSIBLE SECRET]\"", "1:token" }, // 12 items
+    };
+
+    /// <summary>
+    /// Brief T50a Task 3: inputs the quoted alternative leaves alone (too short, unquoted spaces, no closing quote,
+    /// <c>redact</c>'s own labels). Separate from <see cref="MaskRows"/> because the A2 helper reads every
+    /// <c>[POSSIBLE SECRET]</c> of the output as a replaced run, and one of these inputs holds that label.
+    /// </summary>
+    public static TheoryData<string> UnchangedQuotedRows => new()
+    {
+        "token: \"abcdefghi\\\"k\"", // 11 items
+        "token: \"two words\"",
+        "password: correct horse battery staple",
+        "password: \"no close quote",
+        "password: \"[REDACTED: db-pw]\"",
+        "password: \"[POSSIBLE SECRET]\"",
+    };
+
+    [Theory]
+    [MemberData(nameof(UnchangedQuotedRows))]
+    public void MaskUnknownSecrets_NotAMaskableQuotedValue_Unchanged(string input)
+    {
+        var (masked, hits) = Redact.MaskUnknownSecrets(input);
+
+        Assert.Equal(input, masked);
+        Assert.Empty(hits);
+    }
+
     [Theory]
     [MemberData(nameof(MaskRows))]
+    [MemberData(nameof(QuotedMaskRows))]
     public void MaskUnknownSecrets_MasksOnlyTheValueRun(string input, string expectedMasked, string expectedHits)
     {
         var (masked, hits) = Redact.MaskUnknownSecrets(input);

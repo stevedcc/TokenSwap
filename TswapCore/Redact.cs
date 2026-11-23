@@ -12,9 +12,19 @@ namespace TswapCore;
 public static class Redact
 {
     // Matches credential-keyword = value patterns for heuristic unknown-secret detection.
-    // Brief T45 (A4): the keyword and the value are named groups; what matches is unchanged.
+    // Brief T45 (A4): the keyword and the value are named groups.
+    // Brief T50a (#391): one optional quote after the keyword (a quoted key: JSON's "password": …, TOML's
+    // "password" = …); then a quoted value of 12 or more items, tried first: double-quoted, an item is '\' with
+    // any character but a line break, or one character other than '"', '\' and a line break; single-quoted, an
+    // item is also '' (YAML, SQL) and '\' with a character counts too (PHP, Python, …; in POSIX shell a \' ends
+    // the string, and reading it as an escape masks more). A quoted value that is exactly one of redact's own
+    // labels ([REDACTED: …] with no ']' inside, or [POSSIBLE SECRET]) is not a hit. The T45 alternative
+    // (unquoted or optionally quoted, no spaces) comes last, unchanged.
     private static readonly Regex CredentialHeuristic = new(
-        @"(?<keyword>password|passwd|token|secret|key|apikey|api_key|pass)\s*[:=]\s*[""']?(?<value>[A-Za-z0-9+/\-_]{12,}=*)[""']?",
+        @"(?<keyword>password|passwd|token|secret|key|apikey|api_key|pass)[""']?\s*[:=]\s*(?:" +
+        @"""(?!(?:\[REDACTED: [^\]]*\]|\[POSSIBLE SECRET\])"")(?<value>(?:\\[^\r\n]|[^""\\\r\n]){12,})""" +
+        @"|'(?!(?:\[REDACTED: [^\]]*\]|\[POSSIBLE SECRET\])')(?<value>(?:''|\\[^\r\n]|[^'\\\r\n]){12,})'" +
+        @"|[""']?(?<value>[A-Za-z0-9+/\-_]{12,}=*)[""']?)",
         RegexOptions.IgnoreCase);
 
     /// <summary>What <see cref="MaskUnknownSecrets"/> puts in place of a suspected value.</summary>
@@ -114,7 +124,8 @@ public static class Redact
     /// credential (a <see cref="CredentialHeuristic"/> match) replaced by <see cref="PossibleSecretMask"/>,
     /// and one hit per masked value: its 1-based line and the keyword as written. A hit holds no value
     /// character. The mask covers the whole run from the value's first character: up to the matching
-    /// quote when a quote stands right before it, otherwise up to the next whitespace, <c>,</c>,
+    /// quote when a quote stands right before it (brief T50a: skipping escapes, <c>\</c> with the
+    /// character after it, and after <c>'</c> also <c>''</c>), otherwise up to the next whitespace, <c>,</c>,
     /// <c>;</c>, <c>)</c>, <c>]</c> or <c>}</c>; either way at most to the end of the line. A match
     /// that starts inside a run already masked adds nothing. Line endings are kept as they are.
     /// </summary>
@@ -155,13 +166,26 @@ public static class Redact
         return (masked.ToString(), hits);
     }
 
-    /// <summary>Where the run of a suspected value starting at <paramref name="start"/> ends (exclusive).</summary>
+    /// <summary>
+    /// Where the run of a suspected value starting at <paramref name="start"/> ends (exclusive). After a quote,
+    /// at the first unescaped matching quote (brief T50a: <c>\</c> escapes the character after it; after
+    /// <c>'</c>, <c>''</c> is an escape too), or at the end of the line.
+    /// </summary>
     private static int RunEnd(string line, int start)
     {
         if (start > 0 && line[start - 1] is '"' or '\'')
         {
-            var close = line.IndexOf(line[start - 1], start);
-            return close < 0 ? line.Length : close;
+            var quote = line[start - 1];
+            for (var i = start; i < line.Length; i++)
+            {
+                if (line[i] == '\\')
+                    i++;
+                else if (line[i] == quote && quote == '\'' && i + 1 < line.Length && line[i + 1] == '\'')
+                    i++;
+                else if (line[i] == quote)
+                    return i;
+            }
+            return line.Length;
         }
         var end = start;
         while (end < line.Length && !char.IsWhiteSpace(line[end]) && line[end] is not (',' or ';' or ')' or ']' or '}'))
