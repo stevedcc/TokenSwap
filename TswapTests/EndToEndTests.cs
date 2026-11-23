@@ -1441,10 +1441,10 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         RunTswap("init", "--yubikey", "--no-recovery");
         RunTswapWithStdin(value, "ingest", "umlaut");
         // A16: the stored value is the one typed ('ä' and 'ö' exist in code pages 437, 850 and 1252); if this fails,
-        // the ingest leg is what to fix, not the redaction.
-        var get = RunTswap("get", "umlaut");
+        // the ingest leg is what to fix, not the redaction. get's stdout is read as UTF-8 since T52.
+        var get = RunTswapStdoutBytes("get", "umlaut");
         Assert.True(get.exitCode == 0, get.stderr);
-        Assert.Equal(value, get.stdout.Trim());
+        Assert.Equal(value, Encoding.UTF8.GetString(get.stdout).Trim());
 
         // A13: print3.ps1 as the existing ConPTY test writes it; its trailing sleep is existing child behaviour (a
         // child that exits at once can render as a blank session), not a test wait.
@@ -1783,7 +1783,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         Assert.True(failures.Count == 0, string.Join("\n", failures));
     }
 
-    /// <summary>A program on PATH (no extension search: these tests are Unix-only), or null.</summary>
+    /// <summary>A program on PATH by its full file name (no extension search; T52 passes "pwsh.exe"), or null.</summary>
     private static string? FindOnPath(string program) =>
         (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
             .Select(dir => Path.Combine(dir, program))
@@ -1878,6 +1878,30 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     }
 
     /// <summary>
+    /// Brief T52: tswap's stdout as the bytes it wrote (copied from <see cref="Process.StandardOutput"/>'s base stream,
+    /// no decoder involved); stderr read as text, started first so neither pipe can fill and block the other.
+    /// </summary>
+    private (int exitCode, byte[] stdout, string stderr) RunTswapStdoutBytes(params ReadOnlySpan<string> args)
+    {
+        var psi = MakePsi();
+        foreach (var arg in args)
+            psi.ArgumentList.Add(arg);
+
+        using var process = Process.Start(psi)!;
+        var stderrTask = process.StandardError.ReadToEndAsync();
+        using var stdout = new MemoryStream();
+        process.StandardOutput.BaseStream.CopyTo(stdout);
+        process.WaitForExit();
+        return (process.ExitCode, stdout.ToArray(), stderrTask.Result);
+    }
+
+    /// <summary>Brief T52: a byte comparison's failure text: the two lengths and the first differing offset, never the bytes.</summary>
+    private static string? ByteDifference(byte[] expected, byte[] actual) =>
+        expected.AsSpan().SequenceEqual(actual)
+            ? null
+            : $"expected {expected.Length} bytes, got {actual.Length}, first difference at byte {expected.AsSpan().CommonPrefixLength(actual)}";
+
+    /// <summary>
     /// Brief T48 Task 2: invalid UTF-8 piped into <c>ingest</c> (an invalid continuation byte) is refused with the fixed
     /// message, exit code 1, and nothing is stored. On every OS: before, Linux and macOS stored U+FFFD.
     /// </summary>
@@ -1904,7 +1928,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     /// <c>kubectl … | jq … | tswap ingest</c> delivers it), is stored exactly: <c>tswap run &lt;Git Bash&gt; ./capture.sh
     /// {{name}}</c> (<c>printf '%s' "$1" &gt; out.txt</c>) writes it, trimmed at the end as ingest does. Before, Windows
     /// decoded stdin with the console code page (437 on the runner): <c>café-value</c> arrived as <c>caf├⌐-value</c>.
-    /// No <c>tswap get</c> check (A12/A20 withdrawn): get's redirected stdout on Windows is the console code page (T35 A1).
+    /// The `get` side is `Get_RedirectedStdout_IsUtf8_EveryNonAsciiCorpusValue_Windows` (T52).
     /// </summary>
     /// <remarks>
     /// Break-it-once (the controller's, on Windows CI): <c>SystemConsole.In</c> back to <c>Console.In</c>; the test must
@@ -1947,6 +1971,149 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         }
 
         Assert.True(failures.Count == 0, $"{failures.Count} failure(s):\n" + string.Join("\n", failures));
+    }
+
+    /// <summary>
+    /// Brief T52 (#403): every non-ASCII corpus value, ingested as raw UTF-8, comes out of <c>tswap get</c> with stdout
+    /// redirected (a pipe) as its UTF-8 bytes and CRLF, whatever the console code page (437 on the runner). Before,
+    /// 15 of 16 came out in the code page or as <c>?</c>.
+    /// </summary>
+    /// <remarks>
+    /// Break-it-once (the controller's, on Windows CI): in <c>Program.cs</c> pass <c>false</c> instead of
+    /// <c>CommandRegistry.PrintsSecretValues(args)</c>; this test fails for 15 or 16 cases.
+    /// </remarks>
+    [WindowsFact("get's redirected stdout was the console code page on Windows only")]
+    public void Get_RedirectedStdout_IsUtf8_EveryNonAsciiCorpusValue_Windows()
+    {
+        var (initExit, _, initErr) = RunTswap("init", "--yubikey", "--no-recovery");
+        Assert.True(initExit == 0, $"init failed: {initErr}");
+
+        var utf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+        var cases = EvilValues.Cases.Where(c => c.Value.Any(ch => ch > '\x7F')).ToList();
+        Assert.NotEmpty(cases);
+        List<string> failures = [];
+        foreach (var (c, i) in cases.Select((c, i) => (c, i)))
+        {
+            var name = $"g{i + 1}";
+            Assert.True(EvilValues.NameIsSafeFor(name, c.Value), $"{c.Name}: the name {name} holds part of the value");
+            var (ingestExit, _, ingestErr) = RunTswapWithStdinBytes(utf8.GetBytes(c.Value), "ingest", name);
+            if (ingestExit != 0)
+            {
+                failures.Add($"{c.Name}: ingest failed (exit {ingestExit}): {ingestErr}");
+                continue;
+            }
+
+            var (getExit, stdout, _) = RunTswapStdoutBytes("get", name);
+            var expected = utf8.GetBytes(c.Value.TrimEnd() + "\r\n");
+            if (getExit != 0)
+                failures.Add($"{c.Name}: get exit {getExit}");
+            else if (ByteDifference(expected, stdout) is { } difference)
+                failures.Add($"{c.Name}: {difference}");
+            _output.WriteLine($"T52 get utf-8: {c.Name}: ingest exit {ingestExit}, get exit {getExit}, {stdout.Length} bytes");
+        }
+
+        Assert.True(failures.Count == 0, $"{failures.Count} failure(s):\n" + string.Join("\n", failures));
+    }
+
+    /// <summary>
+    /// Brief T52 (#403): <c>tswap apply</c> with stdout redirected writes the whole filled file as UTF-8, the template's
+    /// own non-ASCII text included (one encoding for the stream).
+    /// </summary>
+    /// <remarks>Break-it-once (controller, Windows CI): as <see cref="Get_RedirectedStdout_IsUtf8_EveryNonAsciiCorpusValue_Windows"/>.</remarks>
+    [WindowsFact("apply's redirected stdout was the console code page on Windows only")]
+    public void Apply_RedirectedStdout_IsUtf8_Windows()
+    {
+        const string value = "café-Grüße-а-🔒"; // the 'а' is Cyrillic U+0430
+        var utf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+        var (initExit, _, initErr) = RunTswap("init", "--yubikey", "--no-recovery");
+        Assert.True(initExit == 0, $"init failed: {initErr}");
+        var (ingestExit, _, ingestErr) = RunTswapWithStdinBytes(utf8.GetBytes(value), "ingest", "a1");
+        Assert.True(ingestExit == 0, $"ingest failed (exit {ingestExit}): {ingestErr}");
+        var template = Path.Combine(_tempDir, "t52-apply.yaml");
+        File.WriteAllText(template, "# Grüße\npassword: \"\"  # tswap: a1\n", utf8);
+
+        var (exit, stdout, stderr) = RunTswapStdoutBytes("apply", template);
+
+        Assert.True(exit == 0, $"apply exit {exit}: {stderr}");
+        var expected = utf8.GetBytes("# Grüße\npassword: \"" + value + "\"  # tswap: a1\n");
+        Assert.True(ByteDifference(expected, stdout) is null, $"apply's stdout: {ByteDifference(expected, stdout)}");
+    }
+
+    /// <summary>
+    /// Brief T52 (#403), the docs line's proof: PowerShell (Windows PowerShell 5.1 and PowerShell 7) decodes a native
+    /// program's output with <c>[Console]::OutputEncoding</c>, the OEM code page by default; with it set to UTF-8 first,
+    /// <c>$v = &amp; tswap get p1</c> holds the value exactly. It proves the documented PowerShell advice only, not
+    /// tswap's own switch: setting <c>[Console]::OutputEncoding</c> sets the code page of the console the shell shares
+    /// with tswap, so tswap writes UTF-8 here even without T52. The byte tests
+    /// (<see cref="Get_RedirectedStdout_IsUtf8_EveryNonAsciiCorpusValue_Windows"/>,
+    /// <see cref="Apply_RedirectedStdout_IsUtf8_Windows"/>) prove the switch.
+    /// </summary>
+    /// <remarks>
+    /// <c>CreateNoWindow = false</c>: Windows PowerShell 5.1 (.NET Framework) raises an error setting
+    /// <c>Console.OutputEncoding</c> without a console, and the documented case is a console window anyway.
+    /// Break-it-once (controller, Windows CI 45195812049): removing the <c>[Console]::OutputEncoding</c> line from
+    /// <c>capture.ps1</c> failed both shells (the runner's 437).
+    /// </remarks>
+    [WindowsFact("Windows PowerShell 5.1 and the [Console]::OutputEncoding advice are about Windows consoles")]
+    public void Get_CapturedInPowerShell_WithUtf8ConsoleEncoding_IsExact_Windows()
+    {
+        const string value = "café-Grüße-а-🔒"; // the 'а' is Cyrillic U+0430
+        var utf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+        var (initExit, _, initErr) = RunTswap("init", "--yubikey", "--no-recovery");
+        Assert.True(initExit == 0, $"init failed: {initErr}");
+        var (ingestExit, _, ingestErr) = RunTswapWithStdinBytes(utf8.GetBytes(value), "ingest", "p1");
+        Assert.True(ingestExit == 0, $"ingest failed (exit {ingestExit}): {ingestErr}");
+        var capture = Path.Combine(_tempDir, "capture.ps1");
+        File.WriteAllText(capture,
+            "param($tswap, $name, $out)\r\n" +
+            "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)\r\n" +
+            "$v = & $tswap get $name\r\n" +
+            "[System.IO.File]::WriteAllText($out, $v, [System.Text.UTF8Encoding]::new($false))\r\n",
+            Encoding.ASCII);
+
+        List<string> failures = [];
+        foreach (var shell in new[] { "powershell.exe", "pwsh.exe" })
+        {
+            var shellPath = FindOnPath(shell);
+            if (shellPath is null)
+            {
+                failures.Add($"{shell}: not on PATH (both are on every GitHub Windows runner)");
+                continue;
+            }
+
+            var outFile = Path.Combine(_tempDir, $"t52-{Path.GetFileNameWithoutExtension(shell)}.txt");
+            // The shell and the tswap it starts share one console, on CI too (only the test host's is separate); on a
+            // developer machine that console may be the test host's, whose code page may already be 65001.
+            var psi = new ProcessStartInfo
+            {
+                FileName = shellPath,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = false,
+            };
+            foreach (var (key, envValue) in MakePsi().Environment)
+                if (key.StartsWith("TSWAP_", StringComparison.Ordinal))
+                    psi.Environment[key] = envValue;
+            foreach (var arg in new[] { "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", capture, _binaryPath, "p1", outFile })
+                psi.ArgumentList.Add(arg);
+
+            using var process = Process.Start(psi)!;
+            var stdoutTask = process.StandardOutput.ReadToEndAsync();
+            var stderr = process.StandardError.ReadToEnd();
+            process.WaitForExit();
+            _ = stdoutTask.Result;
+
+            if (process.ExitCode != 0)
+                failures.Add($"{shell}: exit {process.ExitCode}: {stderr}");
+            else if (!File.Exists(outFile))
+                failures.Add($"{shell}: no out file (exit 0): {stderr}");
+            else if (File.ReadAllText(outFile, Encoding.UTF8) is var captured && captured != value)
+                failures.Add($"{shell}: captured value ALTERED ({captured.Length} chars, expected {value.Length})");
+            _output.WriteLine($"T52 powershell capture: {shell}: exit {process.ExitCode}");
+        }
+
+        Assert.True(failures.Count == 0, string.Join("\n", failures));
     }
 
     /// <summary>

@@ -302,7 +302,8 @@ pwsh installTswap.ps1
   after a Ctrl+C or a killed tswap the window can stay at UTF-8 (`chcp` shows and sets it). A
   long-running `tswap agent serve` in a console window keeps it at UTF-8 until it exits. When stdout or
   stderr is redirected to a file or pipe, nothing changes: tswap and the programs `tswap run` starts
-  write in the window's code page, as before. A program `tswap run` starts inherits the UTF-8 code
+  write in the window's code page, as before. Except `get` and `apply`: they write UTF-8 to a redirected stdout (see
+  the Commands section of `commands.md`). A program `tswap run` starts inherits the UTF-8 code
   page. If a symbol shows as an empty box in the classic console window, its font lacks it; Windows
   Terminal shows it.
 - **`tswap run` in a console window.** The command runs in a pseudo console (ConPTY). tswap lets the

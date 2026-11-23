@@ -20,4 +20,6 @@ ProcessHardening.HardenCli();
 // window's code page back at exit. Here, not in CliHost, so in-process tests never change the test host's console.
 using var consoleOutput = ConsoleOutputEncoding.Utf8OnWindows(ConsoleOutputEncoding.System);
 
-return CliHost.Run(args, new SystemConsole(), Environment.GetEnvironmentVariable, Environment.IsPrivilegedProcess, Environment.ProcessPath);
+// Brief T52 (#403): on Windows, get and apply write a redirected stdout as UTF-8 (one encoding for the whole stream).
+var stdout = ConsoleOutputEncoding.Utf8StdoutForSecretValues(ConsoleOutputEncoding.System, CommandRegistry.PrintsSecretValues(args));
+return CliHost.Run(args, new SystemConsole(stdout), Environment.GetEnvironmentVariable, Environment.IsPrivilegedProcess, Environment.ProcessPath);

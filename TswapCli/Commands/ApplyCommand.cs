@@ -8,6 +8,7 @@ public sealed class ApplyCommand : ICliCommand
     public string HelpUsage => "apply <file>";
     public string Description => "Print a file with # tswap: markers filled in (human use; agents: run … {{@file}})";
     public bool RequiresSudo => true;
+    public bool PrintsSecretValues => true;
 
     public int Execute(CommandContext ctx, string[] args)
     {

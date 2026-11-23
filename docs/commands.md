@@ -245,6 +245,19 @@ ignored, and a UTF-16 or UTF-32 BOM switches to that encoding (Windows PowerShel
 Windows PowerShell 5.1 pipes text to programs as ASCII by default (é arrives as `?`, which tswap can't detect): set
 `$OutputEncoding = [System.Text.UTF8Encoding]::new($false)` first, or use PowerShell 7, which pipes UTF-8.
 
+On Windows, `get` and `apply` write UTF-8 (no BOM) when their output is redirected to a file or pipe, whatever the
+console code page; their messages on stderr stay in the console's code page. In cmd, `tswap get n > f` and
+`tswap get n | other-program` carry the value's exact UTF-8 bytes (the receiving program must read UTF-8; `clip` and
+tools that assume the OEM code page don't). PowerShell (Windows PowerShell 5.1 and PowerShell 7) decodes a program's
+output with `[Console]::OutputEncoding`, the OEM code page by default: before capturing it (`$v = tswap get n`) or
+piping `get` or `apply` into a cmdlet, run `[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)`.
+Piping into another program in Windows PowerShell 5.1 (and PowerShell 7.0 to 7.3) re-encodes with `$OutputEncoding`,
+ASCII in 5.1: also set `$OutputEncoding = [System.Text.UTF8Encoding]::new($false)`, or use `cmd /c "tswap get n | …"`,
+or PowerShell 7.4 or later, which passes a program's bytes unchanged through `|` to another program and through `>`
+to a file. Windows PowerShell 5.1's `>` re-encodes what it decoded as UTF-16: use `cmd /c "tswap get n > f"` or
+PowerShell 7.4 or later to write the file as tswap wrote it, and read a written file back in 5.1 with
+`Get-Content -Encoding UTF8 f` (5.1 reads a file without a BOM as ANSI).
+
 `add`, `ingest`, `ingest --rotate`, `create` and `rotate` also print one warning line on stderr after
 their success line (in `add`, after the whitespace warning) when the value they store is shorter than
 8 characters: for `add` the typed or piped value (also when it was already stored), for `ingest` the

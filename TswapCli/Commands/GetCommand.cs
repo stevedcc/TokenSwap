@@ -8,6 +8,7 @@ public sealed class GetCommand : ICliCommand
     public string HelpUsage => "get <name>";
     public string Description => "Get a secret value";
     public bool RequiresSudo => true;
+    public bool PrintsSecretValues => true;
 
     public int Execute(CommandContext ctx, string[] args)
     {
