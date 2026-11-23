@@ -874,6 +874,52 @@ public class CommandTests : IDisposable
         Assert.False(File.Exists(marker), "a refused command must not run");
     }
 
+    // Brief T51 Task 1 (#404): a flag (or subcommand, or wsl's exec'd program) built from {{a}}, with the code in {{b}},
+    // is refused by the walk over the substituted command (the typed words show only tokens). The refusal names the
+    // token, the code never runs, and the code's text is never repeated.
+    private (string stdout, string stderr, string code, string marker) RunWithFlagAndCodeTokens(string flag, params string[] command)
+    {
+        RunTswap("init", "--yubikey");
+        var marker = Path.Combine(_tempDir, "ran-b");
+        var code = $"open('{marker}', 'w').close()";
+        RunTswapWithStdin(flag, "ingest", "a");
+        RunTswapWithStdin(code, "ingest", "b");
+
+        var (exit, stdout, stderr) = RunTswap(["run", .. command]);
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("After substitution, the value of {{a}} makes", stderr);
+        Assert.DoesNotContain(code, stdout);
+        Assert.DoesNotContain(code, stderr);
+        return (stdout, stderr, code, marker);
+    }
+
+    [Fact]
+    public void Run_PythonFlagFromATokenWithCodeInAnother_IsRefusedAfterSubstitution()
+    {
+        var (_, _, _, marker) = RunWithFlagAndCodeTokens("c", "python3", "-{{a}}", "{{b}}");
+
+        Assert.False(File.Exists(marker), "a refused command must not run");
+    }
+
+    [Fact]
+    public void Run_PwshFlagFromATokenWithCodeInAnother_IsRefusedAfterSubstitution()
+    {
+        var (stdout, stderr, _, marker) = RunWithFlagAndCodeTokens("EncodedCommand", "pwsh", "-{{a}}", "{{b}}");
+
+        Assert.False(File.Exists(marker), "a refused command must not run");
+        Assert.DoesNotContain("EncodedCommand", stdout);
+        Assert.DoesNotContain("EncodedCommand", stderr);
+    }
+
+    [Fact]
+    public void Run_DenoSubcommandFromATokenWithCodeInAnother_IsRefusedAfterSubstitution() =>
+        RunWithFlagAndCodeTokens("eval", "deno", "{{a}}", "{{b}}");
+
+    [Fact]
+    public void Run_WslExecProgramFromATokenWithCodeInAnother_IsRefusedAfterSubstitution() =>
+        RunWithFlagAndCodeTokens("bash", "wsl", "-e", "{{a}}", "-c", "{{b}}");
+
     // A word the post-substitution check refuses came from a secret's value, so
     // the refusal names the token, never the word.
     [Fact]
