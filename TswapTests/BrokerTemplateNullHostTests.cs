@@ -67,7 +67,7 @@ public class BrokerTemplateNullHostTests(ITestOutputHelper output) : IAsyncLifet
         Assert.True(_h.Holder.TryReload(() => BrokerPolicy.WithoutHostForTests(_h.Holder.Current), _ => { }));
         Assert.Null(_h.Holder.Current.Host);
         Assert.NotEmpty(_h.Holder.Current.Templates);
-        _h.LogText.GetStringBuilder().Clear();
+        _h.LogText.Clear();
 
         var bound = await PostAsync("bound");
         var bare = await PostAsync("bare");
