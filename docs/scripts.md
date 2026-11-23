@@ -87,7 +87,12 @@ What breaks it:
 - `Invoke-Expression` with the value, or `& ([scriptblock]::Create(...))`, which run it as code.
 - Leaving out `-File`: `powershell .\deploy.ps1 ...` or `powershell -Command ...` reads the rest of the command line
   as PowerShell code, so the value is parsed too. `run` refuses `-Command` and `-EncodedCommand` in any spelling
-  PowerShell accepts (`-`, `--`, `/`, the Unicode dashes, a prefix); give `-File` every time.
+  PowerShell accepts (`-`, `--`, `/`, the Unicode dashes, a prefix); give `-File` every time. `run` refuses
+  `powershell` unless `-File` comes first (Windows PowerShell 5.1 runs a plain first argument as code), and refuses
+  `-File -` and a shell with no script for both `powershell` and `pwsh` (they read code from stdin). The inline check
+  takes any spelling PowerShell accepts; for `powershell`'s own parameters tswap trusts only one `-` or `/` before the
+  full names and the short forms `-ep`, `-ex`, `-nop`, `-noni`, `-nol`, `-noe`, `-w`, `-f`, `-if`, `-of`. PowerShell
+  7's `pwsh` reads a plain first argument as a script file.
 - In a PowerShell window, an unquoted token: PowerShell reads `{...}` as a script block, so `tswap` never sees the
   token. Quote it: `'{{db-pw}}'` ([Windows notes](install.md#windows-notes)).
 
