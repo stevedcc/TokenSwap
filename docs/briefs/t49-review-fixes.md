@@ -32,3 +32,22 @@ named `powershell` gets 5.1's rule (use `-File`, which both accept).
 ## G5 (Minor, GLM and MiMo T48 round 4): doc comments
 `IsBatchTarget`'s and `WindowsFileName`'s XML summaries: "…only after a name ending in .exe/.cmd/.bat/.com, or a head
 Windows trimmed (F23)".
+
+## Round 2 (MiMo re-review: one Important; GLM unavailable, Z.ai weekly limit)
+
+### H1 (Important, MiMo): a stdin path anywhere after PowerShell
+`run pwsh -i /dev/stdin {{pw}}` is allowed: the prefix rule reads `-i` as `-InputFormat` and consumes `/dev/stdin` as its
+value, while pwsh reads `-i` as `-Interactive` and runs `/dev/stdin` as the script. Stop depending on which parameters
+take a value: for `pwsh` and `powershell`, **any word (after `Trim()`) that is in `StdinScripts`** (case-insensitive),
+in any position, is refused with the stdin reason, fail closed. Over-refusal accepted: a script argument that is
+literally `-` or `/dev/stdin` (`pwsh -File ./x.ps1 -`). Rows refused: `pwsh -i /dev/stdin {{pw}}`, `pwsh -s /dev/fd/0
+{{pw}}`, `pwsh -ep Bypass /dev/stdin {{pw}}`, `powershell -File .\x.ps1 -`. Existing allowed rows stay allowed (if one
+doesn't, stop and list it). Break-it-once: drop the any-word rule; the `-i /dev/stdin` row fails.
+
+### H2 (Minor, MiMo): the filed gaps are listed
+`docs/security-model.md`'s list of what the inline-code check doesn't catch: `wsl` with options but no command (#405), a
+`deno run` option value hiding a stdin script (#406), and an interpreter flag built from a token (#404).
+
+### H3 (Minor, MiMo): G2's deno break-it-once
+Run it now: drop the `deno run` stdin rule, the `deno run - {{pw}}` row must fail; restore. Record it in H1's commit
+message (or a separate empty-diff note in the report if H1 doesn't touch deno).
