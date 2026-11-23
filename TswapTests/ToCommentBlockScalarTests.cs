@@ -278,13 +278,16 @@ public sealed class ToCommentBlockScalarTests
     [Fact]
     public void QuotedPipe_NotABlock()
     {
-        // A quoted "|" is a string, not a block indicator: today's output exactly.
-        var (result, changes, unreplaced) = Redact.ToCommentReporting("key: \"|\"\n    " + B64(Pem) + "\n", Db(("pem", Pem)));
+        // A quoted "|" is a string, not a block indicator, so line 2 is no block content and T22 doesn't keep it.
+        // Brief T50b (owner decision 1): the marker tocomment wrote there before ('    ""  # tswap: pem', nothing
+        // before it) was one apply can never fill; now the line is left and the value reported as skipped.
+        var content = "key: \"|\"\n    " + B64(Pem) + "\n";
+        var (result, changes, unreplaced) = Redact.ToCommentReporting(content, Db(("pem", Pem)));
 
-        Assert.Equal("key: \"|\"\n    \"\"  # tswap: pem\n", result);
-        LineDiff[] expected = [new(2, "    " + B64(Pem), "    \"\"  # tswap: pem")];
-        Assert.Equal(expected, changes);
+        Assert.Equal(content, result);
+        Assert.Empty(changes);
         Assert.Empty(unreplaced);
+        Assert.Equal(new[] { new SkippedValue(2, 2, "pem", SkippedReason.NotWholeValue) }, Redact.ToCommentReport(content, Db(("pem", Pem))).Skipped);
     }
 
     [Fact]

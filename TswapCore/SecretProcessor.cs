@@ -15,6 +15,33 @@ public record LineDiff(int LineNumber, string Before, string After);
 /// </summary>
 public sealed record UnreplacedLine(int LineNumber, string Token);
 
+/// <summary>Brief T50b (#394, #399): why <c>tocomment</c> left an occurrence of a value in place.</summary>
+public enum SkippedReason
+{
+    /// <summary>Not a whole value <c>apply</c> fills back (<c>key: value</c>, or <c>KEY=value</c> without control characters).</summary>
+    NotWholeValue,
+
+    /// <summary>A plain value on a line of YAML block-scalar content that T22 leaves whole, or a multi-line value inside one.</summary>
+    InBlockScalar,
+}
+
+/// <summary>
+/// Brief T50b (#394, #399): an occurrence of the value of <see cref="Token"/> (<c>name</c> or <c>name:previous</c>)
+/// that <c>tocomment</c> found and left in place, on lines <see cref="FirstLine"/> to <see cref="LastLine"/> of the
+/// input file (equal for a value on one line). It carries no text.
+/// </summary>
+public sealed record SkippedValue(int FirstLine, int LastLine, string Token, SkippedReason Reason);
+
+/// <summary>
+/// Brief T50b: everything <c>tocomment</c> did to a file: the new content (LF), the changes, the lines T22 left
+/// (<see cref="UnreplacedLine"/>), the occurrences left in place (<see cref="SkippedValue"/>, ordered by first line,
+/// last line, then token ordinally) and the base name of every secret with at least one replaced occurrence
+/// (distinct, ordinal).
+/// </summary>
+public sealed record ToCommentReport(string Content, IReadOnlyList<LineDiff> Changes,
+    IReadOnlyList<UnreplacedLine> Unreplaced, IReadOnlyList<SkippedValue> Skipped,
+    IReadOnlyList<string> ReplacedNames);
+
 /// <summary>
 /// The plaintext match list. Brief T16-S2: matching itself is <see cref="SecretMatcher"/>'s, from
 /// fingerprints, with the labels of <see cref="RedactProcessor"/> and the replacement of

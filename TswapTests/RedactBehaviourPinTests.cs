@@ -42,7 +42,10 @@ public class RedactBehaviourPinTests
     {
         var db = Db(("s1", S("foo bar")), ("s2", S("bar baz")));
         AssertRedact("k: foo [REDACTED: s2]", "k: foo bar baz", db);
-        AssertToComment("k: foo \"\"  # tswap: s2", "k: foo bar baz", db, new LineDiff(1, "k: foo bar baz", "k: foo \"\"  # tswap: s2"));
+        // Brief T50b (owner decision 1): 'foo bar' fails rule (b), 'bar baz' rule (a): no change, both reported.
+        AssertToComment("k: foo bar baz", "k: foo bar baz", db);
+        Assert.Equal(new[] { new SkippedValue(1, 1, "s1", SkippedReason.NotWholeValue), new SkippedValue(1, 1, "s2", SkippedReason.NotWholeValue) },
+            Redact.ToCommentReport("k: foo bar baz", db).Skipped);
     }
 
     [Fact]
@@ -54,8 +57,11 @@ public class RedactBehaviourPinTests
         AssertRedact("x[REDACTED: z-abz-secret]", "xabcdefgz", db);
 
         var spaced = Db(("a-xab-secret", S("x ab")), ("z-abz-secret", S("ab z")));
-        AssertToComment("k: x \"\"  # tswap: z-abz-secret", "k: x ab z", spaced,
-            new LineDiff(1, "k: x ab z", "k: x \"\"  # tswap: z-abz-secret"));
+        // Brief T50b (owner decision 1): neither is a whole value on the line, so neither is replaced.
+        AssertToComment("k: x ab z", "k: x ab z", spaced);
+        Assert.Equal(
+            new[] { new SkippedValue(1, 1, "a-xab-secret", SkippedReason.NotWholeValue), new SkippedValue(1, 1, "z-abz-secret", SkippedReason.NotWholeValue) },
+            Redact.ToCommentReport("k: x ab z", spaced).Skipped);
     }
 
     [Fact]
@@ -195,10 +201,12 @@ public sealed class ToCommentDryRunPinTests : IDisposable
         Assert.Equal(
             "  line 1:\n" +
             "  - db: \"[REDACTED: db]\"  # note [REDACTED: api]\n" +
-            "  + db: \"\"  # tswap: db  # note \"\"  # tswap: api\n" +
+            "  + db: \"\"  # tswap: db  # note [REDACTED: api]\n" +
             "  line 2:\n" +
             "  - api: [REDACTED: api]\n" +
             "  + api: \"\"  # tswap: api\n" +
+            "Warning: line 1: the value of 'api' (or an encoded form of it) was left in place: it is not a whole value that apply " +
+            "fills back ('key: value', or 'KEY=value' without control characters). If it is the secret there, move it out by hand.\n" +
             "\n(dry run) 2 line(s) would be modified.\n",
             stderr.Replace("\r\n", "\n"));
         Assert.Equal(content, File.ReadAllText(file));

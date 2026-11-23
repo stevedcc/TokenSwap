@@ -215,28 +215,30 @@ public class RedactTests
     [Fact]
     public void ToComment_YamlFlowMapping_UnquotedValueAdjacentToComma()
     {
-        // value sits between ": " and "," — comma must survive unchanged
+        // Brief T50b (#394, owner decision 1): a marker inside a flow mapping would turn the closing '}' into
+        // comment text, so the value is left (and reported as skipped; Task 1 rows 12-13 pin that).
         var db = MakeDb(("db-pass", "s3cr3t"));
         var (content, _) = Redact.ToComment("{password: s3cr3t, host: local}", db);
-        Assert.Equal("{password: \"\"  # tswap: db-pass, host: local}", content);
+        Assert.Equal("{password: s3cr3t, host: local}", content);
     }
 
     [Fact]
     public void ToComment_YamlFlowMapping_DoubleQuotedValueAdjacentToComma()
     {
-        // double-quoted value inside a flow mapping — quotes consumed, comma survives
+        // double-quoted value inside a flow mapping — brief T50b (owner decision 1): left as it is
         var db = MakeDb(("db-pass", "s3cr3t"));
         var (content, _) = Redact.ToComment("{password: \"s3cr3t\", host: local}", db);
-        Assert.Equal("{password: \"\"  # tswap: db-pass, host: local}", content);
+        Assert.Equal("{password: \"s3cr3t\", host: local}", content);
     }
 
     [Fact]
     public void ToComment_YamlFlowSequence_ValueAdjacentToBracket()
     {
-        // value is the sole element of a flow sequence — bracket must survive
+        // value is the sole element of a flow sequence — brief T50b (owner decision 1): the marker would turn
+        // the ']' into comment text, so the line is left as it is
         var db = MakeDb(("db-pass", "s3cr3t"));
         var (content, _) = Redact.ToComment("passwords: [s3cr3t]", db);
-        Assert.Equal("passwords: [\"\"  # tswap: db-pass]", content);
+        Assert.Equal("passwords: [s3cr3t]", content);
     }
 
     [Fact]

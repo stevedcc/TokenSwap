@@ -55,19 +55,22 @@ public class RedactEngineTests(Xunit.Abstractions.ITestOutputHelper output)
     public void ToComment_SecretInsideAnInsertedMarker_NotReplaced()
     {
         var db = Db(("s1", S("abcdefgh")), ("s2", S("tswap")));
-        // Today: "tswap" was then matched inside the inserted marker and the marker rewritten.
-        Assert.Equal("k: \"\"  # \"\"  # tswap: s2: s1", PlaintextRedactOracle.ToComment("k: abcdefgh", db).Content);
+        // Before T50: the oracle then matched "tswap" inside the inserted marker and rewrote it to
+        // 'k: ""  # ""  # tswap: s2: s1'; since T50b it keeps a match holding inserted text as it is.
+        Assert.Equal("k: \"\"  # tswap: s1", PlaintextRedactOracle.ToComment("k: abcdefgh", db).Content);
         Assert.Equal("k: \"\"  # tswap: s1", Redact.ToComment("k: abcdefgh", db).Content);
     }
 
     [Fact]
     public void ToComment_AdjacentSecrets_UseOriginalNeighbours()
     {
-        // "beta2." is followed by 'a' in the original line, so it is no separate value there; today it
-        // was matched against the '"' of the marker inserted for "alpha12".
+        // "beta2." is followed by 'a' in the original line, so it is no separate value there. Before T50: the
+        // oracle matched it against the '"' of the marker inserted for "alpha12" ('k: ""  # tswap: b""  # tswap: a')
+        // and the engine gave 'k: beta2.""  # tswap: a'. Since T50b "alpha12" is no whole value either (rule (a):
+        // the text before it ends in '.'), so neither engine changes the line.
         var db = Db(("a", S("alpha12")), ("b", S("beta2.")));
-        Assert.Equal("k: \"\"  # tswap: b\"\"  # tswap: a", PlaintextRedactOracle.ToComment("k: beta2.alpha12", db).Content);
-        Assert.Equal("k: beta2.\"\"  # tswap: a", Redact.ToComment("k: beta2.alpha12", db).Content);
+        Assert.Equal("k: beta2.alpha12", PlaintextRedactOracle.ToComment("k: beta2.alpha12", db).Content);
+        Assert.Equal("k: beta2.alpha12", Redact.ToComment("k: beta2.alpha12", db).Content);
     }
 
     [Fact]
@@ -174,7 +177,10 @@ public class RedactEngineTests(Xunit.Abstractions.ITestOutputHelper output)
             bool Masked(string form) => content.Contains(form) && !expected.Contains(form);
             bool Labelled(string token) => expected.Contains($"[REDACTED: {token}]") || expected.Contains($"[REDACTED: {token} (");
             if (expected != content.Replace("\r\n", "\n")) counts["redact-hits"]++;
-            if (oracleChanges.Count > 0) counts["tocomment-hits"]++;
+            // Brief T50b (owner decision 2): a round in which the engine found an occurrence, replaced or skipped
+            // (the whole-value rule makes replacements rare here, most placements being followed by more text).
+            var report = Redact.ToCommentReport(content, db);
+            if (report.Changes.Count + report.Skipped.Count > 0) counts["tocomment-hits"]++;
             if (secrets.Any(s => s.Secret.PreviousValue is not null && Labelled(s.Name + ":previous"))) counts["previous-masked"]++;
             if (secrets.Any(s => s.Secret.BurnedAt is not null && Labelled(s.Name))) counts["burned-masked"]++;
             // A form held by a burned secret's current value and by a live token, present in the text:

@@ -89,30 +89,47 @@ public sealed class SecretMatcher(FingerprintIndex index, IReadOnlySet<string> b
 
     /// <summary>
     /// <c>tocomment</c>: every recognised value (with its quotes and an existing marker) replaced by
-    /// <c>""  # tswap: name</c>, line by line, and the base64-looking continuation lines of a
-    /// replaced value removed. Returns the content (LF) and every changed line.
+    /// <c>""  # tswap: name</c>, line by line, where it is a whole value <c>apply</c> fills back (brief T50b), and
+    /// the base64-looking continuation lines of a replaced value removed. Returns the content (LF) and every
+    /// changed line.
     /// </summary>
     public (string Content, IReadOnlyList<LineDiff> Changes) ToComment(string content)
     {
-        var (result, changes, _) = ToCommentReporting(content);
-        return (result, changes);
+        var report = ToCommentReport(content);
+        return (report.Content, report.Changes);
+    }
+
+    /// <summary>Brief T22 (#319): <see cref="ToComment"/> plus the lines it left unchanged (see <see cref="ToCommentReport"/>).</summary>
+    public (string Content, IReadOnlyList<LineDiff> Changes, IReadOnlyList<UnreplacedLine> Unreplaced) ToCommentReporting(string content)
+    {
+        var report = ToCommentReport(content);
+        return (report.Content, report.Changes, report.Unreplaced);
     }
 
     /// <summary>
-    /// Brief T22 (#319): <see cref="ToComment"/> plus the lines it left unchanged. A marker is filled with
-    /// a value's plain form, so on a line of YAML block-scalar content
-    /// (<see cref="ToCommentProcessor.BlockScalarContent"/>) an encoded occurrence (base64, base64url,
-    /// whitespace-stripped) that the line path would replace is never replaced: the whole line stays as
-    /// it is, plain occurrences on it too, and each encoded token is reported once per line (by line,
-    /// then token ordinally). Plain occurrences on other content lines are replaced as before, and the
-    /// adoption of a whole block (T20) is unchanged.
+    /// <c>tocomment</c>'s full report.
+    /// <para>
+    /// Brief T50b (#394): an occurrence (what <see cref="SelectToComment"/> finds) is replaced only where
+    /// <see cref="ToCommentProcessor.FillsBack"/> holds on the original line; every other one stays and is reported
+    /// as a <see cref="SkippedValue"/> (<see cref="SkippedReason.NotWholeValue"/>) unless a replacement overlaps it.
+    /// </para>
+    /// <para>
+    /// Brief T22 (#319): a marker is filled with a value's plain form, so on a line of YAML block-scalar content
+    /// (<see cref="ToCommentProcessor.BlockScalarContent"/>) holding an encoded occurrence (base64, base64url,
+    /// whitespace-stripped; the rule's rejected ones included) the whole line stays as it is, each encoded token
+    /// reported once per line (<see cref="UnreplacedLine"/>) and, since T50b, each plain occurrence on it as a
+    /// <see cref="SkippedValue"/> (<see cref="SkippedReason.InBlockScalar"/>). The adoption of a whole block (T20) is
+    /// unchanged.
+    /// </para>
     /// </summary>
-    public (string Content, IReadOnlyList<LineDiff> Changes, IReadOnlyList<UnreplacedLine> Unreplaced) ToCommentReporting(string content)
+    public ToCommentReport ToCommentReport(string content)
     {
         var lines = content.Replace("\r\n", "\n").Split('\n');
         var blockContent = ToCommentProcessor.BlockScalarContent(lines);
         List<LineDiff> diffs = [];
         List<UnreplacedLine> unreplaced = [];
+        List<SkippedValue> skipped = [];
+        SortedSet<string> replacedNames = new(StringComparer.Ordinal);
         HashSet<int> linesToRemove = [];
         for (var i = 0; i < lines.Length; i++)
         {
@@ -124,6 +141,7 @@ public sealed class SecretMatcher(FingerprintIndex index, IReadOnlySet<string> b
             {
                 var keyLine = $"{block.Indent}{block.Key} {ToCommentProcessor.Replacement(token)}";
                 diffs.Add(new LineDiff(i + 1, original, keyLine));
+                replacedNames.Add(BaseName(token));
                 lines[i] = keyLine;
                 for (var j = block.FirstLine; j < block.EndLine; j++)
                 {
@@ -132,32 +150,57 @@ public sealed class SecretMatcher(FingerprintIndex index, IReadOnlySet<string> b
                 }
                 continue;
             }
-            var taken = SelectToComment(original);
-            if (taken.Count == 0)
+            var (taken, rejected) = SelectToComment(original);
+            if (taken.Count == 0 && rejected.Count == 0)
                 continue;
-            if (blockContent[i] && EncodedTokens(taken) is [_, ..] encoded)
+            if (blockContent[i] && EncodedTokens([.. taken.Values, .. rejected]) is [_, ..] encoded)
             {
                 unreplaced.AddRange(encoded.Select(t => new UnreplacedLine(i + 1, t)));
+                // Brief T50b: the plain occurrences on a line T22 keeps whole are left too, none silently.
+                foreach (var span in taken.Values.Concat(rejected).Where(static s => s.Kind == VariantKind.Plain))
+                    skipped.Add(new SkippedValue(i + 1, i + 1, span.Token, SkippedReason.InBlockScalar));
                 continue;
             }
+            // One report per occurrence: a rejected span overlapping one of its own token already reported is the
+            // same occurrence in another form (a value's base64url inside its padded base64).
+            List<Span> reported = [];
+            foreach (var span in rejected)
+            {
+                if (Overlaps(taken, span.Start, span.End)
+                    || reported.Exists(r => r.Token == span.Token && r.Start < span.End && span.Start < r.End))
+                    continue;
+                reported.Add(span);
+                skipped.Add(new SkippedValue(i + 1, i + 1, span.Token, SkippedReason.NotWholeValue));
+            }
+            if (taken.Count == 0)
+                continue;
+            foreach (var span in taken.Values)
+                replacedNames.Add(BaseName(span.Token));
             var current = Replace(original, taken);
             diffs.Add(new LineDiff(i + 1, original, current));
             lines[i] = current;
             foreach (var j in ToCommentProcessor.ContinuationLines(lines, i, original))
             {
                 // Brief T22: a content line holding an encoded occurrence stays (and is reported in its turn).
-                if (blockContent[j] && EncodedTokens(SelectToComment(lines[j])) is [_, ..])
+                if (blockContent[j] && SelectToComment(lines[j]) is var (t, r) && EncodedTokens([.. t.Values, .. r]) is [_, ..])
                     break;
                 linesToRemove.Add(j);
                 diffs.Add(new LineDiff(j + 1, lines[j], ""));
             }
         }
-        return (string.Join('\n', lines.Where((_, i) => !linesToRemove.Contains(i))), diffs, unreplaced);
+        List<SkippedValue> ordered = [.. skipped.OrderBy(static s => s.FirstLine).ThenBy(static s => s.LastLine)
+            .ThenBy(static s => s.Token, StringComparer.Ordinal)];
+        return new ToCommentReport(string.Join('\n', lines.Where((_, i) => !linesToRemove.Contains(i))), diffs, unreplaced,
+            ordered, [.. replacedNames]);
     }
 
-    /// <summary>Brief T22: the distinct tokens of the encoded (not plain) spans in <paramref name="taken"/>, ordinally.</summary>
-    private static List<string> EncodedTokens(SortedList<int, Span> taken) =>
-        [.. taken.Values.Where(static s => s.Kind != VariantKind.Plain).Select(static s => s.Token).Distinct().Order(StringComparer.Ordinal)];
+    /// <summary>Brief T50b: the secret's name in <paramref name="token"/>, without <c>:previous</c>.</summary>
+    private static string BaseName(string token) =>
+        token.EndsWith(SecretsDb.PreviousSuffix, StringComparison.Ordinal) ? token[..^SecretsDb.PreviousSuffix.Length] : token;
+
+    /// <summary>Brief T22: the distinct tokens of the encoded (not plain) spans in <paramref name="spans"/>, ordinally.</summary>
+    private static List<string> EncodedTokens(IEnumerable<Span> spans) =>
+        [.. spans.Where(static s => s.Kind != VariantKind.Plain).Select(static s => s.Token).Distinct().Order(StringComparer.Ordinal)];
 
     /// <summary>
     /// Brief T20 (#315): the token (<c>name</c> or <c>name:previous</c>) of the stored value whose
@@ -261,16 +304,21 @@ public sealed class SecretMatcher(FingerprintIndex index, IReadOnlySet<string> b
     /// <summary>
     /// Selection for <c>tocomment</c> on one line: an occurrence at <c>s</c> may be taken quoted
     /// (from <c>s − 1</c>) or bare (from <c>s</c>), as the regex finds it scanning left to right,
-    /// with the regex's own checks run on the original line.
+    /// with the regex's own checks run on the original line. Brief T50b (#394): an occurrence is taken only where
+    /// <see cref="ToCommentProcessor.FillsBack"/> holds on the original line; a rejected one is returned apart and
+    /// reserves its span against later attempts of its own entry only (as a match <c>Regex.Replace</c> kept),
+    /// never against other entries.
     /// </summary>
-    private SortedList<int, Span> SelectToComment(string line)
+    private (SortedList<int, Span> Taken, List<Span> Rejected) SelectToComment(string line)
     {
         SortedList<int, Span> taken = [];
+        List<Span> rejected = [];
         // tocomment's own [-\w] boundary (AnchoredPatterns) already rejects every hit T30's rule rejects.
         foreach (var (entry, spans) in Entries(line, RawHits(line), wholeTokenShortValues: false))
         {
             var patterns = ToCommentProcessor.AnchoredPatterns(entry.Text);
             var replacement = ToCommentProcessor.Replacement(entry.Token);
+            var envForm = entry.Kind == VariantKind.Plain && !Apply.HasControlCharacter(entry.Text);
             List<(int At, int Alternative)> attempts = [];
             foreach (var (start, _) in spans)
             {
@@ -290,11 +338,16 @@ public sealed class SecretMatcher(FingerprintIndex index, IReadOnlySet<string> b
                 var end = at + match.Length;
                 if (Overlaps(taken, at, end))
                     continue;
-                taken.Add(at, new Span(at, end, replacement, entry.Token, entry.Kind));
+                var valueEnd = at + entry.Text.Length + (alternative < 2 ? 2 : 0);
+                var span = new Span(at, end, replacement, entry.Token, entry.Kind);
+                if (ToCommentProcessor.FillsBack(line[..at], line[valueEnd..end], line[end..], envForm))
+                    taken.Add(at, span);
+                else
+                    rejected.Add(span);
                 position = end;
             }
         }
-        return taken;
+        return (taken, rejected);
     }
 
     private static bool Overlaps(SortedList<int, Span> taken, int start, int end)

@@ -27,28 +27,27 @@ public sealed class ToCommentCommand : ICliCommand
         var matcher = FingerprintRedaction.Matcher(ctx, view, keys, "tocomment", changesFile: true);
 
         var content = File.ReadAllText(filePath);
-        var (newContent, changes, unreplaced) = Redact.ToCommentReporting(content, matcher);
+        var report = Redact.ToCommentReport(content, matcher);
+        var changes = report.Changes;
+
+        // Brief T50b (owner decision 6): a note per replaced secret whose name marks it as a username, never its value.
+        foreach (var name in report.ReplacedNames.Where(ToCommentProcessor.IsUsernameName))
+            ctx.Console.Error.WriteLine(
+                $"Note: '{name}' looks like a username; if it is a username (never a password), keep it in a field instead " +
+                $"({ElevatedCommand.For(ctx.Prefix, $"field adopt NAME username --from {name}")}), so tocomment leaves it alone.");
 
         if (changes.Count == 0)
         {
             // Brief T22: nothing replaced, so nothing is written (a CRLF file keeps its line ends).
-            if (unreplaced.Count == 0)
+            if (report.Unreplaced.Count == 0 && report.Skipped.Count == 0)
             {
                 ctx.Console.Error.WriteLine("No secrets found. File unchanged.");
                 return 0;
             }
-            WriteWarnings(ctx, unreplaced);
+            WriteWarnings(ctx, report);
             ctx.Console.Error.WriteLine("File unchanged.");
             return 0;
         }
-
-        // Redact the "before" lines in a single pass, with the same matcher.
-        var normalDiffs = changes.Where(d => d.After != "").ToList();
-        var redactedBefores = Redact.RedactContent(
-            string.Join('\n', normalDiffs.Select(d => d.Before)), matcher).Split('\n');
-        var redactedByLineNumber = normalDiffs
-            .Select((d, idx) => (d.LineNumber, Redacted: redactedBefores[idx]))
-            .ToDictionary(x => x.LineNumber, x => x.Redacted);
 
         foreach (var diff in changes)
         {
@@ -70,12 +69,14 @@ public sealed class ToCommentCommand : ICliCommand
             }
             else
             {
-                ctx.Console.Error.WriteLine($"  - {redactedByLineNumber[diff.LineNumber]}");
-                ctx.Console.Error.WriteLine($"  + {diff.After}");
+                // Brief T50b: each text redacted on its own (no join and split), the "after" text too: a changed
+                // line can keep an occurrence it left in place (a second value in its comment).
+                ctx.Console.Error.WriteLine($"  - {Redact.RedactContent(diff.Before, matcher)}");
+                ctx.Console.Error.WriteLine($"  + {Redact.RedactContent(diff.After, matcher)}");
             }
         }
 
-        WriteWarnings(ctx, unreplaced);
+        WriteWarnings(ctx, report);
 
         if (dryRun)
         {
@@ -83,9 +84,27 @@ public sealed class ToCommentCommand : ICliCommand
             return 0;
         }
 
-        File.WriteAllText(filePath, newContent);
+        File.WriteAllText(filePath, report.Content);
         ctx.Console.Error.WriteLine($"\n✓ {changes.Count} line(s) updated in {filePath}");
         return 0;
+    }
+
+    /// <summary>
+    /// Brief T50b (#394, #399): one warning per occurrence left in place, naming where it is and the token only, never
+    /// the line's text or any form of the value; after T22's warnings. A warning, not a refusal: the exit code stays 0.
+    /// </summary>
+    private static void WriteWarnings(CommandContext ctx, ToCommentReport report)
+    {
+        WriteWarnings(ctx, report.Unreplaced);
+        foreach (var value in report.Skipped)
+        {
+            var where = value.FirstLine == value.LastLine ? $"line {value.FirstLine}" : $"lines {value.FirstLine}-{value.LastLine}";
+            var reason = value.Reason == SkippedReason.InBlockScalar
+                ? "it is inside a YAML block scalar"
+                : "it is not a whole value that apply fills back ('key: value', or 'KEY=value' without control characters)";
+            ctx.Console.Error.WriteLine(
+                $"Warning: {where}: the value of '{value.Token}' (or an encoded form of it) was left in place: {reason}. If it is the secret there, move it out by hand.");
+        }
     }
 
     /// <summary>
