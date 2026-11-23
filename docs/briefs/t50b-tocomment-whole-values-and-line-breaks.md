@@ -55,6 +55,11 @@ Line numbers are at 81759bb; find anchors by content if they drifted.
    (as T22), never `No secrets found.`.
 4. **One multi-line value counts as one change** in the summary.
 5. **Every marker a pin test locks in must fill back** (owner: "that test should never have passed"): Task 2's guard.
+6. **Username note** (owner, #394's `namespace: authentik`; controller correction 2026-11-23): whole values are still
+   replaced, but when a replaced secret's **name** marks it as a username, `tocomment` prints one note per such secret
+   (never the value) pointing to fields. The rule reads the name only, never the value's shape, so a weak plain-word
+   password is never nudged into a field (fields are not masked). Task 1 gives the rule and the text.
+7. **Rule (m) covers the text after the occurrence too** (controller): accepted.
 
 ## What is wrong (evidence)
 
@@ -151,13 +156,33 @@ token for an encoded form on that line (so none is left silently). `SkippedValue
 public enum SkippedReason { NotWholeValue, InBlockScalar }
 public sealed record SkippedValue(int FirstLine, int LastLine, string Token, SkippedReason Reason);
 public sealed record ToCommentReport(string Content, IReadOnlyList<LineDiff> Changes,
-    IReadOnlyList<UnreplacedLine> Unreplaced, IReadOnlyList<SkippedValue> Skipped);
+    IReadOnlyList<UnreplacedLine> Unreplaced, IReadOnlyList<SkippedValue> Skipped,
+    IReadOnlyList<string> ReplacedNames);
 ```
 
 `SkippedValue` carries no text; line numbers are the input file's. `SecretMatcher.ToCommentReport(string content)` does
 the work; `ToCommentReporting` and `ToComment` keep their signatures and return its parts. `Redact` gets the public
 `ToCommentReport(string, SecretMatcher)` and the internal `ToCommentReport(string, SecretsDb)` facades. Update
 `AnchoredPatterns`' doc comment: the prose limitation is gone; the caller applies the rule.
+
+`ReplacedNames` holds the base name (without `:previous`) of every secret with at least one replaced occurrence, line or
+multi-line, distinct, ordered ordinally.
+
+**Username note.** `ToCommentProcessor.IsUsernameName(string name)` (public static) is true when `name` contains `user`,
+`login`, `account` or `email`, compared ordinally ignoring case (`StringComparison.OrdinalIgnoreCase`); it reads the name
+only. For each name in `ReplacedNames` for which it is true, the command prints, on stderr, before the listing (so the
+listing, the warnings and the summary stay where today's tests expect them), exactly:
+
+```
+Note: '{name}' looks like a username; if it is a username (never a password), keep it in a field instead ({adopt}), so tocomment leaves it alone.
+```
+
+where `{adopt}` is `ElevatedCommand.For(ctx.Prefix, $"field adopt NAME username --from {name}")` (on Unix
+`` `sudo tswap field adopt NAME username --from {name}` ``). That is `field adopt`'s real syntax
+(`FieldCommand.cs:36`, `docs/commands.md` "`sudo tswap field adopt NAME FIELD --from SECRET`"): `NAME` is the secret that
+keeps the field (the one the username belongs with, left as the placeholder `NAME`), `username` the field, and the
+username secret goes after `--from` (it is removed once adopted). The note is printed in `--dry-run` and in the live run,
+and changes no exit code.
 
 **Command.** `ToCommentCommand` uses `ToCommentReport`. It redacts **each** `-` text and **each** `+` text on its own
 (`Redact.RedactContent` per text; no join and split), because a changed line can now keep an occurrence (a second value in
@@ -212,6 +237,15 @@ leave out the reason, which is R1 (`NotWholeValue`) unless the row says R2:
 | 29 | `user: authentik  # was # tswap: old.field` | unchanged | `(1, 1, "app-user")` |
 | 30 | `k: foo bar baz` with `fb` = `foo bar baz`, `bb` = `bar baz` | `k: ""  # tswap: fb` | empty (`bar baz` is rejected but lies inside the replaced span) |
 
+Username note, engine level: `IsUsernameName` is true for `k8s-authentik-pg-local-app-username`, `app-user`,
+`LOGIN-name`, `svc-Account` and `ops-email`, and false for `db-pw`, `api-token` and `pem`. `ReplacedNames` rows:
+
+| Secrets | Content | `Content` | `ReplacedNames` |
+|---|---|---|---|
+| `k8s-authentik-pg-local-app-username` = `authentik` | `namespace: authentik` | `namespace: ""  # tswap: k8s-authentik-pg-local-app-username` | `["k8s-authentik-pg-local-app-username"]` |
+| `db-pw` = `authentik` | `namespace: authentik` | `namespace: ""  # tswap: db-pw` | `["db-pw"]` (and `IsUsernameName("db-pw")` is false: no note) |
+| `app-user` = `authentik` | `a: authentik\nb: authentik\n- authentik` | `a` and `b` lines replaced, the `- ` line left | `["app-user"]` (once) |
+
 Two more engine tests: (i) `a-1` = `alpha-value-1`, `b-2` = `beta-value-22`; `k: alpha-value-1  # beta-value-22` gives
 `k: ""  # tswap: a-1  # beta-value-22` and `Skipped` `[(1, 1, "b-2")]`, the oracle the same content (the gate on the
 original line, whichever entry the oracle tries first); (ii) `v-1` = `v1-value-aaaa`, `v-2` = `v2-value-bbbb`,
@@ -238,18 +272,23 @@ Command tests (`TswapTests/CommandTests.cs`, beside the redact tests, `RunTswap`
   `tocomment --dry-run`: exit 0; stderr (LF-normalised) lists `  line 3:` and `  line 8:` with their redacted `-` and `+`
   texts, then exactly two full warning lines, the template with `{where}` = `line 6`, `'app-user'` and R1, then the same
   for `line 7`, and ends
-  `(dry run) 2 line(s) would be modified.`; it doesn't contain `authentik`. Then the live run: lines 3 and 8 become
+  `(dry run) 2 line(s) would be modified.`; its first line is exactly the username note for `app-user` (the template
+  with `{adopt}` = `ElevatedCommand.For("tswap", "field adopt NAME username --from app-user")`) and it holds no other
+  `Note:` line; it doesn't contain `authentik`. Then the live run: lines 3 and 8 become
   markers, lines 1-2 and 4-7 are byte for byte as before. (The manifest lives only here, not in the T46 corpus, which
   holds values, not files; say so in the commit.)
+- No note for a password: `authentik` ingested as `db-pw`, the file `namespace: authentik\n`; `tocomment --dry-run`
+  exits 0, lists the change for line 1, and stderr contains neither `Note:` nor `field adopt`.
 - Listing without a join: `v-1` = `v1-value-aaaa`, `v-2` = `v2-value-bbbb`, `m` = `x: v1-value-aaaa\ny: v2-value-bbbb`;
   the file `x: v1-value-aaaa\nother: 1\ny: v2-value-bbbb\n`; `tocomment --dry-run` exits 0 and stderr holds
   `  line 1:\n  - x: [REDACTED: v-1]\n` and `  line 3:\n  - y: [REDACTED: v-2]\n` (LF-normalised).
 
-Break-it-once (seven runs): (a) make rules (a), (a′) and (b) always true: rows 2, 12, 13 and the manifest test must fail;
+Break-it-once (nine runs): (a) make rules (a), (a′) and (b) always true: rows 2, 12, 13 and the manifest test must fail;
 (b) drop (a′)'s control-character and plain-form conditions: rows 22 and 24 must fail; (c) print the `+` text unredacted:
 `ToCommentDryRunPinTests` must fail; (d) put the join back: the listing test must fail; (e) take the rule out of the oracle
 only: row 2's oracle comparison must fail; (g) drop rule (m): rows 27-29 must fail; (f) drop the whitespace requirement before a consumed marker: row 26 must
-fail.
+fail; (h) make `IsUsernameName` always true: the `db-pw`
+command test must fail; (i) make it always false: the manifest test must fail.
 
 ## Task 2: the round-trip guard (owner decision 5)
 
@@ -386,11 +425,11 @@ text: rows 11 and 13 must fail; (d) let a span that ends at a line break be repl
 
 ## Task 4: docs
 
-- `docs/commands.md`, the "Other changes in 0.3" paragraph (line 107): replace "`tocomment --dry-run` redacts its
+- `docs/commands.md`, the "Other changes in 0.3" paragraph (line 113): replace "`tocomment --dry-run` redacts its
   "before" lines in one pass, so a value spanning two changed lines is masked there too" with: `--dry-run` redacts each
   changed line's "before" and "after" text on its own, and lists a replaced multi-line value as `[value over N lines]`,
   never its text.
-- `docs/commands.md`, the `tocomment` paragraph (from line 112): `tocomment` replaces a value only where `apply` fills it
+- `docs/commands.md`, the `tocomment` paragraph (from line 118): `tocomment` replaces a value only where `apply` fills it
   back, double-quoted (`key: value`, or `KEY=value` holding no control character; nothing but a `#` comment after it,
   with whitespace before the `#`; no `#` before it outside quotes; no other `# tswap:` text anywhere on the line), with `namespace: authentik`
   replaced and `- authentik.sources…`, a command line, a URL, a comment and a flow collection not, and warns, naming the
@@ -401,7 +440,8 @@ text: rows 11 and 13 must fail; (d) let a span that ends at a line break be repl
   shell scripts and YAML kept in a block, not for JSON" with the same rule applied inside a block (`export TOKEN=…` is
   replaced, `run --user …` is not), keeping one sentence that markers are not for JSON. On `KEY=` lines say only what
   `apply` does: it writes `KEY="value"` and keeps the rest of the line; a reader that takes quotes and a ` # …`
-  literally (`docker run --env-file`) sees them as part of the value, as for any marker on such a line since T20. Don't claim dotenv needs whitespace before `#`, or that ` # …` is a comment on a `KEY=` line.
+  literally (`docker run --env-file`) sees them as part of the value, as for any marker on such a line since T20. Describe the username note: printed once per replaced secret whose name
+  contains `user`, `login`, `account` or `email`, never decided from the value, pointing to `field adopt`. Don't claim dotenv needs whitespace before `#`, or that ` # …` is a comment on a `KEY=` line.
 - `docs/security-model.md` line 338: `tocomment` replaces a value only between `[-\w]` boundaries and, since 0.3.3, only
   where `apply` can fill it back.
 - `TswapCore/Prompt.cs` and `ToCommentCommand.Description` stay as they are.
