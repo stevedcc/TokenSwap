@@ -110,8 +110,8 @@ None of these texts (the refusal, the note, the warning) ever names a secret, a 
 
 Other changes in 0.3, from reading metadata only: `redact` masks a multi-line value (a PEM key) across
 lines; neither command matches a secret inside or across a label or marker it inserted itself;
-`tocomment --dry-run` redacts its "before" lines in one pass, so a value spanning two changed lines is
-masked there too; `get` and `apply` no longer report records they don't read; `check` no longer stops
+`tocomment --dry-run` redacts each changed line's "before" and "after" text on its own, and lists a
+replaced multi-line value as `[value over N lines]`, never its text; `get` and `apply` no longer report records they don't read; `check` no longer stops
 on an unreadable format 2 record that no marker names; and conflicted copies that only their
 plaintext could show equal make `list` and `check` refuse that record
 ([details](security-model.md#what-each-command-decrypts)).
@@ -120,13 +120,32 @@ one stored value, a PEM key say: the key line becomes `key: ""  # tswap: <name>`
 go (`--dry-run` shows them as `[removed block line]`, never their text). Inside a block scalar (`|` or
 `>`, with any indicators, anchor or tag), a line holding an **encoded** form of a value (base64, base64url or
 the value without its whitespace) is left as it is, with a warning naming the line number and the
-secret, because a marker is always filled with the plain value. A plain value inside a block is still
-replaced by a marker, whose `#` then becomes part of the block's text: right for shell scripts and
-YAML kept in a block, not for JSON. Known gaps, handled as any other line: a document-root block
+secret, because a marker is always filled with the plain value. A plain value inside a block follows the
+same whole-value rule as any other line (below): `export TOKEN=…` is replaced, and the marker's `#` becomes
+part of the block's text, a shell comment; `run --user …` is not. Markers are not for JSON. Known gaps, handled as any other line: a document-root block
 (`--- |`, `--- >`), a bare nested entry (`- - |`), an empty key (`: |`) and keys containing `#`
 (`- - key: |` and `? key: |` are recognised). `check` warns (exit 2) about a
 marker under `data:` in a `kind: Secret` manifest, where Kubernetes expects base64 but the marker gets
 the raw value: use `stringData:` (JSON status `data-not-base64`).
+
+Since 0.3.3 `tocomment` replaces a value only where `apply` fills it back, double-quoted: after `key:`, or
+after `KEY=` when the value holds no control character; with nothing but a `#` comment after it, and
+whitespace before that `#`; with no `#` before it outside quotes; and with no other `# tswap:` text
+anywhere on the line. So `namespace: authentik` is replaced, while `- authentik.sources…`, a command line,
+a URL, a comment and a flow collection (`{user: x}`, `[x]`) are not. For each occurrence it leaves, it
+warns, naming the line and the secret, never the value ("…was left in place: …. If it is the secret
+there, move it out by hand."); a file it doesn't change then ends with `File unchanged.`, exit code 0. A
+value with a line break is found whatever the line endings of the value and of the file. It is replaced
+when it is such a value after `key:` (one change, shown as `[value over N lines]`), and warned about
+otherwise (`lines A-B`). `apply` writes the value double-quoted, so the YAML meaning can change: `user:authentik`
+was one plain scalar, and a quoted scalar broken over lines folded its line break. On a `KEY=` line
+`apply` writes `KEY="value"` and keeps the rest of the line. A reader that takes quotes and a ` # …`
+literally (`docker run --env-file`) sees them as part of the value, as for any marker on such a line. A
+value can't be told from a credential by its shape, so a username is replaced like a password.
+For each replaced secret whose **name** contains `user`, `login`, `account` or `email` (never decided from
+the value), `tocomment` prints one note pointing to `field adopt`
+(`sudo tswap field adopt NAME username --from <secret>`): a field is not a secret, so `tocomment` leaves it
+alone.
 
 `run` (since 0.3) decrypts only the value versions it substitutes and masks every other value in the
 vault that has fingerprints, in its stored forms (verbatim, whitespace-stripped, base64, base64url),
