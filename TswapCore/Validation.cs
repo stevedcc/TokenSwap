@@ -1015,9 +1015,10 @@ public static class Validation
         name = name.Replace('\\', '/');
         name = name[(name.LastIndexOf('/') + 1)..];
         // Review fix F15: a ':stream' suffix only on a name that is a program file before its first ':', so an image
-        // tag (python:3.12, node:20) keeps its ':' and is not read as the interpreter.
-        if (name.IndexOf(':') is var colon and >= 0 && HasProgramExtension(name[..colon]))
-            name = name[..colon];
+        // tag (python:3.12, node:20) keeps its ':' and is not read as the interpreter. F17: that head is tested as
+        // Windows names it, trailing dots and spaces dropped (x.cmd.:s, pwsh.exe ::$DATA).
+        if (name.IndexOf(':') is var colon and >= 0 && name[..colon].TrimEnd('.', ' ') is var head && HasProgramExtension(head))
+            name = head;
         return name.TrimEnd('.', ' ');
     }
 

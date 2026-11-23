@@ -140,6 +140,8 @@ public sealed class RunBatchRefusalTests : IDisposable
         new[] { "anytool", "--flag", "x.bat", "{{pw}}" },
         // A4: a name Windows normalises to a batch file.
         new[] { "x.cmd.", "{{pw}}" },
+        // Review fix F17: a stream suffix after a trimmed program name.
+        new[] { "x.cmd.:s", "{{pw}}" },
         new[] { "CMD.EXE", "{{pw}}" },
     };
 

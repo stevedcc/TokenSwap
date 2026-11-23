@@ -163,6 +163,9 @@ public class InlineCodeBlockTests
     [InlineData("PowerShell.EXE.", "-c", "Write-Host {{x}}")]
     [InlineData("pwsh.exe::$DATA", "-c", "Write-Host {{x}}")]
     [InlineData("pwsh.exe:s", "-c", "Write-Host {{x}}")]
+    // Review fix F17: the head before the ':' is trimmed before the stream gate.
+    [InlineData("pwsh.exe.:$DATA", "-c", "Write-Host {{x}}")]
+    [InlineData("pwsh.exe ::$DATA", "-c", "Write-Host {{x}}")]
     [InlineData("python.exe.", "-c", "print('{{x}}')")]
     [InlineData("cmd.exe.", "/c", "echo {{x}}")]
     public void InlineCodeOrBlockedProgram_IsRefused(params string[] argv)
