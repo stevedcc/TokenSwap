@@ -217,3 +217,29 @@ the `get` corpus test, the `apply` test and the PowerShell test fail (15 or 16 c
 - Setting `Console.OutputEncoding` or `Console.InputEncoding` anywhere.
 - Linux and macOS (already UTF-8; the new code returns null there).
 - Unicode normalisation (#400), Git Bash argument changes (#402).
+
+## Amendments (round 1; GLM ready, MiMo ready after A1)
+
+- **A1 (MiMo I-1, GLM I1; replaces Task 4's `docs/commands.md` paragraph wording).** No `sudo` in Windows text
+  (`commands.md` says Windows has none: "from an elevated prompt"). Say exactly which consumer gets exact bytes: in cmd,
+  `tswap get n > f` and `tswap get n | other-program` carry the value's exact UTF-8 bytes (the receiving program must read
+  UTF-8; `clip` and tools that assume the OEM code page don't). In PowerShell, capturing (`$v = tswap get n`) or piping
+  into a cmdlet decodes with `[Console]::OutputEncoding`: set `[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)`
+  first. Piping into **another program** in Windows PowerShell 5.1 (and 7.0–7.3) re-encodes with `$OutputEncoding`, ASCII
+  in 5.1: also set `$OutputEncoding = [System.Text.UTF8Encoding]::new($false)` (the line the stdin paragraph already
+  gives), or use `cmd /c "tswap get n | …"`, or PowerShell 7.4+ (only if Task 4's 7.4 check confirms its byte-preserving
+  native pipe; otherwise leave 7.4 out). Reading a written file back in 5.1: `Get-Content -Encoding UTF8 f` (5.1 reads a
+  BOM-less file as ANSI). Place the paragraph immediately after line 246 of `docs/commands.md` (the stdin paragraph),
+  before the short-value warning paragraph (MiMo M1, GLM M3).
+- **A2 (GLM M1).** `Utf8Writer_EveryNonAsciiCorpusValue_IsItsUtf8Bytes` gets its writer from
+  `Utf8StdoutForSecretValues` over a fake Windows host (stdout not a console) whose `OpenStandardOutput` returns the
+  `MemoryStream`, never from `new StreamWriter(...)` directly.
+- **A3 (GLM M2, MiMo M2/M3/M4).** The PowerShell test builds its own `ProcessStartInfo` (`MakePsi()` hard-codes the tswap
+  binary): `FileName` the shell, copy the `TSWAP_*` environment from `MakePsi()`, `RedirectStandardOutput` and
+  `RedirectStandardError = true`, `CreateNoWindow = false`; `capture.ps1` and the out file live under the class's
+  `_tempDir` (deleted in `Dispose`). One comment line: on a developer machine the shell may share the test host's console
+  and leave its output code page at 65001; on CI each shell gets its own console.
+- **A4 (MiMo M6).** The three new `[WindowsFact]`s pass a why-string, like every existing one.
+- **A5 (MiMo M7).** `OpenStandardOutput` on `ConsoleOutputEncodingTests.FakeHost` must not append to `Calls` (count it in
+  a separate member), so the existing `Assert.Equal(["set 65001"], host.Calls)` assertions stay as they are.
+- **A6 (GLM M5).** Line numbers in the brief may drift by a few lines; find each anchor by its content.
