@@ -60,13 +60,18 @@ public class FingerprintScannerTests
         }
     }
 
-    /// <summary>Every form a value is printed in that the scanner must find: its variants, and the ONLCR form of a multi-line one.</summary>
+    /// <summary>
+    /// Every form a value is printed in that the scanner must find: its variants, the ONLCR form of a multi-line one,
+    /// and (brief T50a) a <c>\r\n</c> value's <c>\n</c>-only form.
+    /// </summary>
     private static IEnumerable<string> PrintedForms(string value)
     {
         foreach (var (_, text) in SecretVariants.For(value))
             yield return text;
         if (value.Contains('\n'))
             yield return Onlcr(value);
+        if (value.Replace("\r\n", "\n") is var lfOnly && lfOnly != value)
+            yield return lfOnly;
     }
 
     private static (List<(string Name, bool IsPrevious, FingerprintSet Set)> Sets, List<string> Values) RandomVault(Random rng, FingerprintKeys keys)
@@ -111,8 +116,9 @@ public class FingerprintScannerTests
     /// <summary>
     /// Property: on the raw text the scanner reports exactly FingerprintIndex's spans, each once, labelled
     /// by the first hit in tie order (name ordinal, current before previous, kind). Its only other hits
-    /// are folded ones (a <c>\r\n</c> inside the span). Fails on any unsound pruning (a character missing
-    /// from a class, a whitespace plain entry classed as whitespace-free).
+    /// are folded or (brief T50a) unfolded ones: an extra hit's raw text, with every <c>\r</c> removed,
+    /// equals a planted value with every <c>\r</c> removed, and holds a <c>\n</c>. Fails on any unsound
+    /// pruning (a character missing from a class, a whitespace plain entry classed as whitespace-free).
     /// </summary>
     [Fact]
     public void Scan_RawHits_EqualFingerprintIndexScan()
@@ -128,12 +134,17 @@ public class FingerprintScannerTests
 
             var expected = index.Scan(text).GroupBy(h => (h.Start, h.Length)).ToDictionary(g => g.Key, g => g.First());
             var actual = Scan(scanner, text);
+            HashSet<string> withoutCr = [.. values.Select(static v => v.Replace("\r", ""))];
 
             Assert.Equal(actual.Count, actual.Select(h => (h.Start, h.Length)).Distinct().Count());
             foreach (var (span, first) in expected)
                 Assert.Equal(first, Assert.Single(actual, h => (h.Start, h.Length) == span));
             foreach (var extra in actual.Where(h => !expected.ContainsKey((h.Start, h.Length))))
-                Assert.Contains("\r\n", text.Substring(extra.Start, extra.Length));
+            {
+                var raw = text.Substring(extra.Start, extra.Length).Replace("\r", "");
+                Assert.True(withoutCr.Contains(raw), $"round {round}: an extra hit at {extra.Start} is no planted value, CRs aside");
+                Assert.True(raw.Contains('\n'), $"round {round}: an extra hit at {extra.Start} holds no line break");
+            }
         }
     }
 
@@ -178,15 +189,39 @@ public class FingerprintScannerTests
         Assert.Equal(new FingerprintHit("crlf", false, VariantKind.Plain, 2, value.Length), hit);
     }
 
-    /// <summary>A documented gap: a CRLF value printed with LF only is not a stored variant.</summary>
+    /// <summary>Brief T50a (#398): a CRLF value printed with LF only is found on the unfolded view.</summary>
     [Fact]
-    public void Scan_CrLfValue_LfOutput_NotFound()
+    public void Scan_CrLfValue_LfOutput_Found()
     {
         using var keys = NewKeys();
         const string value = "a1 x\r\nb2 y\r\nc3";
         var scanner = FingerprintScanner.Build([("crlf", false, Set(value, keys))], keys);
 
-        Assert.Empty(Scan(scanner, "> " + value.Replace("\r\n", "\n") + "\n"));
+        var hit = Assert.Single(Scan(scanner, "> " + value.Replace("\r\n", "\n") + "\n"));
+
+        Assert.Equal(new FingerprintHit("crlf", false, VariantKind.Plain, 2, 12), hit);
+    }
+
+    public static TheoryData<string, string, int, int> LineEndingRows => new()
+    {
+        // Mixed: one line break as stored, one printed with LF only.
+        { "a1 x\r\nb2 y\r\nc3", "> a1 x\nb2 y\r\nc3\n", 2, 13 },
+        { "a1 x\r\nb2 y\r\nc3", "> a1 x\r\nb2 y\r\nc3\n", 2, 14 },
+        { "a1 x\nb2 y\nc3", "> a1 x\nb2 y\nc3\n", 2, 12 },
+        // A value ending in '\r', printed without it: the hit stops before the line break.
+        { "abc def-gh\r", "x: abc def-gh\n", 3, 10 },
+    };
+
+    /// <summary>Brief T50a (#398): a value is found with its raw span whatever the line endings it is printed with.</summary>
+    [Theory, MemberData(nameof(LineEndingRows))]
+    public void Scan_LineEndings_ExactlyOneHit(string value, string text, int start, int length)
+    {
+        using var keys = NewKeys();
+        var scanner = FingerprintScanner.Build([("v", false, Set(value, keys))], keys);
+
+        var hit = Assert.Single(Scan(scanner, text));
+
+        Assert.Equal(new FingerprintHit("v", false, VariantKind.Plain, start, length), hit);
     }
 
     [Fact]

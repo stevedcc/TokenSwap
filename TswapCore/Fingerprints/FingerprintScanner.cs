@@ -21,7 +21,11 @@ namespace TswapCore.Fingerprints;
 /// <para>
 /// A PTY turns a value's <c>\n</c> into <c>\r\n</c> (and <c>\r\n</c> into <c>\r\r\n</c>), so free entries are
 /// also tried on a view of the text with each <c>\r\n</c> folded to <c>\n</c>; such a hit is reported as the
-/// raw span, folded <c>\r</c>s included. <see cref="MaxRawLength"/> allows for them.
+/// raw span, folded <c>\r</c>s included. <see cref="MaxRawLength"/> allows for them. Brief T50a (#398): free
+/// entries are also tried on the view with each <c>\n</c> not preceded by <c>\r</c> unfolded to <c>\r\n</c>
+/// (a <c>\r\n</c> value printed with <c>\n</c> only); such a hit's raw span leaves the inserted <c>\r</c>s out,
+/// so it is never longer than its entry and <see cref="MaxRawLength"/>, the caps and <see cref="PendingFrom(ReadOnlySpan{char})"/>
+/// need nothing more. Both views are built by <see cref="LineEndingViews"/>, as <c>redact</c>'s are.
 /// </para>
 /// <para>
 /// <see cref="PendingFrom"/> reads the text's characters and per-class aggregates only (each class's
@@ -270,8 +274,10 @@ public sealed class FingerprintScanner
             if (_freeShapes.Length > 0)
             {
                 ScanFree(text, prefix, counts!, b, carried, rawStart: null, rawEnd: null, found);
-                if (text.Contains("\r\n", StringComparison.Ordinal))
+                if (LineEndingViews.HasCrLf(text))
                     ScanFolded(text, b, found);
+                if (LineEndingViews.HasBareLf(text))
+                    ScanUnfolded(text, b, found);
             }
 
             if (state is not null)
@@ -465,8 +471,9 @@ public sealed class FingerprintScanner
     }
 
     /// <summary>
-    /// Free entries over one view. <paramref name="rawStart"/>/<paramref name="rawEnd"/> map a folded
-    /// view's indices back to the raw text (null: the view is the raw text).
+    /// Free entries over one view. <paramref name="rawStart"/>/<paramref name="rawEnd"/> map a folded or
+    /// unfolded view's indices back to the raw text (null: the view is the raw text); a window whose raw span
+    /// would be empty is not tried.
     /// </summary>
     private void ScanFree(ReadOnlySpan<char> view, ulong[] prefix, int[] counts, ulong b, int carried, int[]? rawStart, int[]? rawEnd, List<FingerprintHit> found)
     {
@@ -485,8 +492,8 @@ public sealed class FingerprintScanner
                     continue;
                 if (rawStart is null)
                     Try(view, prefix, powers[k], s, length, s, length, found);
-                else
-                    Try(view, prefix, powers[k], s, length, rawStart[s], rawEnd![s + length - 1] - rawStart[s], found);
+                else if (rawEnd![s + length - 1] > rawStart[s])
+                    Try(view, prefix, powers[k], s, length, rawStart[s], rawEnd[s + length - 1] - rawStart[s], found);
             }
         }
     }
@@ -513,6 +520,40 @@ public sealed class FingerprintScanner
         finally
         {
             ArrayPool<char>.Shared.Return(folded, clearArray: true);
+            ArrayPool<int>.Shared.Return(rawStart);
+            ArrayPool<int>.Shared.Return(rawEnd);
+            ArrayPool<ulong>.Shared.Return(prefix);
+            ArrayPool<int>.Shared.Return(counts);
+        }
+    }
+
+    /// <summary>
+    /// Brief T50a (#398): free entries on the view with each <c>\n</c> not preceded by <c>\r</c> unfolded to
+    /// <c>\r\n</c> (<see cref="LineEndingViews.Unfold"/>). An inserted <c>\r</c> maps to the empty raw position
+    /// before its <c>\n</c>, so a hit's raw span is never longer than its entry: <see cref="MaxRawLength"/>, the
+    /// caps and <see cref="PendingFrom(ReadOnlySpan{char})"/> are unchanged. A hit with an empty raw span is dropped.
+    /// </summary>
+    private void ScanUnfolded(ReadOnlySpan<char> text, ulong b, List<FingerprintHit> found)
+    {
+        var capacity = 2 * text.Length;
+        var unfolded = ArrayPool<char>.Shared.Rent(capacity);
+        var rawStart = ArrayPool<int>.Shared.Rent(capacity);
+        var rawEnd = ArrayPool<int>.Shared.Rent(capacity);
+        var prefix = ArrayPool<ulong>.Shared.Rent(capacity + 1);
+        var counts = ArrayPool<int>.Shared.Rent(capacity + 1);
+        try
+        {
+            var m = LineEndingViews.Unfold(text, unfolded, rawStart, rawEnd);
+            var view = unfolded.AsSpan(0, m);
+            PrefixHashes(view, b, prefix);
+            counts[0] = 0;
+            for (var i = 0; i < m; i++)
+                counts[i + 1] = counts[i] + (IsWhitespace(view[i]) ? 1 : 0);
+            ScanFree(view, prefix, counts, b, carried: 0, rawStart, rawEnd, found);
+        }
+        finally
+        {
+            ArrayPool<char>.Shared.Return(unfolded, clearArray: true);
             ArrayPool<int>.Shared.Return(rawStart);
             ArrayPool<int>.Shared.Return(rawEnd);
             ArrayPool<ulong>.Shared.Return(prefix);
