@@ -6,14 +6,20 @@ namespace TswapCli;
 public sealed class SystemConsole : IConsole
 {
     private readonly IConsoleInput _input;
+    private readonly TextWriter? _stdout;
 
-    public SystemConsole() : this(new ConsoleInput())
+    /// <param name="stdout">Brief T52 (#403): the writer for stdout instead of <see cref="Console.Out"/> (null: Console.Out).</param>
+    public SystemConsole(TextWriter? stdout = null) : this(new ConsoleInput(), stdout)
     {
     }
 
-    internal SystemConsole(IConsoleInput input) => _input = input;
+    internal SystemConsole(IConsoleInput input, TextWriter? stdout = null)
+    {
+        _input = input;
+        _stdout = stdout;
+    }
 
-    public TextWriter Out => Console.Out;
+    public TextWriter Out => _stdout ?? Console.Out;
     public TextWriter Error => Console.Error;
     /// <summary>Brief T48: redirected stdin through the one strict UTF-8 reader (<see cref="StrictStdin"/>), a terminal as it is.</summary>
     public TextReader In => _input.IsInputRedirected ? StrictStdin.Shared : Console.In;
@@ -88,7 +94,7 @@ public sealed class SystemConsole : IConsole
 
     public string ReadPassword(TextWriter? echo = null)
     {
-        echo ??= Console.Out;
+        echo ??= Out;
         // When stdin is redirected (e.g. in tests or piped input) skip interactive masking.
         // Write a newline to echo so the next line of stderr output starts on a fresh line
         // (the caller writes the prompt with Write, not WriteLine).

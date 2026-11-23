@@ -66,6 +66,30 @@ public sealed class SystemConsoleTests
         Assert.False(input.TreatControlCAsInput);
     }
 
+    // ---- brief T52 (#403): a given stdout writer
+
+    [Fact]
+    public void Out_GivenStdout_IsThatWriter()
+    {
+        var writer = new StringWriter();
+
+        Assert.Same(writer, new SystemConsole(new ScriptedInput(redirected: true), writer).Out);
+    }
+
+    [Fact]
+    public void Out_NoStdoutGiven_IsConsoleOut() =>
+        Assert.Same(Console.Out, new SystemConsole(new ScriptedInput(redirected: true)).Out);
+
+    [Fact]
+    public void ReadPassword_Redirected_EchoesToGivenStdout()
+    {
+        var writer = new StringWriter();
+        var console = new SystemConsole(new ScriptedInput(redirected: true, lines: ["pw"]), writer);
+
+        Assert.Equal("pw", console.ReadPassword());
+        Assert.Equal(writer.NewLine, writer.ToString());
+    }
+
     // ---- brief T34 (#337.5): ReadLineWithoutEcho
 
     [Fact]
