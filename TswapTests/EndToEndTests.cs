@@ -353,14 +353,14 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         Assert.Equal(0, exit);
     }
 
-    [Fact]
+    [UnixFact("ls and a /tmp path are POSIX-only")]
     public void Run_SecretRedactedFromErrorOutput()
     {
         RunTswap("init", "--yubikey", "--no-recovery");
         RunTswapWithStdin("abc123xyz", "ingest", "my-pass");
 
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
-            return; // ls + /tmp path is POSIX-only
+            throw new UnreachableException("[UnixFact] runs this test only on Linux and macOS");
 
         // ls on a nonexistent path that includes the secret — ls will echo the path in its
         // error message. The test harness redirects stdout, so tswap uses FallbackPty, which
@@ -402,11 +402,11 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     /// its argv. The script checks its own <c>/proc/$$/cmdline</c> for <c>$X</c> and prints only
     /// value-free markers: a value in argv would show up masked in the output, not raw.
     /// </summary>
-    [Fact]
+    [LinuxFact("/proc/<pid>/cmdline is Linux's")]
     public void RunEnv_ValueNotInArgv()
     {
         if (!OperatingSystem.IsLinux())
-            return; // /proc/<pid>/cmdline is Linux's
+            throw new UnreachableException("[LinuxFact] runs this test only on Linux");
         RunTswap("init", "--yubikey", "--no-recovery");
         RunTswapWithStdin("s3cr3t-env-value", "ingest", "my-secret");
         var script = Path.Combine(_tempDir, "argv-check.sh");
