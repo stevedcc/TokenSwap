@@ -404,3 +404,46 @@ must fail; (b) accept `=` in check (a): the `TOKEN=` row must fail.
 - `tocomment` on folded (`>`) or plain multi-line YAML scalars as YAML parses them (#171, AST-based rewriting); values
   that are only whitespace; the guessing-oracle rate limit (#252).
 - Skipping secrets a vault entry marks as non-secret, and moving username secrets to fields (#311 `field adopt`).
+
+## Amendments (round 1; GLM and MiMo)
+
+- **A1 (both, owner sanctioned 2026-11-23): `ToCommentBlockScalarTests.QuotedPipe_NotABlock`** changes under Task 4's rule:
+  new expectation, content unchanged, no `LineDiff`, and `ToCommentReport(...).Skipped` holds `(2, 2, "pem")` (the bare
+  value line is left alone, because `apply` could never fill its marker). The test keeps its name; its comment says what
+  it now pins. Name it in Task 4's commit.
+- **A2 (MiMo I1): no join for redacting the diff texts.** In `ToCommentCommand`, redact each `-` and each `+` text
+  separately (never `string.Join('\n', …)` then `Split('\n')`), so a multi-line value can't match across a joined
+  boundary and shift or crash the listing. Test: two changed lines whose texts concatenate (with `\n`) to a stored
+  multi-line value; the command exits 0 and each line's redaction is under its own header. Break-it-once: restore the
+  join; the test fails (exception or wrong line).
+- **A3 (MiMo I2): quoted values with escapes, fail closed.** Task 3's quoted alternative treats `\\.` as one character
+  inside double quotes and `''` as an escaped quote inside single quotes; the matching quote is the first unescaped one.
+  Rows: `password: "aaaa\"bbbbbbbbbbbb"` → masked to the closing quote; `password: 'it''s a long passphrase'` → masked;
+  existing rows unchanged.
+- **A4 (GLM I2): Task 4's break-it-once (a).** Disable the whole-value check entirely (rules (a) and (b) always true):
+  the `- authentik.sources…` row, the command test and the flow rows must fail.
+- **A5 (GLM I3): a comment after a replaced multi-line value.** After a multi-line replacement, scan the retained
+  after-text on line `b` with the line path; any occurrence there is reported as `SkippedValue` on line `b` (never kept
+  silently). Row: stored `s` = `line-one\nline-two` and `y`; file `token: line-one\nline-two  # key: y\n` → `s` replaced,
+  `y` warned.
+- **A6 (MiMo M1).** A whole value on a commented-out line (`# deprecated: authentik`) is not replaced: rule (a) also
+  requires that the text before the occurrence contains no `#` outside quotes. Row added; Task 4's warning text and Task
+  6's docs say "the shape `apply` fills (`key: value` or `KEY=value`)", not "a YAML whole value" (MiMo M4).
+- **A7 (MiMo M2).** Rule (b)'s rationale: drop the claim that dotenv needs whitespace before `#` (it doesn't); the
+  behaviour (skip and warn) stays, and the docs don't make the claim.
+- **A8 (MiMo M3).** Task 6 keeps one sentence: markers are not for JSON.
+- **A9 (GLM M3).** `MultiLineDiff` lives in `SecretProcessor.cs` beside `LineDiff`; its `After` is redacted with its own
+  `RedactContent` call; the oracle's three forms are de-duplicated; the whole-value gate and line-break pass are virtual
+  seams on `Processor` whose `Redactor` defaults keep today's redact behaviour exactly (a test pins redact unchanged on
+  the corpus).
+- **A10 (GLM M2).** Task 5's skipped branch has the same exemptions as rule (c): no "move it out by hand" warning for
+  block-scalar content or T20-adopted lines.
+- **A11 (MiMo M5, M6).** Comments only: record in the hit-filter helper that a hit ending or starting at an inserted `\r`
+  is dropped on purpose; don't write "only one place on a line can satisfy both rules" anywhere.
+- **A12 (MiMo M9).** "No value in failure text" covers production messages and custom failure strings; expected values in
+  `Assert.Equal` of engine tests (as `RedactEngineTests` does today) are allowed.
+- **A13 (GLM M4, M1).** Task 2's first new row: expected length 13. Line numbers in the brief may drift; find anchors by
+  content.
+- **A14 (MiMo M7, M8).** The #394 manifest shape goes into the new command test only (the corpus holds values, not
+  files): say so in the commit. `field set`'s secret-in-field refusal and its line-ending gap are out of scope; the
+  controller files it.
