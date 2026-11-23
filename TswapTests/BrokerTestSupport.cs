@@ -135,28 +135,74 @@ public sealed class BrokerManualClock : TimeProvider
     }
 }
 
-/// <summary>A log writer tests can wait on: completes waiters when a line containing their text is written.</summary>
-public sealed class ObservedLog : StringWriter
+/// <summary>
+/// A log writer tests can wait on: completes waiters when a line containing their text is written. The broker writes
+/// it from its own threads while a test reads, waits on or clears it, so every write and read holds one lock (#383);
+/// <see cref="TextWriter"/>'s other overloads (spans, formats, async) all end in the ones overridden here.
+/// </summary>
+public sealed class ObservedLog : TextWriter
 {
+    // A plain lock, not an awaitable one: TextWriter.WriteLine is synchronous, product code calls it while holding its
+    // own lock (BrokerLog) or inside YubiKeyLock's synchronous wait, and the critical section is an in-memory append
+    // with no I/O or await.
+    private readonly Lock _gate = new();
+    private readonly StringBuilder _text = new();
     private readonly List<(string Text, TaskCompletionSource Done)> _waiters = [];
+
+    /// <summary>What <see cref="StringWriter"/> reports.</summary>
+    public override Encoding Encoding { get; } = new UnicodeEncoding(false, false);
+
+    public override void Write(char value)
+    {
+        lock (_gate)
+            _text.Append(value);
+    }
+
+    public override void Write(string? value)
+    {
+        lock (_gate)
+            _text.Append(value);
+    }
+
+    public override void Write(char[] buffer, int index, int count)
+    {
+        lock (_gate)
+            _text.Append(buffer, index, count);
+    }
 
     public override void WriteLine(string? value)
     {
-        base.WriteLine(value);
-        lock (_waiters)
+        lock (_gate)
+        {
+            _text.Append(value).Append(CoreNewLine);
             foreach (var w in _waiters.Where(w => value?.Contains(w.Text, StringComparison.Ordinal) == true).ToList())
             {
                 w.Done.TrySetResult();
                 _waiters.Remove(w);
             }
+        }
+    }
+
+    /// <summary>A snapshot of everything written so far.</summary>
+    public override string ToString()
+    {
+        lock (_gate)
+            return _text.ToString();
+    }
+
+    /// <summary>Empties the text; waiters already registered stay registered.</summary>
+    public void Clear()
+    {
+        lock (_gate)
+            _text.Clear();
     }
 
     public Task WaitForAsync(string text)
     {
         var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        lock (_waiters)
+        lock (_gate)
         {
-            if (ToString().Contains(text, StringComparison.Ordinal))
+            if (_text.ToString().Contains(text, StringComparison.Ordinal))
                 return Task.CompletedTask;
             _waiters.Add((text, done));
         }
