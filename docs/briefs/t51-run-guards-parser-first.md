@@ -278,3 +278,37 @@ Don't change `TswapCore/Prompt.cs` (its hash is pinned).
 - Broker templates' argument placeholders (validated by pattern, no secrets in argv).
 - 8.3 names, symbolic links, an interpreter entrypoint under another image name.
 - The prompt text.
+
+## Amendments (round 1; GLM ready, MiMo not ready: these answer both)
+
+- **A1 (MiMo I1, M1): console names, fail closed.** `IsInputPath`'s Windows rule computes the candidate like
+  `WindowsFileName`: both separators, drop an `X:` drive prefix (so `C:CON`, `C:CONIN$` are caught), take the last
+  component, **cut at the first `.` or `:`, then trim trailing dots and spaces** (so `CON .x`, `CON:x`, `CON::$DATA` are
+  caught). Add those to the true table. The docs name `CON`, `CONIN$` and `CONOUT$`.
+- **A2 (both): the bash.exe gap is listed.** Task 5's row-185 edit adds: System32's `bash.exe` (WSL's launcher) runs its
+  command line through `/bin/bash -c`; filed as #411.
+- **A3 (MiMo I3): broker templates.** `broker template add` uses the same `GetBlockedInvocation`
+  (`TswapCore/Broker/Templates/BrokerTemplatePolicy.cs:265`), so its argv check tightens the same way: intended, fail
+  closed. Add one `BrokerTemplatePolicy` test row (`wsl ./deploy.sh {{arg}}` refused, `wsl -e ./deploy.sh {{arg}}`
+  allowed) and one clause in `docs/broker-threat-model.md` near lines 525–526. If an existing broker test breaks, stop and
+  list it.
+- **A4 (GLM I1, MiMo M2): Task 3's break-it-once.** Restore the whole old deno branch (lines 722–735 at the base, with
+  the `args[sub] == "run"` gate and without the any-word rule); the `deno --log-level debug run -` row and the bare `deno`
+  row must fail.
+- **A5 (GLM M1, MiMo M3): deno's walker in a comment.** A comment in `CheckDeno` records that `resolve_subcommand` also
+  skips the word after bare `--env-file`, `--help`, `-h`, and that the aliases `--env` and `-v` aren't matched there, but
+  those flags are `require_equals()`, so the walk specified here matches what deno runs; the resulting over-refusals
+  (`deno -- app.ts`, `deno --env=x run app.ts`, `deno -v x`) are accepted and listed in Task 5.
+- **A6 (GLM M3): `CheckWsl` is terminal.** Its result is returned directly; `CheckWrapper`'s remaining logic never runs for
+  `wsl`.
+- **A7 (GLM M4, MiMo M7).** Task 3's two new reasons are pinned by exact-text facts like Task 4's; the `WayOutReasons`
+  comment count is updated once, at the end of Task 4, to the final number. The Convergence rule is in
+  `docs/briefs/t48-review-fixes.md` only.
+- **A8 (MiMo M4): over-refusal lists.** Add to Task 2's list: an `IsInputPath` word before an interpreter's script
+  (`python3 -W /dev/stderr tool.py`); to Task 4's: `wsl --install --no-launch`, `wsl {GUID} -e ./x.sh`, `wsl -d` with a
+  missing value. Task 5 mirrors them.
+- **A9 (MiMo M5): reason wording.** The three existing reasons the widened rule now also triggers (Validation.cs near
+  1157, 1203, 1230) change "reads code from stdin" to "reads code from stdin or the terminal". That changes their text:
+  any test asserting the old text exactly changes with it (owner-sanctioned rule change; name each in the commit).
+- **A10 (MiMo M6).** Restate the standing rule: no **new** reason interpolates a command word, except the existing
+  `Wrapped` inner-program prefix (`'wsl' runs '<program>': …`).
