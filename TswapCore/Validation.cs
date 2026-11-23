@@ -792,13 +792,14 @@ public static class Validation
                 continue;
             }
             // The wrapped command, checked in full (a bare interpreter reading stdin is refused).
-            if (IsWrappedCheckedProgram(arg))
-                return Wrapped(i);
-            // Not a checked program. For a wrapper whose options this check knows completely,
-            // it is the command (sudo apt install python3 passes). For any other wrapper it may
-            // be the value of an unknown option (bwrap --ro-bind / / python), so keep scanning
-            // and refuse any later checked program that would be refused on its own, a bare
-            // interpreter reading stdin included: failing closed.
+            if (IsWrappedCheckedProgram(arg) && Wrapped(i) is { } wrapped)
+                return wrapped;
+            // Not a checked program, or one that passes. For a wrapper whose options this check knows
+            // completely, it is the command (sudo apt install python3 passes). For any other wrapper it
+            // may be the value of an unknown option (bwrap --ro-bind / / python; review fix F22:
+            // bwrap --tmpfs /python bash -c ..., whatever word the value is), so keep scanning and refuse
+            // any later checked program that would be refused on its own, a bare interpreter reading
+            // stdin included: failing closed.
             if (TrustedWrappers.Contains(program))
                 return null;
             for (var k = i + 1; k < args.Count; k++)

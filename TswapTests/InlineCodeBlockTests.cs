@@ -176,6 +176,9 @@ public class InlineCodeBlockTests
     [InlineData("docker", "run", "mcr.microsoft.com/powershell@sha256:0123456789abcdef", "-c", "Write-Host {{x}}")]
     [InlineData("find", ".", "-exec", "python@sha256:0123456789abcdef", "-c", "print('{{x}}')", ";")]
     [InlineData("docker", "run", "python:3.12@sha256:0123456789abcdef", "-c", "print('{{x}}')")]
+    // Review fix F22: a checked word that is an unknown option's value can't hide the command after it.
+    [InlineData("bwrap", "--tmpfs", "/node:20", "bash", "-c", "echo {{x}}")]
+    [InlineData("bwrap", "--tmpfs", "/python", "bash", "-c", "echo {{x}}")]
     // Review fix F19: wsl runs the command after its options (-e/--exec name it).
     [InlineData("wsl", "bash", "-c", "echo {{x}}")]
     [InlineData("wsl", "-d", "Ubuntu", "bash", "-c", "echo {{x}}")]
