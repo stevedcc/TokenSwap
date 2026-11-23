@@ -197,6 +197,9 @@ public class InlineCodeBlockTests
     [InlineData("wsl", "-d", "Ubuntu", "--exec=./deploy.sh", "{{x}}")]
     [InlineData("python.exe.", "-c", "print('{{x}}')")]
     [InlineData("cmd.exe.", "/c", "echo {{x}}")]
+    // Review fix G1: the stdin paths compare case-insensitively.
+    [InlineData("python3", "/dev/STDIN", "{{x}}")]
+    [InlineData("perl", "/Dev/Fd/0", "{{x}}")]
     public void InlineCodeOrBlockedProgram_IsRefused(params string[] argv)
     {
         Assert.NotNull(Validation.GetBlockedInvocation(argv));
@@ -602,6 +605,9 @@ public class InlineCodeBlockTests
     [InlineData("pwsh", "-ExecutionPolicy", "Bypass", "./x.ps1", "{{pw}}")]
     [InlineData("pwsh.exe", "\u2013File", "./x.ps1", "{{pw}}")]
     [InlineData("pwsh", "./x.ps1", "-NoExit", "-", "{{pw}}")]
+    // Review fix G1: a '/' path is pwsh's positional script, not a parameter.
+    [InlineData("pwsh", "/opt/x.ps1", "{{pw}}")]
+    [InlineData("pwsh", "/opt/x.ps1", "-pw={{pw}}")]
     public void Pwsh_PositionalScript_IsAllowed(params string[] argv)
     {
         Assert.Null(Validation.GetBlockedInvocation(argv));
@@ -612,6 +618,12 @@ public class InlineCodeBlockTests
     [InlineData(StdinKind, "pwsh", "--file", "-", "{{pw}}")]
     [InlineData(StdinKind, "pwsh", "-f", "/dev/stdin", "{{pw}}")]
     [InlineData(StdinKind, "pwsh", "-", "{{pw}}")]
+    // Review fix G1: a word that matches no pwsh parameter is its script, so a stdin path there reads stdin.
+    [InlineData(StdinKind, "pwsh", "/dev/stdin", "{{pw}}")]
+    [InlineData(StdinKind, "pwsh", "/dev/fd/0", "{{pw}}")]
+    [InlineData(StdinKind, "pwsh", "/proc/self/fd/0", "{{pw}}")]
+    [InlineData(StdinKind, "pwsh", "-NoProfile", "/dev/stdin", "{{pw}}")]
+    [InlineData(StdinKind, "pwsh", "/dev/STDIN", "{{pw}}")]
     [InlineData(NoScriptKind, "pwsh")]
     [InlineData(NoScriptKind, "pwsh", "-NoProfile")]
     [InlineData(NoScriptKind, "pwsh", "-NoExit", "-File", "./x.ps1", "{{pw}}")]

@@ -529,8 +529,9 @@ public static class Validation
     // ssh options that take a value; a non-option argument after the host is a remote command.
     private const string SshValued = "BbcDEeFIiJLlmOoPpQRSWw";
 
-    // Script paths that are really stdin.
-    private static readonly HashSet<string> StdinScripts = new(StringComparer.Ordinal)
+    // Script paths that are really stdin. Review fix G1: compared ignoring case (fail closed: a case-insensitive file
+    // system, or /dev/STDIN given on purpose).
+    private static readonly HashSet<string> StdinScripts = new(StringComparer.OrdinalIgnoreCase)
         { "-", "/dev/stdin", "/dev/fd/0", "/proc/self/fd/0" };
 
     private const string WayOut =
@@ -1002,6 +1003,16 @@ public static class Validation
 
     private static readonly string[] PwshValuedAliases = ["ep", "if", "of", "wd"];
 
+    // Review fix G1: pwsh's parameters that take no value (CommandLineParameterParser), by full name, and its '?' alias.
+    // A key that is a prefix of none of these, of the valued ones and of file is no parameter: pwsh reads that word as
+    // its positional script file (GetSwitchKey, ParseFile), so '/dev/stdin' or '/opt/x.ps1' is the script.
+    private static readonly string[] PwshSwitchParameters =
+    [
+        "version", "help", "?", "login", "interactive", "noexit", "noprofile", "noprofileloadtime", "nologo",
+        "noninteractive", "servermode", "namedpipeservermode", "sshservermode", "socketservermode", "mta", "sta",
+        "removeworkingdirectorytrailingcharacter",
+    ];
+
     /// <summary>
     /// Brief T49 (#401): Windows PowerShell 5.1 reads its first argument that is not one of its own parameters as
     /// -Command. Its parameters are walked (each valued one consumes the next word, A1's strict spellings only); the
@@ -1049,6 +1060,8 @@ public static class Validation
                 return PowerShellNoScript(program);
             if (PwshValuedAliases.Contains(key) || PwshValuedParameters.Any(p => p.StartsWith(key, StringComparison.Ordinal)))
                 i++;
+            else if (!PwshSwitchParameters.Any(p => p.StartsWith(key, StringComparison.Ordinal)))
+                return PowerShellScript(program, args, i); // G1: no parameter, so the positional script
         }
         return PowerShellNoScript(program);
     }
