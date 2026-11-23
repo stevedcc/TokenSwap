@@ -18,6 +18,13 @@ T50a retired finding 1), the `glob-star` exclusion line, and the added `GitBashE
 other existing test fails because of a rule here, stop and list it. **Do not touch `TswapCore/Validation.cs`** (T51 owns
 its checks); this brief's code goes in a new file. No message and no test failure text contains a value.
 
+## Owner decisions (2026-11-23)
+
+- **RedactingPty 1.3.0 first.** The RedactingPty change below (`RedactionOptions.WindowsArguments` and `WindowsPty`
+  quoting any whitespace) is briefed, built and released before Task 4; Tasks 1-3 don't wait for it.
+- **R1-R3 stay refusals, not warnings.** A secret that silently arrives altered counts as data loss, so `run` refuses
+  rather than starting the child with a value it can't pass exactly.
+
 ## What is wrong (evidence)
 
 `run` hands the child its argv through RedactingPty (`RunCommand.cs:303-311`, `CommandContext.cs:136`, package
