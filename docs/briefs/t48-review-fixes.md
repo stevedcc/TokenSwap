@@ -154,3 +154,30 @@ python:3.12 app` and the same with `node:20` are not refused by the `{{@file}}` 
 has such a row already, it must still pass); the F11/F12 stream rows still refused. Break-it-once: cut at the first `:`
 again; the image-tag rows fail. Also F16 (minor): `StrictStdin`'s refusal message keeps its exact text (the brief fixes
 it), no change.
+
+## Round 4 (code re-review: GLM ready, MiMo two Important)
+
+### F17 (Important, MiMo I1 = GLM M1): trim before the stream gate
+In `WindowsFileName`, take the part before the first `:`, `TrimEnd('.', ' ')` it, and test **that** with
+`HasProgramExtension`; if it passes, the name becomes the trimmed head. Rows: `IsBatchTarget` true for `x.cmd.:s`,
+`x.cmd :s`, `x.cmd.::$DATA`; `InlineCodeOrBlockedProgram_IsRefused` for `pwsh.exe.:$DATA -c …` and `pwsh.exe ::$DATA -c …`;
+run row `["x.cmd.:s", "{{pw}}"]` refused; F15's image-tag rows still allowed. Break-it-once: test the untrimmed head
+again; the new rows fail.
+
+### F18 (Important, MiMo I2): an image tag that names an interpreter, behind a wrapper
+In the wrapper/subcommand walk only (`CheckWrapper` and `find -exec`'s inner check), a word whose last path component,
+with a trailing `:<tag>` removed, names a checked program (`python:3.12` → `python`, `node:20` → `node`,
+`mcr.microsoft.com/powershell:7.4` → `powershell`) is checked as that program with the words after it as its arguments.
+`GetFileTokenRefusal`'s data-word check stays as F15 has it. Rows: `docker run python:3.12 -c "print('{{pw}}')"`,
+`docker run node:20 -e "console.log('{{pw}}')"`, `docker run mcr.microsoft.com/powershell:7.4 -c "Write-Host {{pw}}"`
+refused; `docker run python:3.12 app.py {{pw}}` and F15's `docker run -v {{@cfg.yaml}}:/c.yaml python:3.12 app` allowed.
+`docs/security-model.md`: an image whose entrypoint is an interpreter but whose name doesn't say so still runs
+unchecked. Break-it-once: drop the tag strip; the three refused rows fail.
+
+### F19 (Minor, MiMo M1): `wsl` is a wrapper
+Add `wsl` to `Validation.Wrappers` (with its valued options `-d`, `--distribution`, `-u`, `--user`, `--cd`, `-e`/`--exec`
+taking the command). Rows: `wsl bash -c "echo {{pw}}"` and `wsl -d Ubuntu bash -c "echo {{pw}}"` refused,
+`wsl ./deploy.sh {{pw}}` allowed. If `wsl -e`/`--exec`'s command needs its own handling, treat the word after it as the
+command. Break-it-once: remove `wsl`; the refused rows fail.
+
+### F20 (Minor, MiMo M2): `IsBatchTarget`'s doc comment says the stream suffix is dropped only after a program extension.
