@@ -813,7 +813,7 @@ public static class Validation
     }
 
     // Review fix F18: in a wrapper's command (CheckWrapper, find -exec), a word whose last path component, with a
-    // trailing ':<tag>' removed, names a checked program is a container image of it (python:3.12,
+    // trailing '@<digest>' (F21) and ':<tag>' removed, names a checked program is a container image of it (python:3.12,
     // mcr.microsoft.com/powershell:7.4), checked as that program with the words after it as its arguments. Null when
     // the word isn't such a tag, or already names a checked program as it is.
     private static string? ImageProgram(string word)
@@ -822,8 +822,12 @@ public static class Validation
             return null;
         var last = word.Replace('\\', '/');
         last = last[(last.LastIndexOf('/') + 1)..];
-        return last.IndexOf(':') is var colon and > 0 && ProgramName(last[..colon]) is var name && IsCheckedProgram(name)
-            ? name : null;
+        // F21: a digest first (python@sha256:..., python:3.12@sha256:...), then the tag.
+        if (last.LastIndexOf('@') is var at and > 0)
+            last = last[..at];
+        if (last.IndexOf(':') is var colon and > 0)
+            last = last[..colon];
+        return ProgramName(last) is var name && IsCheckedProgram(name) ? name : null;
     }
 
     private static bool IsWrappedCheckedProgram(string word) =>
