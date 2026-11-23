@@ -2032,7 +2032,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         var capture = Path.Combine(_tempDir, "capture.ps1");
         File.WriteAllText(capture,
             "param($tswap, $name, $out)\r\n" +
-            "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)\r\n" +
+            "" +
             "$v = & $tswap get $name\r\n" +
             "[System.IO.File]::WriteAllText($out, $v, [System.Text.UTF8Encoding]::new($false))\r\n",
             Encoding.ASCII);
