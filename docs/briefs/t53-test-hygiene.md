@@ -183,3 +183,29 @@ no release-note line (tests only).
 - Tests that assert a log line without waiting for it first (none is known to flake; file an issue if one does).
 - `YubiKeyLockTests`' own `StringWriter` (`YubiKeyLockTests.cs:21`, single-threaded).
 - Moving to xUnit v3 for run-time skips; the RedactingPty package's own PTY code; any product code.
+
+## Amendments (round 1; GLM and MiMo: ready to implement)
+
+- **A1 (MiMo I1): the other ten silent passes, same pattern.** `TswapTests/ControllingTerminalPtyTests.cs`'s eight
+  `[Fact]`s (`ReadSecret_AfterDotNetReadLine_EnterEndsThePin`, `…_BackspaceErases`, `ReadSecret_PutsTheTerminalBackAsItWas`,
+  `ReadSecret_Resume_DiscardsWhatWasTypedBeforeTheStop`, `ReadLine_AfterDotNetReadLine_EnterEndsTheAnswerAndItIsEchoed`,
+  `Typeahead_DiscardUnix_DropsWhatWasTypedBeforeIt`, `ReadLine_DiscardsWhatWasTypedBeforeTheRead`,
+  `ReadSecret_DiscardsWhatWasTypedBeforeTheRead`) become `[UnixFact("no pseudo-terminals on Windows")]`;
+  `EndToEndTests.Run_SecretRedactedFromErrorOutput` becomes `[UnixFact(...)]` and `RunEnv_ValueNotInArgv`
+  `[LinuxFact("/proc/<pid>/cmdline is Linux's")]` (use the attribute names `PlatformFacts.cs` actually has; if `LinuxFact`
+  doesn't exist, use the existing mechanism for a Linux-only fact or stop and report). Each early `return;` becomes
+  `throw new UnreachableException(...)` as in Task 3. No assertion changes. One commit (Task 3b), break-it-once: make one
+  of these attributes not skip on the wrong OS in a local reasoning check is impossible on Linux, so instead show the
+  test list on Linux is unchanged (they still run) and name the Windows/macOS skips the controller checks in CI.
+- **A2 (MiMo M1).** Update the doc comments of the four ConPTY tests (`EndToEndTests.cs` near 1376, 1405, 1441, and the
+  fourth) to say they are skipped off Windows and before 1809 by `[WindowsConPtyFact]`.
+- **A3 (MiMo M2, GLM M1).** The flaky test's class is `BrokerInternalErrorTests` (declared inside
+  `BrokerContainerGateTests.cs`); use the class name in commit messages and the report.
+- **A4 (MiMo M3).** `ObservedLog.Encoding` returns `new UnicodeEncoding(false, false)` (what `StringWriter` reports).
+- **A5 (MiMo M4).** `[WindowsConPtyFact]` takes an optional `why` like `UnixFactAttribute(string? why = null)`; call sites
+  pass none. `ConPtySkipReason` lives in `PlatformFacts`. Task 2's base-commit break-it-once forces `OpenPty`'s
+  `int.MinValue` path (the base has no `OpenPtyThrough`).
+- **A6 (MiMo M5).** `SpellingTests` scans `.cs` comments too: British spelling in new comments.
+- **A7 (GLM M3).** In `RunTswapWithPtyCtrlC`, the `using var process` goes; mirror `EnrolOnPty.Run` exactly (process
+  declared before the `try`, the normal-path wait inside it, kill/wait/dispose in `finally` before the descriptors close).
+- **A8 (GLM M4).** `Clear()` keeps registered waiters (today's behaviour); say so in the report.
