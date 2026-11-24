@@ -143,9 +143,12 @@ public sealed record CommandContext(
 
     /// <summary>
     /// Brief T55 (#402): what <c>run</c> reads of the machine to find the file its child starts as on Windows, and whether
-    /// that is an MSYS2 program (<see cref="MsysTarget"/>); null off Windows. Tests substitute a fake file set or null.
+    /// that is an MSYS2 program (<see cref="MsysTarget"/>); a null probe starts every child as given. Null by default: only
+    /// the composition root (<see cref="CliHost"/>) wires the real machine (<see cref="MsysTarget.Probe.ForThisProcess"/>),
+    /// so no in-process test harness finds a Windows runner's Git for Windows (PR #424's CI: Git's
+    /// <c>usr\bin\nice.exe</c>). Tests that need one substitute a fake file set.
     /// </summary>
-    internal Func<MsysTarget.Probe?> MsysProbe { get; init; } = MsysTarget.Probe.ForThisProcess;
+    internal Func<MsysTarget.Probe?> MsysProbe { get; init; } = static () => null;
 
     /// <summary>Issue #251: the machine seams of <c>run</c>'s <c>{{@file}}</c> copies (null: the real machine).</summary>
     internal FilledFilesEnvironment? FilledFilesEnvironment { get; init; }

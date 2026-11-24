@@ -40,4 +40,17 @@ public class CommandContextTests
         Assert.Same(store, ctx.Storage);
         Assert.Equal(1, opened);
     }
+
+    [Fact]
+    public void MsysProbe_OfAContextBuiltDirectly_NeverReadsTheRealMachine()
+    {
+        var keys = new TestKeyYubiKeyService(Key);
+
+        var ctx = new CommandContext(new FakeConsole(), Env(), new Storage("/nonexistent"), keys, new VaultUnlocker(keys, Key), Key, SudoBypass: false);
+
+        // Brief T55 (PR #424's Windows CI): only the composition root (CliHost) wires the real machine's programs, so an
+        // in-process test harness never finds a Windows runner's Git (Git's usr\bin\nice.exe made run start an MSYS2 nice).
+        Assert.NotEqual<Func<MsysTarget.Probe?>>(MsysTarget.Probe.ForThisProcess, ctx.MsysProbe);
+        Assert.Null(ctx.MsysProbe());
+    }
 }
