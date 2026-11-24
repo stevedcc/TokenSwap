@@ -176,8 +176,8 @@ version would make the note fire for *every* record, ASCII ones included, though
 **(my call)** A version 1 set counts as current when its own entries prove the value is ASCII: base64url without
 padding gives the exact UTF-8 byte count (`bytes = floor(3·L/4)`; without a base64url entry the base64 entry has no
 padding, so `bytes = 3·L/4`). When that equals the plain entry's UTF-16 length, every character is ASCII, since any
-other character takes more UTF-8 bytes than UTF-16 units. A set without a base64 entry is not provably ASCII and
-counts as older. So the note and the reindex advice reach exactly the vaults that hold non-ASCII values, and the
+other character takes more UTF-8 bytes than UTF-16 units. A set with no entries (an empty value) has nothing to match and counts as current, as
+today; any other set without a base64 entry is not provably ASCII and counts as older. So the note and the reindex advice reach exactly the vaults that hold non-ASCII values, and the
 count tells how many. `RecordVaultStore.cs:1443` and `:1783` and `SameValue` (`:935`) use the same rule.
 
 **Machines with different Unicode libraries (the ICU risk).** A version 2 set holds forms computed by the writer's
