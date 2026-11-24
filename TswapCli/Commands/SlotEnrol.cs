@@ -9,8 +9,8 @@ namespace TswapCli.Commands;
 
 /// <summary>
 /// Brief T34 test seam of <c>slot enrol</c>'s local file access: called with the path just before each local read of
-/// <c>request.json</c> and <c>receipt.json</c>, each write of <c>approve.json</c> and its delete at the Enter gate (review
-/// round 1 M5), and each enrolment-folder delete (the folder's path), so a test can make that access fail.
+/// <c>request.json</c> and <c>receipt.json</c>, each write of <c>approve.json</c> (after the Enter, in interactive mode;
+/// brief T56), and each enrolment-folder delete (the folder's path), so a test can make that access fail.
 /// </summary>
 public sealed class EnrolFileSeams
 {
@@ -281,45 +281,45 @@ public sealed partial class SlotCommand
             if (getFailure is not null)
                 throw ApproveFailed(getFailure);
             // A3: the line, the local file and what accept parses all come from these very bytes.
-            if (WriteLocal(ctx, approveFile, got.Stdout) is { } notSaved)
-                throw new TswapException(ApproveNotSavedText(notSaved, via, ctx.Prefix) + cleanSentence);
             approveText = Encoding.UTF8.GetString(got.Stdout);
             c.Out.WriteLine(
                 $"Approve file received: {ApproveFileFingerprint(got.Stdout)}. It must match the approve file fingerprint the host printed " +
                 $"above; if it doesn't, press Ctrl-C now (the host's staging folder is then left; remove it with '{clean}').");
+
+            // Brief T34 (#337.5): only an empty line is the Enter; what is typed is not shown (a PIN typed one prompt late, say).
+            // Ctrl-C is the end of input here: nothing was written yet, and the message says what is left.
+            while (true)
+            {
+                c.Out.Write("Press Enter to accept it here. ");
+                string? typed;
+                try
+                {
+                    typed = c.ReadLineWithoutEcho();
+                }
+                catch (OperationCanceledException)
+                {
+                    typed = null;
+                }
+                if (typed is null)
+                    throw new TswapException(
+                        $"The approve file's fingerprint wasn't confirmed, so it was not accepted. This machine's pending request is kept; nothing " +
+                        $"was added on {via}. Run the same '{ctx.Prefix} slot enrol' again to have it approved again (it continues from the kept " +
+                        $"request); the host's staging folder is left: remove it with '{clean}' there.");
+                c.Out.WriteLine();
+                if (typed.Length == 0)
+                    break;
+                c.Out.WriteLine(EnterGateRetryText);
+            }
+
+            // Brief T56 (#361): the approve file is written only after the Enter, so a process ended before it (SIGINT before
+            // the key read starts, Windows' CTRL_C_EVENT, SIGHUP, SIGKILL, a power cut) leaves none behind. Accept parses
+            // approveText; the file is for a by-hand 'slot accept' after a failed accept.
+            if (WriteLocal(ctx, approveFile, got.Stdout) is { } notSaved)
+                throw new TswapException(ApproveNotSavedText(notSaved, via, ctx.Prefix) + cleanSentence);
         }
         finally
         {
             CryptographicOperations.ZeroMemory(got!.Stdout);
-        }
-        // Brief T34 (#337.5): only an empty line is the Enter; what is typed is not shown (a PIN typed one prompt late, say).
-        // Ctrl-C is the end of input here: the approve file goes, and the message says what is left.
-        while (true)
-        {
-            c.Out.Write("Press Enter to accept it here. ");
-            string? typed;
-            try
-            {
-                typed = c.ReadLineWithoutEcho();
-            }
-            catch (OperationCanceledException)
-            {
-                typed = null;
-            }
-            if (typed is null)
-            {
-                // Review round 1 (M5): a failed delete still gives this message, which then names the file.
-                var notDeleted = TryDeleteLocal(ctx, approveFile, () => File.Delete(approveFile));
-                throw new TswapException(
-                    $"The approve file's fingerprint wasn't confirmed, so it was not accepted. This machine's pending request is kept; nothing " +
-                    $"was added on {via}. Run the same '{ctx.Prefix} slot enrol' again to have it approved again (it continues from the kept " +
-                    $"request); the host's staging folder is left: remove it with '{clean}' there." +
-                    (notDeleted is null ? "" : $" Delete {approveFile} by hand (it couldn't be deleted: {notDeleted})."));
-            }
-            c.Out.WriteLine();
-            if (typed.Length == 0)
-                break;
-            c.Out.WriteLine(EnterGateRetryText);
         }
 
         // --- 4. accept, here, from the received bytes ---

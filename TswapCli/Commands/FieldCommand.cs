@@ -20,10 +20,12 @@ namespace TswapCli.Commands;
 /// <item><b><c>show NAME [--history] [--json]</c></b>: the live fields, each value as a JSON string; with
 /// <c>--history</c> each field's current and replaced states, in UTC, removed fields included (marked
 /// <c>(removed)</c>; in JSON under <c>history</c> only). Every name and value is escaped for display.</item>
-/// <item><b><c>adopt NAME FIELD --from SECRET</c></b> (sudo; spec "Commands"): SECRET's current value (burned or not)
-/// becomes NAME's field FIELD and SECRET is deleted, in one commit. The one deliberate path from secret to visible:
-/// the owner approves each, so the value gets no random-looking warning. Guard rail 1 skips SECRET itself but refuses
-/// a value that another live secret holds.</item>
+/// <item><b><c>adopt NAME FIELD --from SECRET [NAME FIELD --from SECRET]…</c></b> (sudo; spec "Commands"): each
+/// SECRET's current value (burned or not) becomes its NAME's field FIELD and every SECRET is deleted, in one commit.
+/// The one deliberate path from secret to visible: the owner approves each, so the value gets no random-looking
+/// warning. Guard rail 1 skips every SECRET of the command but refuses a value that another live secret holds, and
+/// (brief T56, #395: under sudo, where <c>get</c> shows any value) names those secrets, so one value held by several
+/// secrets (one username for two services) is adopted by naming each in its own group.</item>
 /// </list>
 /// A write is metadata only (<see cref="VaultWriter.SetFields"/>): the value version never changes. On a vault
 /// with records that have no fingerprints (format 2), guard rail 1 can't see every value, so a write is refused
@@ -33,14 +35,14 @@ public sealed class FieldCommand : ICliCommand
 {
     public string Name => "field";
     public string HelpUsage =>
-        "field set NAME <FIELD=VALUE…|JSON|@FILE> [--by LABEL] | field unset NAME FIELD… [--by LABEL] | field show NAME [--history] [--json] | field adopt NAME FIELD --from SECRET";
+        "field set NAME <FIELD=VALUE…|JSON|@FILE> [--by LABEL] | field unset NAME FIELD… [--by LABEL] | field show NAME [--history] [--json] | field adopt NAME FIELD --from SECRET [NAME FIELD --from SECRET]…";
     public string Description =>
         "Plain, visible fields on a secret (username, url, consumers, source, kind, expires, rotate, ...): never secret, never substituted into commands; sudo for adopt";
     public bool RequiresSudo => false;
 
     private static string Usage(CommandContext ctx) =>
         $"{ctx.Prefix} field set NAME <FIELD=VALUE…|JSON|@FILE> [--by LABEL] | {ctx.Prefix} field unset NAME FIELD… [--by LABEL] | " +
-        $"{ctx.Prefix} field show NAME [--history] [--json] | {ctx.Prefix} field adopt NAME FIELD --from SECRET";
+        $"{ctx.Prefix} field show NAME [--history] [--json] | {ctx.Prefix} field adopt NAME FIELD --from SECRET [NAME FIELD --from SECRET]…";
 
     /// <summary>The damage warning of <c>field show</c> (spec Merge rule 4).</summary>
     public static string EqualStampWarning(string field) =>
@@ -57,8 +59,7 @@ public sealed class FieldCommand : ICliCommand
         ["set", var name, .. var rest] when !name.StartsWith('-') => Set(ctx, name, rest),
         ["unset", var name, .. var rest] when !name.StartsWith('-') => Unset(ctx, name, rest),
         ["show", var name, .. var rest] when !name.StartsWith('-') => Show(ctx, name, rest),
-        ["adopt", var name, var field, "--from", var secret] when !name.StartsWith('-') && !field.StartsWith('-') && !secret.StartsWith('-')
-            => Adopt(ctx, name, field, secret),
+        ["adopt", .. var rest] when AdoptGroups(rest) is { } groups => Adopt(ctx, groups),
         _ => throw new UsageException(Usage(ctx)),
     };
 
@@ -181,14 +182,70 @@ public sealed class FieldCommand : ICliCommand
 
     // ------------------------------------------------------------------ adopt
 
-    private static int Adopt(CommandContext ctx, string name, string field, string secret)
+    /// <summary>One <c>NAME FIELD --from SECRET</c> group of <c>field adopt</c>.</summary>
+    private sealed record AdoptGroup(string Name, string Field, string Secret);
+
+    /// <summary>
+    /// The groups of <c>field adopt</c>'s arguments: one or more of <c>NAME FIELD --from SECRET</c>, none of NAME,
+    /// FIELD, SECRET starting with <c>-</c>; null (the usage error) for anything else.
+    /// </summary>
+    private static List<AdoptGroup>? AdoptGroups(string[] rest)
     {
-        Validation.ValidateName(name);
-        Validation.ValidateName(secret);
-        if (FieldRules.ValidateName(field) is { } nameRefusal)
-            throw new TswapException(nameRefusal);
-        if (secret == name)
-            throw new TswapException($"'field adopt' needs two different secrets: '{name}' can't adopt its own value.");
+        if (rest.Length == 0 || rest.Length % 4 != 0)
+            return null;
+        List<AdoptGroup> groups = [];
+        foreach (var chunk in rest.Chunk(4))
+        {
+            if (chunk is not [var name, var field, "--from", var secret]
+                || name.StartsWith('-') || field.StartsWith('-') || secret.StartsWith('-'))
+                return null;
+            groups.Add(new AdoptGroup(name, field, secret));
+        }
+        return groups;
+    }
+
+    /// <summary>
+    /// Brief T56 (#395): guard rail 1's refusal for <c>field adopt</c>, naming the other secrets that hold the value
+    /// (never the value). Only adopt names them: it runs under sudo, where <c>get</c> shows any value.
+    /// </summary>
+    internal static string AdoptHolderRefusal(string name, string field, IReadOnlyList<FieldSecretCheck.SecretHolder> holders) =>
+        $"Refused: the value for '{name}.{field}' contains a stored secret value. Fields are visible; a secret never goes in one. " +
+        $"It contains the value of {string.Join(", ", holders.Select(h => h.PreviousOnly ? $"'{h.Name}' (its previous value)" : $"'{h.Name}'"))}. " +
+        "If those hold the same setting (one username for two services, say), adopt them in the same command, " +
+        "one NAME FIELD --from SECRET group each; otherwise change them first.";
+
+    private static int Adopt(CommandContext ctx, List<AdoptGroup> groups)
+    {
+        // 1. Each group's names, in the order given.
+        foreach (var (name, field, secret) in groups)
+        {
+            Validation.ValidateName(name);
+            Validation.ValidateName(secret);
+            if (FieldRules.ValidateName(field) is { } nameRefusal)
+                throw new TswapException(nameRefusal);
+            if (secret == name)
+                throw new TswapException($"'field adopt' needs two different secrets: '{name}' can't adopt its own value.");
+        }
+
+        // 2. Across groups (ordinal, as names are everywhere).
+        HashSet<string> secrets = new(StringComparer.Ordinal);
+        foreach (var (_, _, secret) in groups)
+        {
+            if (!secrets.Add(secret))
+                throw new TswapException($"'field adopt' names '{secret}' twice after --from.");
+        }
+        HashSet<string> targets = new(StringComparer.Ordinal);
+        foreach (var (name, field, _) in groups)
+        {
+            if (!targets.Add($"{name}.{field}"))
+                throw new TswapException($"'field adopt' names '{name}.{field}' twice.");
+        }
+        var names = groups.Select(g => g.Name).ToHashSet(StringComparer.Ordinal);
+        if (groups.FirstOrDefault(g => names.Contains(g.Secret)) is { } adoptedAndReceiving)
+            throw new TswapException(
+                $"'{adoptedAndReceiving.Secret}' is adopted (and deleted) in this command, so it can't receive a field in it too.");
+
+        // 3. Sudo, then the vault.
         ctx.RequireSudo("field adopt");
 
         var who = FieldWhoSource.Current(ctx, by: null);
@@ -204,43 +261,56 @@ public sealed class FieldCommand : ICliCommand
                 throw new TswapException(NotFingerprintedRefusal(ctx.Prefix, "field adopt", metadata.NotFingerprinted));
             FingerprintTexts.NoteOlderVariants(ctx.Console.Error, ctx.Prefix, metadata.OlderVariantSet);
 
-            if (writer.Fields(name) is not { } fields)
+            // 4. Each group against the vault, in order; the one value decrypted per group is SECRET's current one.
+            List<string> values = [];
+            foreach (var (name, field, secret) in groups)
             {
-                writer.ThrowIfUnreadable(name);
-                throw new TswapException($"No secret '{name}'.");
-            }
-            if (fields.Get(field) is { Deleted: false })
-                throw new TswapException($"'{name}.{field}' has a value already; unset it first ({ctx.Prefix} field unset {name} {field}).");
-            if (writer.Fields(secret) is not { } secretFields)
-            {
-                writer.ThrowIfUnreadable(secret);
-                throw new TswapException($"No secret '{secret}'.");
-            }
-            var own = secretFields.Live.Select(e => e.Name).Order(StringComparer.Ordinal).ToList();
-            if (own.Count > 0)
-                throw new TswapException(
-                    $"'{secret}' has fields of its own ({string.Join(", ", own.Select(n => Escaped(n)))}); move them first.");
+                if (writer.Fields(name) is not { } fields)
+                {
+                    writer.ThrowIfUnreadable(name);
+                    throw new TswapException($"No secret '{name}'.");
+                }
+                if (fields.Get(field) is { Deleted: false })
+                    throw new TswapException($"'{name}.{field}' has a value already; unset it first ({ctx.Prefix} field unset {name} {field}).");
+                if (writer.Fields(secret) is not { } secretFields)
+                {
+                    writer.ThrowIfUnreadable(secret);
+                    throw new TswapException($"No secret '{secret}'.");
+                }
+                var own = secretFields.Live.Select(e => e.Name).Order(StringComparer.Ordinal).ToList();
+                if (own.Count > 0)
+                    throw new TswapException(
+                        $"'{secret}' has fields of its own ({string.Join(", ", own.Select(n => Escaped(n)))}); move them first.");
 
-            // The one value decrypted: SECRET's current one (burned or not), as restore decrypts the one it puts back.
-            var value = view.ResolveToken(secret);
-            // The refusal never shows the value: SECRET stays a secret when nothing is written.
-            if (FieldRules.Validate(field, value, valueOf: secret) is { } refusal)
-                throw new TswapException($"Secret '{name}': {refusal}");
+                // As restore decrypts the one it puts back, burned or not.
+                var value = view.ResolveToken(secret);
+                // The refusal never shows the value: SECRET stays a secret when nothing is written.
+                if (FieldRules.Validate(field, value, valueOf: secret) is { } refusal)
+                    throw new TswapException($"Secret '{name}': {refusal}");
+                values.Add(value);
+            }
 
-            // Guard rail 1 without SECRET itself (it is deleted in this commit), so the same value in another live
-            // secret is refused.
+            // 5. Guard rail 1 without every SECRET of the command (all deleted in this commit): the same value in
+            // another live secret is refused, naming that secret (never the value).
             using (var keys = FingerprintKeys.Derive(key))
             {
-                if (FieldSecretCheck.Refusal(view.BuildIndex(keys, except: secret), null, name, field, value) is { } secretRefusal)
-                    throw new TswapException(secretRefusal);
+                var stored = view.BuildIndex(keys, secrets);
+                for (var i = 0; i < groups.Count; i++)
+                {
+                    if (FieldSecretCheck.Holders(stored, values[i]) is { Count: > 0 } holders)
+                        throw new TswapException(AdoptHolderRefusal(groups[i].Name, groups[i].Field, holders));
+                }
             }
 
-            // One commit: the field write and the delete, staged on one writer.
-            writer.SetFields(name, [new FieldEdit(field, value)], who);
-            writer.Delete(secret);
+            // One commit: one field write per NAME (its edits in the order given), then every delete.
+            foreach (var byName in groups.Select((g, i) => (Group: g, Value: values[i])).GroupBy(x => x.Group.Name, StringComparer.Ordinal))
+                writer.SetFields(byName.Key, [.. byName.Select(x => new FieldEdit(x.Group.Field, x.Value))], who);
+            foreach (var group in groups)
+                writer.Delete(group.Secret);
             writer.Commit();
 
-            ctx.Console.Out.WriteLine($"✓ The value of '{secret}' is now the field '{name}.{field}' (visible; {ctx.Prefix} field show {name}); secret '{secret}' deleted.");
+            foreach (var (name, field, secret) in groups)
+                ctx.Console.Out.WriteLine($"✓ The value of '{secret}' is now the field '{name}.{field}' (visible; {ctx.Prefix} field show {name}); secret '{secret}' deleted.");
             return 0;
         }
         finally
