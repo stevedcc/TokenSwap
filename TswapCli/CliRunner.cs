@@ -23,11 +23,13 @@ public static class CliRunner
         catch (TswapException ex)
         {
             ctx.Console.Error.WriteLine($"\n❌ Error: {ex.Message}");
+            WriteIfFolderGone(ctx);
             return ex.ExitCode;
         }
         catch (Exception ex)
         {
             ctx.Console.Error.WriteLine($"\n❌ Error: {ex.Message}");
+            WriteIfFolderGone(ctx);
             return 1;
         }
         finally
@@ -35,5 +37,12 @@ public static class CliRunner
             // Brief T17 ruling 8: a vault key the agent handed this command is zeroed once the command is done.
             ctx.ZeroAgentKeys();
         }
+    }
+
+    /// <summary>Brief T56 (#382): after an error, says when the current folder no longer exists (the error rarely does).</summary>
+    private static void WriteIfFolderGone(CommandContext ctx)
+    {
+        if (CurrentFolder.IsGone(ctx.Env.CurrentDirectory))
+            ctx.Console.Error.WriteLine(CurrentFolder.GoneText);
     }
 }

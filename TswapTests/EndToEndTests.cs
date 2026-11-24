@@ -653,6 +653,59 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         Assert.DoesNotContain("s3cr3t", output);
     }
 
+    // --- Brief T56 task 3 (#382): a deleted current folder ---
+
+    /// <summary>
+    /// Runs tswap with <paramref name="args"/> from a folder deleted just before: <c>/bin/sh</c> enters it, removes it,
+    /// and execs tswap there (MakePsi's environment), so tswap's <c>getcwd</c> fails as in the issue.
+    /// </summary>
+    private (int exitCode, string stdout, string stderr) RunTswapInADeletedFolder(params string[] args)
+    {
+        var gone = Path.Combine(_tempDir, "gone-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(gone);
+        var psi = MakePsi();
+        psi.FileName = "/bin/sh";
+        foreach (var arg in (string[])["-c", "cd \"$1\" && rmdir \"$1\" && shift && exec \"$0\" \"$@\"", _binaryPath, gone, .. args])
+            psi.ArgumentList.Add(arg);
+
+        using var process = Process.Start(psi)!;
+        var stderrTask = process.StandardError.ReadToEndAsync();
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = stderrTask.GetAwaiter().GetResult();
+        process.WaitForExit();
+        Assert.False(Directory.Exists(gone), "the shell did not delete the folder");
+        return (process.ExitCode, stdout, stderr);
+    }
+
+    [UnixFact("Windows can't delete a process's current folder, so the state can't arise there")]
+    public void Run_InADeletedFolder_TheErrorSaysTheFolderIsGone()
+    {
+        RunTswap("init", "--yubikey", "--no-recovery");
+        Assert.Equal(0, RunTswap("create", "s").exitCode);
+
+        var (exit, _, stderr) = RunTswapInADeletedFolder("run", "true", "{{s}}");
+
+        _output.WriteLine(stderr);
+        Assert.Equal(1, exit);
+        var lines = stderr.Replace("\r\n", "\n").Split('\n');
+        var error = Array.FindIndex(lines, l => l.StartsWith("❌ Error: ", StringComparison.Ordinal));
+        Assert.True(error >= 0, stderr);
+        Assert.Equal(TswapCli.CurrentFolder.GoneText, lines[error + 1]);
+    }
+
+    [UnixFact("Windows can't delete a process's current folder, so the state can't arise there")]
+    public void Names_InADeletedFolder_WorksWithoutTheHint()
+    {
+        RunTswap("init", "--yubikey", "--no-recovery");
+        Assert.Equal(0, RunTswap("create", "s").exitCode);
+
+        var (exit, stdout, stderr) = RunTswapInADeletedFolder("names");
+
+        Assert.Equal(0, exit);
+        Assert.StartsWith("s ", stdout);
+        Assert.DoesNotContain(TswapCli.CurrentFolder.GoneText, stdout + stderr);
+    }
+
     // --- No args ---
 
     // --- Unknown command ---
