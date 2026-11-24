@@ -200,8 +200,8 @@ public sealed class RunVaultRedactionTests : IDisposable
     }
 
     /// <summary>
-    /// The older-variant note (unreachable at variant set 1, so built by hand): printed with the coverage
-    /// warning, and on its own when the vault is otherwise fully fingerprinted.
+    /// The older-variant note: printed with the coverage warning, and on its own when the vault is otherwise
+    /// fully fingerprinted.
     /// </summary>
     [Fact]
     public void RunCoverage_OlderVariantSet_Noted()

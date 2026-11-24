@@ -584,6 +584,47 @@ public sealed class RecordStoreV3Tests : IDisposable
         Assert.Equal(otherSet, Store(_m).LoadMetadata(_key, TextWriter.Null).Records.Single().Fingerprints);
     }
 
+    private static FingerprintSet WithOtherHmac(FingerprintSet set, VariantKind kind) =>
+        set with { Entries = [.. set.Entries.Select(e => e.Kind == kind ? e with { Hmac = new byte[FingerprintEntry.HmacLength] } : e)] };
+
+    /// <summary>
+    /// Brief T54 Task 2: a stored version 2 set whose NFD entry differs from this machine's recomputation (another
+    /// Unicode library) is accepted as written: the value reads, the full load keeps the record, and a conflicted
+    /// copy with this machine's set merges into the union of both. Only the base entries are checked.
+    /// </summary>
+    [Fact]
+    public void StoredSet_FormEntryDiffersFromTheRecomputation_ReadsLoadsAndMerges()
+    {
+        WriteMarker(_m);
+        _m.Ok("caf\u00e9-db-pass", "ingest", "s");
+        var record = Read("s");
+        var otherLibrary = WithOtherHmac(record.Fingerprints!, VariantKind.NfdPlain);
+        Plant(File("s"), record with { Fingerprints = otherLibrary }, _key); // its section is copied
+
+        Assert.Equal(Encoding.UTF8.GetBytes("caf\u00e9-db-pass"), Store(_m).ReadSecretValue("s", _key));
+        var db = Store(_m).LoadSecrets(_key, TextWriter.Null);
+        Assert.Null(db.UnreadableFiles);
+        Assert.Equal("caf\u00e9-db-pass", db.Secrets["s"].Value);
+
+        Plant(File("s") + " (1)", record with { Write = new Stamp(new Hlc(record.Write.Hlc.PhysicalMs + 5, 0), new byte[16]) }, _key);
+        var merged = Store(_m).LoadMetadata(_key, TextWriter.Null).Records.Single().Fingerprints!;
+        Assert.Equal(FingerprintSet.Union(record.Fingerprints!, otherLibrary), merged);
+        Assert.Equal(record.Fingerprints!.Entries.Count + 1, merged.Entries.Count);
+        Assert.Null(Store(_m).LoadSecrets(_key, TextWriter.Null).UnreadableFiles);
+    }
+
+    [Fact]
+    public void StoredSet_Base64EntryDiffersFromTheRecomputation_IsRefused()
+    {
+        WriteMarker(_m);
+        _m.Ok("caf\u00e9-db-pass", "ingest", "s");
+        var record = Read("s");
+        Plant(File("s"), record with { Fingerprints = WithOtherHmac(record.Fingerprints!, VariantKind.Base64) }, _key);
+
+        Assert.Contains("fingerprints don't match", Assert.Throws<TswapException>(() => Store(_m).ReadSecretValue("s", _key)).Message);
+        Assert.Contains(Path.GetFileName(File("s")), Store(_m).LoadSecrets(_key, TextWriter.Null).UnreadableFiles!);
+    }
+
     [Fact]
     public void RawFileBytes_HoldNoFingerprintMaterial()
     {

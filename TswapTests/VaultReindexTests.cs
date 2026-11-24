@@ -157,6 +157,28 @@ public sealed class VaultReindexTests : IDisposable
         Assert.Equal(0, Store(_m).LoadMetadata(_key, TextWriter.Null).OlderVariantSet);
     }
 
+    /// <summary>Brief T54 Task 2: reindex rewrites a non-ASCII value's version 1 set, and leaves an ASCII value's.</summary>
+    [Fact]
+    public void Reindex_RewritesOnlyVersionOneSetsOfNonAsciiValues()
+    {
+        WriteMarker(_m);
+        _m.Ok("ascii-value", "ingest", "a");
+        _m.Ok("caf\u00e9-value", "ingest", "c");
+        foreach (var name in new[] { "a", "c" })
+        {
+            var record = ReadRecord(_m, _key, name);
+            var versionOne = new FingerprintSet(1, [.. record.Fingerprints!.Entries.Where(e => e.Kind.BaseKind() == e.Kind)]);
+            File.WriteAllBytes(RecordFile(_m, _key, name), SecretRecordCodec.Encode(record with { Fingerprints = versionOne }, _key, 3));
+        }
+        var asciiBefore = File.ReadAllBytes(RecordFile(_m, _key, "a"));
+
+        var result = Store(_m).Reindex(_key);
+
+        Assert.Equal(new ReindexResult(Rewritten: 1, AlreadyCurrent: 1, Tombstones: 0), result);
+        Assert.Equal(asciiBefore, File.ReadAllBytes(RecordFile(_m, _key, "a")));
+        Assert.Equal(Fingerprints(_key, Encoding.UTF8.GetBytes("caf\u00e9-value")), ReadRecord(_m, _key, "c").Fingerprints);
+    }
+
     [Fact]
     public void Reindex_UnreadableRecord_RefusesBeforeWriting()
     {
