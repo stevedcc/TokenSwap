@@ -76,7 +76,16 @@ The four tasks are independent: any order, no shared code. Do not touch `Redact`
   the state word; the column is the word's width. A name longer than the name column keeps its own line, which now also
   starts with the state: `$"{state}  {name}"`, then `$"{state}  {pad}  {when}  {reason}"`. So every row line carries its
   state, and no slice of the output reads as a to-do list.
-- The `BURNED AT` column is 16 wide (the width of `Hlc.Display`'s `yyyy-MM-dd HH:mm`), so `REASON` lines up.
+- **A reason is always one line.** `burn` joins its arguments into the reason as typed (`BurnCommand.cs:16`) and
+  `VaultWriter.Burn` stores it as given, so a reason can hold a line break (`tswap burn db $'seen\nother  rotate me'`)
+  and would print a line with no state, which is #396 again. In the text output only, the reason goes
+  through a private `BurnedCommand.OneLine(string)`: every
+  character for which `char.IsControl` is true (line feed, carriage return, tab, escape, U+0085 and the rest), and
+  U+2028 and U+2029, becomes one space. Other characters, non-ASCII ones included, are kept (`Validation.Printable` is
+  not used: it turns every non-ASCII character into `?`). The stored reason and `--json` are unchanged.
+- The `BURNED AT` column is 16 wide (the width of `Hlc.Display`'s `yyyy-MM-dd HH:mm`), and each row pads its date to
+  16 (`when.PadRight(16)`), so `REASON` lines up also for a clamped date, which `Hlc.Display` shows as `far future`
+  (10 characters, `Hlc.cs:94-95`).
 
 `MetadataCommandTests.Burned_DecryptsNoValue`'s text expectation becomes exactly (sanctioned: #396 asks for this output;
 the JSON half of the test does not change):
@@ -110,10 +119,14 @@ New tests (in-process, `FleetMachine` with a fixed clock, as `MetadataCommandTes
 | 0 outstanding, 2 rotated | first line `No burned secrets need rotation: 0 outstanding, 2 rotated (history, nothing to do).`; every line after the history heading's header and dash lines starts with `rotated  ` |
 | 2 outstanding, 0 rotated | first line `⚠ 2 outstanding (rotate these), 0 rotated (history, nothing to do).`; each row starts with `outstanding  ` |
 | one rotated secret with a 45-character name | the name line and its continuation line both start with `rotated  ` |
+| one outstanding secret burned with the reason `"seen\nfake-name  2026-01-02 03:14  rotate me\r\x1b[2Kx"` | exit 0; every line of stdout after the dash line up to the blank line starts with `outstanding  ` (there is exactly one such line); it ends with `seen fake-name  2026-01-02 03:14  rotate me  [2Kx` (each control character a space); `burned --json`'s `reason` is the stored text unchanged |
+| two outstanding burns, one made with the machine's clock at `DateTimeOffset.MaxValue` (as `RecordConflictTests.AnAbsurdFutureStamp_IsWarnedAbout_AndNamesShowsFarFuture` sets `_otherNow`), one with a normal date | one row shows `far future`; both rows' reasons start in the same column |
 | the 0-outstanding, 9-rotated vault of #396 | `stdout` split into lines, the last 8: every non-empty one starts with `rotated  ` or is the dash/header line (no line looks outstanding) |
 
-Key test: the 0-outstanding row. Break it once by printing `No outstanding burned secrets.` as the first line again; it
-must fail.
+New pinned-text tests normalise line endings as `MetadataCommandTests.Run` does (`Replace("\r\n", "\n")`).
+
+Key tests: the 0-outstanding row (break it once by printing `No outstanding burned secrets.` as the first line again;
+it must fail) and the multi-line reason row (break it once by printing the reason without `OneLine`; it must fail).
 
 ## Task 2 (#395): `field adopt` names the other holders, and adopts several secrets in one command
 
@@ -129,7 +142,8 @@ pass):
 
 1. Per group, in the order given: `Validation.ValidateName(name)`, `ValidateName(secret)`, `FieldRules.ValidateName(field)`,
    and `secret == name` → the existing `'field adopt' needs two different secrets: '{name}' can't adopt its own value.`
-2. Across groups: a SECRET named twice → `$"'field adopt' names '{secret}' twice after --from."`; a `NAME.FIELD` named
+2. Across groups, every comparison ordinal (`StringComparer.Ordinal`, as names are everywhere, so `U1` and `u1` are
+   two names): a SECRET named twice → `$"'field adopt' names '{secret}' twice after --from."`; a `NAME.FIELD` named
    twice → `$"'field adopt' names '{name}.{field}' twice."`; a SECRET that is another group's NAME →
    `$"'{secret}' is adopted (and deleted) in this command, so it can't receive a field in it too."`.
 3. `ctx.RequireSudo("field adopt")`, then the vault opens as now (`ThrowIfAnyUnreadable`, the not-fingerprinted
@@ -165,28 +179,32 @@ Refused: the value for '{name}.{field}' contains a stored secret value. Fields a
 The first two sentences are guard rail 1's message unchanged, so `FieldAdopt_SameLiveValueElsewhere_Refused` keeps
 passing as it is. No message contains a value.
 
-Tests (in `FieldAdoptTests`; `u1`, `u2`, `u3` hold `svc-backup`; every refusal also asserts that nothing was written and
-that neither stdout nor stderr contains `svc-backup`):
+Tests (in `FieldAdoptTests`). Every row has its own fixture: the password secrets `db` and `b` exist, and **only** the
+secrets the row names hold `svc-backup` (a secret holding it that a success row doesn't name would rightly refuse that
+row). Every refusal also asserts that nothing was written and that neither stdout nor stderr contains `svc-backup`.
 
-| Command (after setup) | Outcome |
-|---|---|
-| `adopt db username --from u1 b username --from u2` | exit 0; `db.username` and `b.username` are `svc-backup`; `u1`, `u2` tombstones; two `✓` lines in order |
-| `adopt db username --from u1` (u2 live) | refused; stderr contains `It contains the value of 'u2'. If those hold the same setting` |
-| as above, `u2` and `u3` live | refused naming `'u2', 'u3'` in that order |
-| `adopt db username --from u1 b username --from u2` (u3 live) | refused naming `'u3'` only |
-| `adopt db username --from u1`, `u2` rotated away from `svc-backup` | refused naming `'u2' (its previous value)` |
-| `adopt db username --from u1 db host --from h1` (`h1` holds `db.example`) | exit 0; both fields on `db`, one field write |
-| `adopt db username --from u1 nope username --from u2` | `No secret 'nope'.`; `u1` not deleted |
-| `adopt db username --from u1 b kind --from u2` | the `kind` format refusal for group 2; group 1 not written |
-| `adopt db username --from u1 b username --from u1` | `'field adopt' names 'u1' twice after --from.` |
-| `adopt db username --from u1 db username --from u2` | `'field adopt' names 'db.username' twice.` |
-| `adopt db username --from u1 u1 host --from u2` | `'u1' is adopted (and deleted) in this command, so it can't receive a field in it too.` |
-| without sudo, two groups | the sudo refusal; nothing written |
+| Holders of `svc-backup` | Command | Outcome |
+|---|---|---|
+| `u1`, `u2` | `adopt db username --from u1 b username --from u2` | exit 0; `db.username` and `b.username` are `svc-backup`; `u1`, `u2` tombstones; two `✓` lines in order |
+| `u1`, `u2` | `adopt db username --from u1` | refused; stderr contains `It contains the value of 'u2'. If those hold the same setting` |
+| `u1`, `u2`, `u3` | `adopt db username --from u1` | refused naming `'u2', 'u3'` in that order |
+| `u1`, `u2`, `u3` | `adopt db username --from u1 b username --from u2` | refused naming `'u3'` only |
+| `u1`; `u2` held it before a rotation to another value | `adopt db username --from u1` | refused naming `'u2' (its previous value)` |
+| `u1` (and `h1` holds `db.example`) | `adopt db username --from u1 db host --from h1` | exit 0; both fields on `db`, one field write |
+| `u1`, `u2` | `adopt db username --from u1 nope username --from u2` | `No secret 'nope'.`; `u1` not deleted |
+| `u1`, `u2` | `adopt db username --from u1 b kind --from u2` | the `kind` format refusal for group 2; group 1 not written |
+| `u1` | `adopt db username --from u1 b username --from u1` | `'field adopt' names 'u1' twice after --from.` |
+| `u1`, `u2` | `adopt db username --from u1 db username --from u2` | `'field adopt' names 'db.username' twice.` |
+| `u1`, `u2` | `adopt db username --from u1 u1 host --from u2` | `'u1' is adopted (and deleted) in this command, so it can't receive a field in it too.` |
+| `u1`, `U1` (both, ordinal names) | `adopt db username --from u1 b username --from U1` | exit 0 (not "named twice") |
+| `u1`, `u2` | without sudo, two groups | the sudo refusal; nothing written. Returns early when `Environment.IsPrivilegedProcess`, as `FieldAdopt_WithoutSudo_Refused` does (Windows CI runs elevated) |
 
 Add to `FieldAdopt_BadArguments_Usage`'s rows: `adopt db username --from u1 b`, `adopt db username --from u1 b
 username u2 x`, `adopt db username --from u1 b username --from` (each the usage error); its existing rows are kept.
-A `Holders` unit test: a value containing `u2`'s current and `u3`'s previous value gives `[u2 false, u3 true]`; a value
-containing nothing gives an empty list.
+`Holders` unit tests: a value containing `u2`'s current and `u3`'s previous value gives `[u2 false, u3 true]`; a value
+containing nothing gives an empty list; and a secret stored in decomposed form (`José` as `e` + U+0301) is found in a
+value given in that same decomposed form, which only the as-given scan matches (so a `Holders` that scans the NFC form
+only fails it; break it once that way).
 
 Key tests: the two-group success row (break it once by building the index with only the first group's SECRET left out:
 it must be refused) and the one-holder refusal row (break it once by throwing guard rail 1's plain message: it must
@@ -195,7 +213,9 @@ fail).
 ## Task 3 (#382): a deleted current folder is named in the error
 
 - Add to `CliEnvironment`: `public Func<string> CurrentDirectory { get; init; } = Directory.GetCurrentDirectory;`
-  (a test seam; production never sets it).
+  (a test seam; production never sets it). Tests set it through a new `FleetMachine` property,
+  `public Func<string>? CurrentDirectory { get; set; }`, which `FleetMachine.Context` (`FleetMachine.cs:182-186`) passes
+  into the `CliEnvironment` it builds when it is not null.
 - Add `internal static class CurrentFolder` (`TswapCli/CurrentFolder.cs`) with
   `public const string GoneText = "The current folder no longer exists (it was deleted or moved): cd to a folder that exists and run tswap again.";`
   and `public static bool IsGone(Func<string> currentDirectory)`: true when the call throws `FileNotFoundException` or
@@ -218,12 +238,17 @@ Tests:
 | in-process, `TswapException` path | env `CurrentDirectory` throws `FileNotFoundException`; `redact missing.txt` | exit 1; stderr has the `File not found` error line, then `GoneText` on the next line |
 | in-process, no hint when the folder exists | default seam; `redact missing.txt` | stderr has no `GoneText` |
 | in-process, success | seam throws; `names` on an initialised vault | exit 0; no `GoneText` |
-| E2E `[UnixFact("Windows can't delete a process's current folder, so the state can't arise there")]` | `/bin/sh -c 'cd "$1" && rmdir "$1" && exec "$2" run true "{{s}}"' sh <dir> <tswap>`, `MakePsi`'s environment, after `init` and `create s` | exit 1; stderr contains `Unable to find the specified file.` and `GoneText` |
+| E2E `[UnixFact("Windows can't delete a process's current folder, so the state can't arise there")]` | `/bin/sh -c 'cd "$1" && rmdir "$1" && exec "$2" run true "{{s}}"' sh <dir> <tswap>`, `MakePsi`'s environment, after `init` and `create s` | exit 1; stderr has a `❌ Error: ` line and `GoneText` on the line after it (the error text itself is .NET's and is not pinned) |
 | E2E, same attribute | the same shell form with `names` | exit 0; no `GoneText` |
 
-Key tests: the in-process `TswapException` row and the E2E `run` row; break both once by removing the `GoneText` write
-from the `TswapException` catch. For the generic catch, the E2E `run` row covers it (its exception is a
-`FileNotFoundException`): remove that write once too and check the E2E row fails.
+Key tests, each with its own break: the in-process `TswapException` row (break it once by removing the `GoneText`
+write from the `TswapException` catch; it must fail), and the E2E `run` row, whose `FileNotFoundException` lands in the
+**generic** catch (break it once by removing the write from that catch; it must fail; removing the `TswapException`
+one would not touch it).
+
+If the E2E row fails because .NET reports the dead folder as some other exception than `FileNotFoundException` or
+`DirectoryNotFoundException` (a plain `IOException`, say, on Linux or macOS), stop and report the type and platform:
+widening `IsGone`'s list is a ruling, not an edit to make alone.
 
 ## Task 4 (#361): the approve file is written only after the Enter
 
@@ -247,7 +272,9 @@ In `EnrolInteractively`:
   `Delete {approveFile} by hand …` clause; the message is otherwise unchanged. (`TryDeleteLocal` stays; the folder
   delete uses it.)
 - `EnrolFileSeams`' summary: "each write of `approve.json` (after the Enter, in interactive mode)" instead of "each write
-  of `approve.json` and its delete at the Enter gate".
+  of `approve.json` and its delete at the Enter gate". The gate's comment (`SlotEnrol.cs:295-296`, "Ctrl-C is the end of
+  input here: the approve file goes, and the message says what is left") becomes "Ctrl-C is the end of input here:
+  nothing was written yet, and the message says what is left"; fix any other comment that still describes the delete.
 - No start-up removal of an existing `approve.json`: after this change an interactive run leaves one only after the
   Enter, when accept failed and its message tells the person to run `slot accept` on that very file; deleting it at the
   next start would remove a confirmed file the failure message points at. Batch mode (`RunApprove`) has no gate and is
@@ -269,7 +296,7 @@ New and kept tests:
 | `EnterGate_TypedTextThenEnter_WritesNothingUntilTheEnter`: seam records, at each `approve.json` access, how many times `SlotCommand.EnterGateRetryText` was already printed (read the joiner's stdout so far, or count with a flag the seam sets; your choice) for input `"\n\n\n" + "x\n" + "\n"` | one access, after the retry text |
 | existing `ApproveFileNotSaved_Interactive_TheRequestIsKept` | unchanged and passing (its answers end with the Enter, so the write still fails, now after it) |
 | existing `EnterGate_TextThenEof_KeepsTheRequest`, the swapped-approve-file test, the three PTY gate tests | unchanged and passing |
-| new PTY `[UnixFact] Enrol_CtrlCAsSoonAsThePromptShows_OnARealTerminal_LeavesNoApproveFile`: `WaitFor(EnterGatePrompt)`, then `Type("\x03")` at once (no `WaitForKeyRead`), then wait for exit | the process exits by itself; either exit 1 with `NotConfirmed`, or ended by SIGINT (exit 130 as .NET reports it; check what it reports and assert that value); in both: `request.json` kept, no `approve.json`, `PendingSlotId` kept, host keyring unchanged |
+| new PTY `[UnixFact] Enrol_CtrlCAsSoonAsThePromptShows_OnARealTerminal_LeavesNoApproveFile`: `WaitFor(EnterGatePrompt)`, then `Type("\x03")` at once (no `WaitForKeyRead`), then wait for exit | two outcomes are both correct, since which one happens depends on whether tswap reached the read first: exit 1 with `NotConfirmed` in the output, or ended by SIGINT (the code .NET reports for a child killed by SIGINT; observe it once on Linux and on macOS and pin that value). In both: not killed by the harness (`killed == false`), `request.json` kept, no `approve.json`, `PendingSlotId` kept, host keyring unchanged. Write these assertions in the test itself: do not reuse or relax `AssertTheRequestIsKept`, which pins exit 1 for the three existing PTY tests (or give it a parameter whose default keeps those three exactly as they are) |
 
 Key test: `EnterGate_EndOfInput_NeverWritesTheApproveFile`. Break it once by moving the write back before the gate; it
 must fail. The PTY test can't make the window happen on demand (tswap usually reaches the read first), so it needs no
@@ -283,7 +310,10 @@ break-it-once; it pins that both ways a Ctrl-C can land leave the same state.
   groups, adopted and deleted in one commit, for one value held by several secrets) and says its refusal names the
   other secrets holding the value (sudo); the guard rail 1 paragraph (`:204`) adds "(`field adopt`, under sudo, names
   them)". The generated block is regenerated in Task 2.
-- `docs/security-model.md`: the same two points at `:756` and `:799-801`.
+- `docs/security-model.md`: the same two points at `:756` and `:799-801`, and in the oracle paragraph (`:775-782`),
+  "the refusal names no secret" becomes "the refusal names no secret (only `field adopt`, which needs sudo, names
+  them)". `TswapCore/Prompt.cs:65` stays as it is: it is hashed, and it describes the agent's own `field set`, whose
+  refusal still names nothing.
 - `docs/multi-machine.md:141-142`: "or Ctrl-C if they differ (nothing is saved here: tswap writes the approve file only
   after your Enter)". `docs/security-model.md:137-140`: one clause that the joining machine writes `approve.json` only
   after the Enter.
