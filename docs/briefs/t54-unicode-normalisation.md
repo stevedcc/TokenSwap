@@ -14,8 +14,9 @@ facts) and `TswapTests/SecretVariantsTests.cs`.
 **Dependency on T50b.** T50b (`docs/briefs/t50b-tocomment-whole-values-and-line-breaks.md`, branch `brief/t50b`, not yet
 on main) reworks `SecretMatcher` and `ToCommentProcessor`. **Before Task 1, `git fetch origin` and merge `origin/main`
 into this branch** (the one sanctioned merge). If T50b has landed by then, re-check every `SecretMatcher` anchor below
-against the merged code: at `brief/t50b` 9305253 the `VariantKind.Plain` checks are at `SecretMatcher.cs:160, 203, 218,
-321`; at 666336c they are at `:160, 175`. If T50b has not landed, build Tasks 1-3 and 5-8, skip Task 4 and say so in your
+against the merged code: at `brief/t50b` 33fdab6 (its head on 2026-11-24) the `VariantKind.Plain` checks are at
+`SecretMatcher.cs:208, 369, 384, 487`, `SecretProcessor.TypeOf` is at `:106` and `ToCommentRoundTrip.Check` is in
+`TswapTests/ToCommentRoundTrip.cs:21`; at 666336c they are at `SecretMatcher.cs:160, 175` and `SecretProcessor.cs:71`. If T50b has not landed, build Tasks 1-3 and 5-8, skip Task 4 and say so in your
 report. Task 4 is written against main as it is now, plus the T50b rules it names.
 
 One commit per task, test first, a break-it-once check per key test (name in the commit message which line you changed
@@ -123,7 +124,7 @@ Tests (`SecretVariantsTests`), `For` exactly:
 | 1 | `abc` | `[(Plain, "abc"), (Base64, "YWJj")]` (unchanged) |
 | 2 | `caf\u00e9` | `[(Plain, "caf\u00e9"), (Base64, "Y2Fmw6k="), (Base64Url, "Y2Fmw6k"), (NfdPlain, "cafe\u0301"), (NfdBase64, "Y2FmZcyB")]` |
 | 3 | `cafe\u0301` | `[(Plain, "cafe\u0301"), (Base64, "Y2FmZcyB"), (NfcPlain, "caf\u00e9"), (NfcBase64, "Y2Fmw6k="), (NfcBase64Url, "Y2Fmw6k")]` |
-| 4 | `\u0958x` | `[(Plain, "\u0958x"), (Base64, "4KWYeA=="), (Base64Url, "4KWYeA"), (NfcPlain, "\u0915\u093cx"), (NfcBase64, "4KSV4KS8eA=="), (NfcBase64Url, "4KSV4KS8eA")]` (NFD gives the same texts) |
+| 4 | `\u0958x` | `[(Plain, "\u0958x"), (Base64, "4KWYeA=="), (Base64Url, "4KWYeA"), (NfcPlain, "\u0915\u093cx"), (NfcBase64, "4KSV4KS8eA=="), (NfcBase64Url, "4KSV4KS8eA")]` (U+0958 is a composition exclusion: NFC decomposes it, so the decomposed texts come in under the `Nfc` kinds; the NFD list adds nothing, its texts are already present) |
 | 5 | `p\u00e4ss w\u00f6rd` | the 4 base entries, then `(NfdPlain, "pa\u0308ss wo\u0308rd")`, `(NfdWhitespaceStripped, "pa\u0308sswo\u0308rd")`, `(NfdBase64, "cGHMiHNzIHdvzIhyZA==")`, `(NfdBase64Url, "cGHMiHNzIHdvzIhyZA")` |
 | 6 | `x\uD800y` | base kinds only |
 
@@ -149,8 +150,9 @@ the second table (`ab`) must fail.
 
 Add to `FingerprintSet`:
 
-- `public bool SameBaseEntries(FingerprintSet other)`: the entries whose `Kind.BaseKind() == Kind` (kinds 0-3), in
-  order, are equal (`FingerprintEntry.Equals`, fixed-time HMAC).
+- `public bool SameBaseEntries(FingerprintSet other)`: the entries of kinds 0-3 only (`Plain`, `WhitespaceStripped`,
+  `Base64`, `Base64Url`), in order, are equal (`FingerprintEntry.Equals`, fixed-time HMAC). Every other kind (4-11
+  and any kind this build doesn't define) is a form entry for `Union`.
 - `public static FingerprintSet Union(FingerprintSet a, FingerprintSet b)` (same version, `SameBaseEntries` true, else
   `ArgumentException`): the base entries, then the distinct form entries of both sorted by kind, then length, then HMAC
   bytes ordinally. `Fingerprinter.Compute` writes its form entries in that order already (one per kind, ascending), so
@@ -160,7 +162,8 @@ Use them at every place that compares sets today:
 
 | Site (666336c) | Today | After |
 |---|---|---|
-| `RecordMerge.cs:156-162` and `:239-245` (copies of one version) | a group of one variant-set version must be equal, else "two copies hold different fingerprints" | must have `SameBaseEntries`, else the same exception. The group's set is the `Union` of all |
+| `RecordMerge.cs:156-162` (full load) and `:239-245` (`MergeAllMetadata`), copies of one version | a group of one variant-set version must be equal, else "two copies hold different fingerprints"; the group's set is its first | at **both** sites: must have `SameBaseEntries`, else the same exception, and the group's set is the `Union` of all its sets (folded left in any order: `Union` is order-independent), so the full load and the metadata path pick the same set |
+| `RecordMerge.cs:252-258` (`MergeAllMetadata`, two copies with different value sections) | equal only when both sets exist and have the same variant-set version | equal only when both sets exist and `a.Set.SameBaseEntries(b.Set)`: base entries don't depend on the set version, so a version 1 copy (an older tswap) and a version 2 copy (this build) of one value still merge |
 | `RecordMerge.cs:391-396` (`ValidateFingerprints`) | sets of `CurrentSetVersion` must equal the recomputation | sets that are `IsCurrent` must have `SameBaseEntries` with the recomputation |
 | `RecordVaultStore.cs:1067-1074` (read path) | the same | the same as the row above |
 | `RecordVaultStore.cs:935-936` (`SameValue`) | version `== CurrentSetVersion` and full equality | `IsCurrent` and `SameBaseEntries` |
@@ -169,8 +172,9 @@ Use them at every place that compares sets today:
 | `RecordVaultStore.cs:2052-2055` (`PrepareV3`) | recompute when older | recompute when `< CurrentSetVersion` and not `SecretVariants.IsCurrent` |
 
 So `vault reindex` rewrites only records that hold a non-ASCII value fingerprinted by version 1, and the note
-(`FingerprintTexts.NoteOlderVariants`) counts exactly those. The metadata merge's "fingerprints prove them equal"
-(`RecordMerge.cs:252-257`) is sound with base entries: the plain entry's HMAC decides.
+(`FingerprintTexts.NoteOlderVariants`) counts exactly those. The `:252-258` proof stays sound with base entries: the
+plain entry's 128-bit HMAC decides the value. Its comment is updated to say so. An empty value version has no entries
+on either side, so two empty sets prove equality there as two equal empty sets do today.
 
 Tests (`RecordMergeV3Tests`, `RecordStoreV3Tests`, `RecordStoreMetadataTests`):
 - two copies of one version whose sets differ only in one `NfdPlain` entry (a hand-made "other library" set) merge,
@@ -181,10 +185,16 @@ Tests (`RecordMergeV3Tests`, `RecordStoreV3Tests`, `RecordStoreMetadataTests`):
 - `LoadMetadata`'s `OlderVariantSet` is 0 for a vault with a version 1 ASCII record and 1 with a version 1 `caf\u00e9`
   record;
 - `vault reindex` rewrites the second and not the first (`ReindexResult` counts);
-- `add` of the same `caf\u00e9` value over a version 2 record decrypts nothing (the existing `ValueDecrypted` seam).
+- `add` of the same `caf\u00e9` value over a version 2 record decrypts nothing (the existing `ValueDecrypted` seam);
+- two copies of one version with **different value sections**, one with a version 1 set and one with a version 2 set
+  of the same `caf\u00e9` value, merge on the metadata path (`MergeAllMetadata`) and in a full load, and both pick the
+  same set; with different `Plain` entries they still conflict;
+- `MergeAllMetadata` and the full load give the same set for two copies whose form entries differ, in both input
+  orders.
 
 Break-it-once: (a) compare whole sets in `ValidateFingerprints` again: the "differs from the recomputation" test must
-fail; (b) leave `LoadMetadata`'s count at `< CurrentSetVersion`: the ASCII count test must fail.
+fail; (b) leave `LoadMetadata`'s count at `< CurrentSetVersion`: the ASCII count test must fail; (c) restore the
+version comparison at `:252-258`: the version 1 / version 2 merge test must fail.
 
 ## Task 3: every matcher uses the new forms
 
@@ -199,8 +209,10 @@ fail; (b) leave `LoadMetadata`'s count at `< CurrentSetVersion`: the ASCII count
 - `Redaction.Variants(writtenForm)` (`Redaction.cs:19-40`): the forms are `writtenForm`, then NFC and NFD of it (each
   when it differs and `writtenForm` holds no lone surrogate). Each gets the line-ending forms and encodings of today.
   Duplicates go, as today. Line 35 keeps taking the `Base64` entry (the first kind), which is the form's own.
-- `BrokerRedactor.ForSecret` (`BrokerRedactor.cs:61`): move today's body into a local function over one byte array, and
-  call it for the secret's bytes. Then, when those bytes decode with `new UTF8Encoding(false, throwOnInvalidBytes:
+- `BrokerRedactor.ForSecret` (`BrokerRedactor.cs:61`): move today's body, unchanged (its lenient
+  `Encoding.UTF8.GetString` at `:140` and the percent and JSON forms built from it stay, U+FFFD and all), into
+  `internal static List<byte[]> FormsOf(ReadOnlySpan<byte> secret, string? basicUser)`, and call it for the secret's
+  bytes. Then, when those bytes decode with `new UTF8Encoding(false, throwOnInvalidBytes:
   true)`, call it for the UTF-8 of NFC and of NFD of the decoded text, each when it differs from the bytes. `Add`'s
   duplicate check, the longest-first order and `Window` are unchanged.
 - `FieldSecretCheck` needs no change (it uses the index).
@@ -222,8 +234,10 @@ Tests:
 Engine-level rows for the scanner (`FingerprintScannerTests`): the hit for row 1's NFD text has the NFD text's raw
 span. `Scan_RawHits_EqualFingerprintIndexScan`'s generator plants NFD and NFC spellings of values containing `\u00e9`, and
 the oracle comparison holds. `BrokerRedactorTests`: for the class's `Secret` (it contains `\u00e9`), `Forms` contains the
-UTF-8, base64, upper hex and percent form of its NFD spelling. For the bytes `0xFF 0x41 0x42 0x43 0x44 0x45`, no form
-contains `EF BF BD`.
+UTF-8, base64, upper hex and percent form of its NFD spelling, and every form of `FormsOf(Secret)` and of
+`FormsOf(NFD(Secret))`. For the bytes `0xFF 0x41 0x42 0x43 0x44 0x45` (not UTF-8), `ForSecret(...).Forms` equals
+`FormsOf(...)` form for form, in order: the normalisation adds nothing, and today's forms (including the ones built from
+the lossy decode) all stay.
 
 `EvilValuesTests.Nfd_InRunOutput_RecordedForTheOwner` and `Nfd_InRedactInput_RecordedForTheOwner` become
 `Nfd_InRunOutput_Masked` and `Nfd_InRedactInput_Masked`: the `_output.WriteLine` goes, and they assert
@@ -234,20 +248,20 @@ unchanged.
 
 Break-it-once: (a) pair every plain entry with the set's first whitespace-stripped entry (today's code): row 9 must
 fail; (b) drop NFD from `Redaction.Variants`: its unit test must fail; (c) drop the alternate loop in `ForSecret`:
-the `Forms` test must fail.
+the `Forms` test must fail; (d) gate the alternate loop on the lenient decode instead of the strict one: the
+not-UTF-8 test must fail.
 
 ## Task 4: `tocomment` replaces the other spelling (owner decision 2; after merging T50b)
 
 Every `VariantKind.Plain` comparison in `SecretMatcher` compares `Kind.BaseKind()`: T22's `EncodedTokens` (`:160` at
-666336c), T20's `WholeValueToken` (`:175`), and in T50b's code (at 9305253) `:160`, `:203`, `:218` and rule (a′)'s
-`envForm` (`:321`). Then:
+666336c), T20's `WholeValueToken` (`:175`), and in T50b's code (at 33fdab6) `:208`, `:369`, `:384` and rule (a′)'s
+`envForm` (`:487`). Find them by content after the merge. Then:
 - `NfcPlain` and `NfdPlain` count as plain for T20, T22 and rule (a′);
 - the `Nfc`/`Nfd` stripped and encoded kinds count as encoded, like their base kinds;
-- `ToCommentProcessor` needs no kind change at 666336c, and T50b's `TypeOf` (`ToCommentProcessor.cs:98-103`) gets
-  `BaseKind()` like `SecretProcessor.TypeOf`.
+- `ToCommentProcessor` holds no kind check (at 666336c or at 33fdab6); `SecretProcessor.TypeOf` is Task 3's.
 
-Tests (stored `caf\u00e9-db-pass-1`, name `s`; through `Redact.ToComment`, with T50b's `ToCommentRoundTrip.Check` on
-every change):
+Tests (stored `caf\u00e9-db-pass-1`, name `s`; through `Redact.ToComment`, with T50b's `ToCommentRoundTrip.Check`
+(`TswapTests/ToCommentRoundTrip.cs`, added by T50b Task 2) on every change):
 
 | # | File | Result |
 |---|---|---|
@@ -262,6 +276,7 @@ Break-it-once: compare raw `Kind` in (a′) again: row 2 must fail.
 
 - `SystemConsole.ReadPassword` (`SystemConsole.cs:127-131`): when the last two characters are a high and a low
   surrogate, backspace removes both and writes `"\b \b"` twice (one `*` was written per key char).
+  `ReadLineWithoutEcho` (`SystemConsole.cs:80-84`) removes a whole pair the same way (it echoes nothing).
 - `VaultPasswordKdf.Stretch` (`VaultPasswordKdf.cs:59-81`): before normalising, a lone surrogate
   (`UnicodeText.FindLoneSurrogate`) throws `TswapException(VaultPasswordKdf.LoneSurrogateText)`, with
   `public const string LoneSurrogateText = "The vault password holds half of a character (a lone UTF-16 surrogate), so it can't be used. Type it again.";`.
@@ -276,7 +291,11 @@ Tests:
 - `Stretch("x\uD800")` throws `TswapException` with `LoneSurrogateText`;
 - an in-process TPM password vault made by `PasswordVaultTestSupport.InitTpmPasswordVault` with
   `p\u00e4sswort-nfc` opens when the prompt is answered with `pa\u0308sswort-nfc`, and the reverse (a command that
-  unlocks, scripted as `AgentCommandTests` does). These pin today's behaviour.
+  unlocks, scripted as `AgentCommandTests` does). These pin today's behaviour;
+- in the same one-slot vault, with `SimulatedHardwareService.ObserveCalls` counting `"Unlock"` calls: a right password
+  typed as NFD and a wrong one typed as NFD each make exactly one call (one TPM authorisation per typed password,
+  decision 1);
+- `SystemConsoleTests`: `ReadLineWithoutEcho` with keys `a`, `\uD83D`, `\uDE00`, Backspace, Enter gives `"a"`.
 
 Break-it-once: drop `.Normalize(FormC)` from `Stretch`: the known-answer test's NFD assertion and
 `Stretch_NfdAndNfcPasswordsAgree` must fail.
@@ -292,7 +311,8 @@ In `ExportCrypto`:
 `export` (`ExportCommand.cs:34-49`): both readings go through `NormalisePassphrase`, the confirmation compares the
 results ordinally, and the key derives from the normalised one. The file format and version don't change.
 
-`import` (`ImportCommand.cs:30-51`): for each candidate in order, `DeriveKey` and `Crypto.Decrypt`. The first that
+`import` (`ImportCommand.cs:30-51`): the empty-passphrase refusal (`:44-45`) stays before the loop, on the typed
+string. Then, for each candidate in order, `DeriveKey` and `Crypto.Decrypt`. The first that
 authenticates wins. When none does, the existing "Decryption failed — wrong passphrase or file tampered" message.
 A `FormatException` stops the loop at once, with today's message. Zero every derived key that fails.
 
@@ -303,7 +323,7 @@ tswap" file is needed, through `ExportCrypto.DeriveKey` over the raw passphrase 
 |---|---|---|---|
 | 1 | `export`, `p\u00e4ss-export-1` (NFC) | `pa\u0308ss-export-1` (NFD) | imports |
 | 2 | `export`, `pa\u0308ss-export-1` (NFD) | NFC | imports |
-| 3 | older v3 file, raw NFD bytes | NFC | imports (third candidate) |
+| 3 | older v3 file, raw NFD bytes | NFC | imports (the NFD candidate: typed NFC equals its NFC, so it is the second of two) |
 | 4 | older v3 file, raw NFC bytes | NFD | imports (first candidate) |
 | 5 | older v1 (PBKDF2) file, raw NFD bytes | NFC | imports |
 | 6 | older v3 file, raw `x\uD800y` (encoded as UTF-8 does) | `x\uD800y` | imports (`[typed]`) |
@@ -327,7 +347,14 @@ In `Fido2PinPrompt`, `Ask` (`:55-59`) passes the terminal's bytes through
   `public const string NotUtf8Text = "A FIDO2 PIN must be text (UTF-8); type it again.";`;
 - the minimum counts runes of the decoded text (`TooShortText` unchanged);
 - the 63-byte maximum applies to the normalised bytes;
-- the two entries are compared after normalising, so a repeat typed in the other spelling matches.
+- the two entries are compared after normalising, so a repeat typed in the other spelling matches;
+- a PIN whose normalised bytes end in `0x00` is asked again with
+  `public const string EndsInNulText = "A FIDO2 PIN can't end in a NUL character; type it again.";`.
+
+`Ask` (an existing PIN) refuses the same way: bytes ending in `0x00` are zeroed, `EndsInNulText` is written, and the
+PIN is asked again; nothing is sent. CTAP 2.1 §6.5.1: "PIN MUST NOT end in a 0x00 byte" (a platform rule; `setPIN`
+pads the PIN with `0x00`, so such a PIN can't be told from a shorter one). Sending it would cost one of the key's PIN
+retries for a PIN no conforming platform sends, so tswap refuses locally (fail closed).
 
 No second try with the raw bytes after the key refuses a PIN (decision 4). The managed string made for a non-ASCII PIN
 can't be zeroed. Say so in `NormalisePin`'s summary, as `VaultPasswordKdf`'s does for the password (`:36-40`).
@@ -342,10 +369,13 @@ Tests (`SlotAddFido2Tests` for the new-PIN rows, an unlock test with a FIDO2 slo
 | 4 | new PIN of 31 `\u00e9` typed as NFD (93 bytes) | accepted: 62 bytes once normalised |
 | 5 | new PIN `\U0001F600\U0001F600` (2 runes, 4 UTF-16 units) | asked again with `TooShortText` |
 | 6 | new PIN bytes `0xFF 0xFE 0x41 0x42` | asked again with `NotUtf8Text` |
+| 7 | new PIN bytes `0x31 0x32 0x33 0x34 0x00` | asked again with `EndsInNulText` |
+| 8 | unlock PIN bytes `0x31 0x32 0x33 0x34 0x00`, then `1234` | asked again with `EndsInNulText`; the fake receives `1234` only (one PIN call) |
 
 The existing `SlotAddFido2_NewPinOver63Bytes_AskedAgain` cases stay as they are.
 
-Break-it-once: return the input from `NormalisePin` unchanged: rows 2 and 3 must fail.
+Break-it-once: (a) return the input from `NormalisePin` unchanged: rows 2 and 3 must fail; (b) drop the NUL check from
+`Ask`: row 8 must fail.
 
 ## Task 8: docs
 
@@ -361,15 +391,27 @@ Break-it-once: return the input from `NormalisePin` unchanged: rows 2 and 3 must
 - `docs/design/multi-machine-keying.md:582-583`: the same limit in one clause.
 - `docs/commands.md`, `export`/`import`: the passphrase is compared in NFC, and an export made with an older tswap
   imports whichever way `\u00e9` is typed, unless the passphrase mixed both spellings.
-- `docs/design/hardware-backends.md`, the FIDO2 section: the PIN is sent in NFC (CTAP 2.1 §6.5.1).
+- `docs/design/hardware-backends.md`, the FIDO2 section: the PIN is sent in NFC, and a PIN ending in a NUL byte is
+  refused before anything is sent (CTAP 2.1 §6.5.1).
+- `docs/commands.md`, after the `tocomment` paragraph that starts "`tocomment` also adopts" (line 118): a value found in
+  its other Unicode spelling is replaced too, and `apply` and `run` fill in the **stored** spelling, so the file's
+  bytes for that value change (owner decision 2).
 - In your report, the text of the 0.3.3 release-note entries (do not edit `docs/release-notes/`):
   - `redact`, `tocomment`, `run`, the broker and the field check recognise a secret in either Unicode spelling of
     accented letters (NFC/NFD), base64 included. Vaults with non-ASCII secrets: run `sudo tswap vault reindex` once; until
     then a note says how many records it would update. Older tswap versions read the new records.
+  - `tocomment` also replaces a secret written in its other spelling; `apply` and `run` then fill in the stored
+    spelling, so the bytes of that value in the file change.
   - Export passphrases are compared in NFC; older exports import whichever way an accented letter is typed.
   - The FIDO2 PIN is sent in NFC, as CTAP 2.1 requires. A PIN set through tswap 0.3.2 or earlier by typing a decomposed
     accent no longer matches: change it with another FIDO2 tool.
   - Known limit: a vault password holding a character newer than a machine's Unicode library may not open there.
+- Also in your report, for the controller and the owner (not run by you):
+  - before the release, a one-off check with the v0.3.2 release binary on a copy of a vault this build wrote: `names`,
+    `run`, `redact` and a `rotate` work, and this build then reads the record the old one rotated;
+  - the owner's keyboard checks from the design ("Tests", owner checks): on Linux (Compose and dead keys), macOS
+    (Option-e, a pasted Finder name) and Windows (a dead key), what `\u00e9` arrives as, recorded in
+    `docs/superpowers/` as the issue asks.
 
 ## Sanctioned test edits
 
@@ -382,6 +424,7 @@ Break-it-once: return the input from `NormalisePin` unchanged: rows 2 and 3 must
 | `SecretRecordCodecV3Tests.UnknownVariantKind_IsRefusedInAKnownSetVersion_KeptInANewerOne` | `(VariantKind)7` → `(VariantKind)200` (input) | 7 is now defined |
 | `EvilValuesTests.Nfd_InRunOutput_RecordedForTheOwner`, `Nfd_InRedactInput_RecordedForTheOwner` | renamed and asserted (Task 3) | the gap is closed |
 | `RunVaultRedactionTests.RunCoverage_OlderVariantSet_Noted` | summary only ("unreachable at variant set 1" goes) | no longer true |
+| `FingerprintScannerTests.Scan_RawHits_EqualFingerprintIndexScan` | generator inputs only: it also plants the NFC and NFD spellings of values containing `\u00e9` (Task 3); the oracle comparison is unchanged | the new forms must occur in its rounds |
 
 ## Out of scope
 
