@@ -47,7 +47,14 @@ internal sealed class FakeTerminal(params string[] lines) : ITerminal
 
     public string? ReadLine() => Next(secret: false);
 
-    public byte[]? ReadSecret() => Next(secret: true) is { } line ? Encoding.UTF8.GetBytes(line) : null;
+    public byte[]? ReadSecret() => Next(secret: true) is { } line
+        ? line.StartsWith(RawPrefix, StringComparison.Ordinal) ? Convert.FromHexString(line[RawPrefix.Length..]) : Encoding.UTF8.GetBytes(line)
+        : null;
+
+    /// <summary>Brief T54: a scripted line that <see cref="ReadSecret"/> answers with these exact bytes (any, UTF-8 or not).</summary>
+    public static string Raw(params byte[] bytes) => RawPrefix + Convert.ToHexString(bytes);
+
+    private const string RawPrefix = "raw-bytes-hex:";
 
     public void Dispose() => Disposals++;
 
