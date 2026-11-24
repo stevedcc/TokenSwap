@@ -213,6 +213,8 @@ public sealed class FleetMachine : IDisposable
             Os = Os ?? YubiKeyAccessTexts.CurrentOs(),
             // Brief T35 A15: no in-process test reaches a real console's mode, also in a suite run from a Windows console.
             StdoutConsoleMode = () => null,
+            // Brief T55: no in-process test reads the real machine's programs (Git for Windows on a Windows runner).
+            MsysProbe = () => null,
         };
         return Ssh is null ? ctx : ctx with { Ssh = Ssh };
     }

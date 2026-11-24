@@ -141,6 +141,12 @@ public sealed record CommandContext(
     /// </summary>
     internal Func<IConsoleOutputMode?> StdoutConsoleMode { get; init; } = WindowsVirtualTerminal.ForThisProcess;
 
+    /// <summary>
+    /// Brief T55 (#402): what <c>run</c> reads of the machine to find the file its child starts as on Windows, and whether
+    /// that is an MSYS2 program (<see cref="MsysTarget"/>); null off Windows. Tests substitute a fake file set or null.
+    /// </summary>
+    internal Func<MsysTarget.Probe?> MsysProbe { get; init; } = MsysTarget.Probe.ForThisProcess;
+
     /// <summary>Issue #251: the machine seams of <c>run</c>'s <c>{{@file}}</c> copies (null: the real machine).</summary>
     internal FilledFilesEnvironment? FilledFilesEnvironment { get; init; }
 

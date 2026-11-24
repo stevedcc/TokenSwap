@@ -266,6 +266,24 @@ public sealed partial class RunCommand : ICliCommand
                         Validation.SubstitutedTokens(commandArgs, secretValues, filePaths)) is { } batchRefusal)
                     throw new TswapException(batchRefusal);
 
+                // Brief T55 (#402): an MSYS2 program (Git Bash) parses its command line by MSYS2's rules, not the C
+                // runtime's that RedactingPty quotes for: it starts by its resolved path (what was detected is what
+                // starts) with the arguments quoted for MSYS2, or run refuses what that quoting can't pass exactly.
+                // The child's environment is the --env pairs, then tswap's own (names ignoring case, as on Windows).
+                var childArgv = argv;
+                string? windowsArguments = null;
+                if (windows && ctx.MsysProbe() is { } probe
+                    && MsysTarget.Resolve(argv[0], probe) is { } program && MsysTarget.IsMsys2(program, probe.FileExists))
+                {
+                    string? ChildVariable(string name) =>
+                        environment.Where(kv => kv.Key.Equals(name, StringComparison.OrdinalIgnoreCase)).Select(kv => kv.Value).FirstOrDefault()
+                        ?? probe.GetVariable(name);
+                    if (MsysTarget.Refusal(argv[1..], Validation.SubstitutedTokens(commandArgs, secretValues, filePaths), ChildVariable) is { } msysRefusal)
+                        throw new TswapException(msysRefusal);
+                    childArgv = [program];
+                    windowsArguments = MsysTarget.QuoteArguments(argv[1..]);
+                }
+
                 // Show the sanitised command
                 if (ctx.Verbose)
                 {
@@ -299,6 +317,7 @@ public sealed partial class RunCommand : ICliCommand
                     ReleaseWhenAwaitingInput = true,
                     // Brief T26: set for the child only, never in its argv; tswap's own environment is unchanged.
                     Environment = environment.Count > 0 ? environment : null,
+                    WindowsArguments = windowsArguments,
                 };
                 var runner = ctx.PtyRunner();
                 childStarted = true;
@@ -307,8 +326,8 @@ public sealed partial class RunCommand : ICliCommand
                 using (stdoutMode is null ? null : WindowsVirtualTerminal.AroundChild(stdoutMode))
                 {
                     return files is null
-                        ? runner.Run(argv, replacements, options)
-                        : files.RunChild(() => runner.Run(argv, replacements, options));
+                        ? runner.Run(childArgv, replacements, options)
+                        : files.RunChild(() => runner.Run(childArgv, replacements, options));
                 }
             }
             finally
