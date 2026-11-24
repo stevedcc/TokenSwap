@@ -109,19 +109,21 @@ public sealed class MetadataCommandTests : IDisposable
     public void Burned_DecryptsNoValue()
     {
         History();
+        // Brief T56 (#396, sanctioned by the owner): a count line first, a STATE column, BURNED AT 16 wide.
         Run("""
+            ⚠ 1 outstanding (rotate these), 1 rotated (history, nothing to do).
 
             ⚠ Burned Secrets (1):
-            NAME  BURNED AT           REASON
+            STATE        NAME  BURNED AT         REASON
             ------------------------------------------------------------
-            beta  2026-01-02 03:14  seen in a log
+            outstanding  beta  2026-01-02 03:14  seen in a log
 
             → Rotate these secrets: tswap rotate <name> [len], or <source> | tswap ingest --rotate <name>.
 
             Rotated (burn superseded by a newer value) (1):
-            NAME   BURNED AT           REASON
+            STATE    NAME   BURNED AT         REASON
             ------------------------------------------------------------
-            gamma  2026-01-02 03:24  pasted in chat
+            rotated  gamma  2026-01-02 03:24  pasted in chat
 
             """, 0, "burned");
         Run("""

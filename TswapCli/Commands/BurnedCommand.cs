@@ -57,45 +57,63 @@ public sealed class BurnedCommand : ICliCommand
             return;
         }
 
-        if (burned.Count == 0)
-        {
-            ctx.Console.Out.WriteLine("No outstanding burned secrets.");
-        }
-        else
+        // Brief T56 (#396): the count line comes first and every row starts with its state, so no slice of the
+        // output (`tswap burned | tail -8`) reads as a list of secrets to rotate.
+        ctx.Console.Out.WriteLine(burned.Count > 0
+            ? $"⚠ {burned.Count} outstanding (rotate these), {rotated.Count} rotated (history, nothing to do)."
+            : $"No burned secrets need rotation: 0 outstanding, {rotated.Count} rotated (history, nothing to do).");
+
+        if (burned.Count > 0)
         {
             ctx.Console.Out.WriteLine($"\n⚠ Burned Secrets ({burned.Count}):");
-            PrintTable(ctx, burned);
+            PrintTable(ctx, burned, "outstanding");
             ctx.Console.Out.WriteLine($"\n→ Rotate these secrets: {ctx.Prefix} rotate <name> [len], or <source> | {ctx.Prefix} ingest --rotate <name>.");
         }
 
         if (rotated.Count > 0)
         {
             ctx.Console.Out.WriteLine($"\nRotated (burn superseded by a newer value) ({rotated.Count}):");
-            PrintTable(ctx, rotated);
+            PrintTable(ctx, rotated, "rotated");
         }
     }
 
-    private static void PrintTable(CommandContext ctx, List<(string Name, DateTime BurnedAt, string? Reason)> rows)
+    private static void PrintTable(CommandContext ctx, List<(string Name, DateTime BurnedAt, string? Reason)> rows, string state)
     {
+        var stateWidth = state.Length;
         var nameWidth = Math.Min(40, rows.Max(s => s.Name.Length));
-        var dateWidth = 18; // "yyyy-MM-dd HH:mm" + 2 spaces
-        var headerWidth = nameWidth + 2 + dateWidth + 2 + 6; // 6 = "REASON".Length
+        const int dateWidth = 16; // "yyyy-MM-dd HH:mm" (Hlc.Display; "far future" is padded to it)
+        var headerWidth = stateWidth + 2 + nameWidth + 2 + dateWidth + 2 + 6; // 6 = "REASON".Length
 
-        ctx.Console.Out.WriteLine($"{"NAME".PadRight(nameWidth)}  {"BURNED AT".PadRight(dateWidth)}  REASON");
+        ctx.Console.Out.WriteLine($"{"STATE".PadRight(stateWidth)}  {"NAME".PadRight(nameWidth)}  {"BURNED AT".PadRight(dateWidth)}  REASON");
         ctx.Console.Out.WriteLine("".PadRight(Math.Max(headerWidth, 60), '-'));
         foreach (var (name, burnedAt, burnReason) in rows)
         {
-            var reason = burnReason ?? "(no reason given)";
-            var when = TswapCore.Keyring.Hlc.Display(burnedAt);
+            var reason = OneLine(burnReason ?? "(no reason given)");
+            var when = TswapCore.Keyring.Hlc.Display(burnedAt).PadRight(dateWidth);
             if (name.Length <= nameWidth)
             {
-                ctx.Console.Out.WriteLine($"{name.PadRight(nameWidth)}  {when}  {reason}");
+                ctx.Console.Out.WriteLine($"{state}  {name.PadRight(nameWidth)}  {when}  {reason}");
             }
             else
             {
-                ctx.Console.Out.WriteLine(name);
-                ctx.Console.Out.WriteLine($"{"".PadRight(nameWidth)}  {when}  {reason}");
+                ctx.Console.Out.WriteLine($"{state}  {name}");
+                ctx.Console.Out.WriteLine($"{state}  {"".PadRight(nameWidth)}  {when}  {reason}");
             }
         }
     }
+
+    /// <summary>
+    /// A stored reason as one display line: every control character (line feed, carriage return, tab, escape, U+0085
+    /// and the rest) and U+2028 and U+2029 become one space, so a reason can't print a row without a state (#396).
+    /// Other characters, non-ASCII ones included, are kept; the stored reason and <c>--json</c> are unchanged.
+    /// </summary>
+    private static string OneLine(string reason) =>
+        string.Create(reason.Length, reason, static (span, text) =>
+        {
+            for (var i = 0; i < text.Length; i++)
+            {
+                var c = text[i];
+                span[i] = char.IsControl(c) || c is '\u2028' or '\u2029' ? ' ' : c;
+            }
+        });
 }
