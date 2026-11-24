@@ -1994,6 +1994,129 @@ password2: """"  # tswap: missing-mixed-secret");
         Assert.DoesNotContain("supersecretvalue123", stderr);
     }
 
+    // --- brief T50b (#394): whole values only, the warning and the username note ---
+
+    private const string NotWholeValue =
+        "it is not a whole value that apply fills back ('key: value', or 'KEY=value' without control characters)";
+
+    private static string SkippedWarning(string where, string token, string reason = NotWholeValue) =>
+        $"Warning: {where}: the value of '{token}' (or an encoded form of it) was left in place: {reason}. If it is the secret there, move it out by hand.";
+
+    private static string UsernameNote(string name) =>
+        $"Note: '{name}' looks like a username; if it is a username (never a password), keep it in a field instead " +
+        $"({ElevatedCommand.For("tswap", $"field adopt NAME username --from {name}")}), so tocomment leaves it alone.";
+
+    private const string IssueManifest =
+        "metadata:\n" +
+        "  name: ldap-flow\n" +
+        "  namespace: authentik\n" +
+        "spec:\n" +
+        "  backends:\n" +
+        "    - authentik.sources.ldap.auth.LDAPBackend\n" +
+        "  command: python -m authentik.core.management.commands.import_flow /flows/x.yaml\n" +
+        "  user: authentik\n";
+
+    /// <summary>
+    /// #394: the issue's manifest. Only the two whole values are replaced; the backend path and the command line keep
+    /// the value, each with a warning, and the username note comes first.
+    /// </summary>
+    [Fact]
+    public void ToComment_IssueManifest_ReplacesWholeValuesOnly_WarnsForTheRest()
+    {
+        RunTswap("init", "--yubikey");
+        Assert.Equal(0, RunTswapWithStdin("authentik", "ingest", "app-user").exitCode);
+        var file = Path.Combine(_tempDir, "flow.yaml");
+        File.WriteAllText(file, IssueManifest);
+
+        var (exit, stdout, stderr) = RunTswap("tocomment", file, "--dry-run");
+
+        Assert.Equal(0, exit);
+        Assert.Equal("", stdout);
+        Assert.Equal(
+            UsernameNote("app-user") + "\n" +
+            "  line 3:\n" +
+            "  -   namespace: [REDACTED: app-user]\n" +
+            "  +   namespace: \"\"  # tswap: app-user\n" +
+            "  line 8:\n" +
+            "  -   user: [REDACTED: app-user]\n" +
+            "  +   user: \"\"  # tswap: app-user\n" +
+            SkippedWarning("line 6", "app-user") + "\n" +
+            SkippedWarning("line 7", "app-user") + "\n" +
+            "\n(dry run) 2 line(s) would be modified.\n",
+            stderr.Replace("\r\n", "\n"));
+        Assert.Single(stderr.Split('\n'), l => l.StartsWith("Note:", StringComparison.Ordinal));
+        Assert.DoesNotContain("authentik", stderr);
+        Assert.Equal(IssueManifest, File.ReadAllText(file));
+
+        var (liveExit, _, liveErr) = RunTswap("tocomment", file);
+
+        Assert.True(liveExit == 0, liveErr);
+        var before = IssueManifest.Split('\n');
+        var after = File.ReadAllText(file).Split('\n');
+        Assert.Equal(before.Length, after.Length);
+        Assert.Equal("  namespace: \"\"  # tswap: app-user", after[2]);
+        Assert.Equal("  user: \"\"  # tswap: app-user", after[7]);
+        foreach (var i in new[] { 0, 1, 3, 4, 5, 6, 8 })
+            Assert.Equal(before[i], after[i]);
+    }
+
+    [Fact]
+    public void ToComment_PasswordSecret_NoUsernameNote()
+    {
+        RunTswap("init", "--yubikey");
+        Assert.Equal(0, RunTswapWithStdin("authentik", "ingest", "db-pw").exitCode);
+        var file = Path.Combine(_tempDir, "ns.yaml");
+        File.WriteAllText(file, "namespace: authentik\n");
+
+        var (exit, _, stderr) = RunTswap("tocomment", file, "--dry-run");
+
+        Assert.Equal(0, exit);
+        Assert.Contains("  line 1:\n  - namespace: [REDACTED: db-pw]\n  + namespace: \"\"  # tswap: db-pw\n", stderr.Replace("\r\n", "\n"));
+        Assert.DoesNotContain("Note:", stderr);
+        Assert.DoesNotContain("field adopt", stderr);
+    }
+
+    /// <summary>Brief T50b: each changed line's texts are redacted on their own, so a value stored over two lines shifts nothing.</summary>
+    [Fact]
+    public void ToComment_DryRun_RedactsEachLineOnItsOwn()
+    {
+        RunTswap("init", "--yubikey");
+        Assert.Equal(0, RunTswapWithStdin("v1-value-aaaa", "ingest", "v-1").exitCode);
+        Assert.Equal(0, RunTswapWithStdin("v2-value-bbbb", "ingest", "v-2").exitCode);
+        Assert.Equal(0, RunTswapWithStdin("x: v1-value-aaaa\ny: v2-value-bbbb", "ingest", "m").exitCode);
+        var file = Path.Combine(_tempDir, "two.yaml");
+        File.WriteAllText(file, "x: v1-value-aaaa\nother: 1\ny: v2-value-bbbb\n");
+
+        var (exit, _, stderr) = RunTswap("tocomment", file, "--dry-run");
+
+        Assert.Equal(0, exit);
+        var err = stderr.Replace("\r\n", "\n");
+        Assert.Contains("  line 1:\n  - x: [REDACTED: v-1]\n", err);
+        Assert.Contains("  line 3:\n  - y: [REDACTED: v-2]\n", err);
+    }
+
+    /// <summary>
+    /// Brief T50b, the username note's promise: once the username is a field (<c>field adopt</c>), tocomment no longer
+    /// knows it as a secret and leaves the value alone.
+    /// </summary>
+    [Fact]
+    public void ToComment_AfterFieldAdopt_LeavesTheUsernameAlone()
+    {
+        RunTswap("init", "--yubikey");
+        Assert.Equal(0, RunTswapWithStdin("authentik", "ingest", "app-user").exitCode);
+        Assert.Equal(0, RunTswapWithStdin("db-password-value-1", "ingest", "db").exitCode);
+        var (adoptExit, _, adoptErr) = RunTswap("field", "adopt", "db", "username", "--from", "app-user");
+        Assert.True(adoptExit == 0, adoptErr);
+        var file = Path.Combine(_tempDir, "ns.yaml");
+        File.WriteAllText(file, "namespace: authentik\n");
+
+        var (exit, _, stderr) = RunTswap("tocomment", file);
+
+        Assert.Equal(0, exit);
+        Assert.Equal("No secrets found. File unchanged.\n", stderr.Replace("\r\n", "\n"));
+        Assert.Equal("namespace: authentik\n", File.ReadAllText(file));
+    }
+
     // --- issue #81: extend burn handling ---
 
     [Fact]

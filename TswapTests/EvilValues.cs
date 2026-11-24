@@ -175,8 +175,6 @@ public static class EvilValues
     public static readonly IReadOnlyDictionary<(string Case, string Invariant), (int Number, string Line)> KnownFindings =
         new Dictionary<(string, string), (int, string)>
         {
-            [("lf-inside", TocommentDryrun)] = (2, Finding2),
-            [("crlf-inside", TocommentDryrun)] = (2, Finding2),
             // Brief T47 Task 2f: Git Bash (MSYS2) on Windows, CI run 45021236991, both legs unless the line says so (#402).
             // All of them ASCII cases (brief T48: the non-ASCII values run too, RunGitBashCases).
             [("single-quote", GitBashExact)] = (3, Finding3),
@@ -188,8 +186,6 @@ public static class EvilValues
             [("crlf-inside", GitBashExact)] = (5, Finding5),
             [("cr-inside", GitBashExact)] = (5, Finding5),
         };
-
-    private const string Finding2 = "tocomment matches line by line, so a value holding a line break inside a line is not found (#399)";
 
     // Brief T47 Task 2f (#402): public, so the skipped facts' Skip text is built from the same line.
     public const string Finding3 = "Git Bash (MSYS2) parses run's unquoted argument by its own rules and removes the ' (#402)";

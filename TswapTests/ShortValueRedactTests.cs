@@ -21,6 +21,14 @@ public class ShortValueRedactTests
 
     private static readonly SecretsDb Port = Db(("p", S("465")));
 
+    /// <summary>Brief T50b Task 2: <c>Redact.ToComment</c>, every marker it wrote checked to fill back (<see cref="ToCommentRoundTrip"/>).</summary>
+    private static (string Content, IReadOnlyList<LineDiff> Changes) ToComment(string content, SecretsDb db)
+    {
+        var result = Redact.ToComment(content, db);
+        ToCommentRoundTrip.Check(result.Changes, db);
+        return result;
+    }
+
     private static string R(string content, SecretsDb? db = null) => Redact.RedactContent(content, db ?? Port);
 
     [Fact]
@@ -144,8 +152,8 @@ public class ShortValueRedactTests
     [Fact]
     public void ToComment_ShortValue_Unchanged()
     {
-        Assert.Equal("port: \"\"  # tswap: p", Redact.ToComment("port: 465", Port).Content);
-        Assert.Equal("n: 65465", Redact.ToComment("n: 65465", Port).Content);
+        Assert.Equal("port: \"\"  # tswap: p", ToComment("port: 465", Port).Content);
+        Assert.Equal("n: 65465", ToComment("n: 65465", Port).Content);
     }
 }
 
