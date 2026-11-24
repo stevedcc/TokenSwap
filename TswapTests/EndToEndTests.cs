@@ -1403,6 +1403,8 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
             (true, 1, true) => "Ctrl-C dropped before the key read, then refused at the key read",
             _ => null,
         };
+        // The label is inferred from the window: a first Ctrl-C queued as type-ahead that refuses only after
+        // the window is recorded as "dropped, then refused". The assertions are the same either way.
         _output.WriteLine($"landing: {landing ?? "none of the expected ones"} (exit code {exitCode})");
         Assert.True(landing is not null,
             $"exit code {exitCode}, the gate's refusal {(refused ? "shown" : "not shown")}, the first Ctrl-C {(dropped ? "dropped" : "not dropped")}; the terminal showed:\n{output}");

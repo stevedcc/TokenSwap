@@ -865,7 +865,7 @@ public class SlotEnrolTests : IDisposable
 
         Assert.True(exit == 0, stderr + stdout);
         Assert.Equal(1, CountOf(stdout, TswapCli.Commands.SlotCommand.EnterGateRetryText));
-        Assert.Equal([1], retriesPrintedAtAccess); // one write, after the retry text, so after the second (empty) line
+        Assert.Equal([1], retriesPrintedAtAccess); // one write, after the retry text, so after the gate's second input line (the empty Enter after the retry)
     }
 
     [Fact]
