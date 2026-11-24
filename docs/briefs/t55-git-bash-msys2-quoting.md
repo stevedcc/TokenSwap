@@ -58,6 +58,28 @@ The rest:
     `Prompt.cs`'s "(its arguments may arrive altered)" stays (still true for refused and undetected setups; prompt hash).
 12. **Release note**: add "and with RedactingPty 1.3.0 a value holding a line break reaches any Windows program whole".
 
+## Spike round 2 results (Windows CI run 45451153257, Git for Windows, msys runtime 3.6.10; controller, 2026-11-24) — bind
+
+Task 1 is done; don't redo it. What the table showed, and what follows:
+
+- **M passes every value (92 of 92) through `bin\bash.exe` and `usr\bin\bash.exe` alike**: Task 3's quoting as written; the
+  launcher rule (Task 2) holds.
+- **Line breaks**: W cuts `lf-inside`, `crlf-inside` and the `\r`/`\r\n`/`\n` literals; N and M pass them. As expected.
+- **`@at-file.txt`**: W, N and R deliver `INJECTED`; M passes the value. As expected.
+- **`MSYS=noglob`**: exactly the values holding `\` or `"` are altered (22). R1 as amended (1–3 above).
+- **`LANG=ja_JP.SJIS` and `LANG=de_DE`** (LC_ALL and LC_CTYPE removed): every value holding a character above U+007F is altered,
+  in both (bytes re-encoded, a `0x18` escape before unconvertible characters, and in some cells M's surrounding `"` left in
+  the word). `de_DE` behaves as ISO-8859-1 (`é` arrives as `E9`), so a locale without a charset part is not UTF-8: R2 and
+  amendment 7 stand as written. The two CP932 rows (`\u8868x`, `\u30BDx`) arrived as their exact CP932 bytes, not split:
+  the trail-byte `0x5C` worry is unfounded, but R2 refuses those values anyway, because they arrive as CP932 bytes, not as
+  the value's UTF-8. No change to R2.
+- **U+F0xx values, default environment**: M `ok`. R3 stays (older runtimes), as the brief says.
+- **Program search**: `t55probe` starts from the current directory, and does not with `NoDefaultCurrentDirectoryInExePath=1`:
+  Task 2's order as written. **`<work>\t55probe2` (full path, no extension) started**: Windows appends `.exe` to a name
+  holding a path too. So Task 2's `.exe` rule is: append `.exe` when the last component has no `.`, whether or not the name
+  holds a path (the brief's original rule; amendment I2's "no `.exe` for a path" is withdrawn), and the
+  `C:/msys64/usr/bin/bash` row is `C:\msys64\usr\bin\bash.exe`, MSYS2 yes. Keep the `C:/msys64/usr/bin/bash.exe` row.
+
 ## What is wrong (evidence)
 
 `run` hands the child its argv through RedactingPty (`RunCommand.cs:303-311`, `CommandContext.cs:136`, package
@@ -197,8 +219,7 @@ public static bool IsMsys2(string path, Func<string, bool> fileExists);
 **`Resolve`** returns the file `CreateProcess` starts for `program` (its documented search for a command line with no
 application name), or null. Both methods first turn every `/` into `\` (Windows reads them alike) and check paths only
 through `FileExists` (the tests' fake ignores case, as Windows does). The name gets `.exe` appended when its last
-component has no `.` and the name holds no `\` or `:` (CreateProcess's documented rule; the spike's `t55probe2`
-row confirms it or changes it, see Task 1). A program holding `\` or `:` is not searched: one that starts with `\` or with a letter and `:` is
+component has no `.`, also for a name holding a path (the spike's `t55probe2` row: Windows starts it). A program holding `\` or `:` is not searched: one that starts with `\` or with a letter and `:` is
 taken as is, any other is joined to `CurrentDirectory`. Otherwise the first folder, in this order,
 where `FileExists(folder\name)` is true: `ExeDirectory` (when not null), `CurrentDirectory` (skipped when
 `GetVariable("NoDefaultCurrentDirectoryInExePath")` is not null, unless the spike says otherwise), `SystemDirectory`,
@@ -221,7 +242,7 @@ Git's files `C:\Program Files\Git\bin\bash.exe`, `...\Git\bin\sh.exe`, `...\Git\
 | `bash` | none | `C:\Program Files\Git\bin\bash.exe` | yes (launcher) |
 | `sh.exe` | none | `C:\Program Files\Git\bin\sh.exe` | yes (launcher) |
 | `C:\Program Files\Git\usr\bin\bash.exe` | none | itself | yes (dll beside) |
-| `C:/msys64/usr/bin/bash` | none | null (a path gets no `.exe`) | no: started as today |
+| `C:/msys64/usr/bin/bash` | none | `C:\msys64\usr\bin\bash.exe` | yes |
 | `C:/msys64/usr/bin/bash.exe` | none | `C:\msys64\usr\bin\bash.exe` | yes |
 | `bash` | `C:\work\bash.exe` | `C:\work\bash.exe` | no |
 | `bash`, `NoDefaultCurrentDirectoryInExePath=1` | `C:\work\bash.exe` | `C:\Program Files\Git\bin\bash.exe` | yes |
