@@ -217,7 +217,7 @@ internal static class PlaintextRedactOracle
                         var start = before[m.Index];
                         var end = before[m.Index + m.Length - 1] + 1;
                         replaced = WholeValue(original[..start], original[end..], parts.Match(m.Value).Groups["marker"].Value,
-                            variant == VariantKind.Plain && !Apply.HasControlCharacter(searchText));
+                            variant.BaseKind() == VariantKind.Plain && !Apply.HasControlCharacter(searchText));
                     }
                     decisions.Add((m.Index, m.Length, replaced));
                     return replaced ? replacement : m.Value;
