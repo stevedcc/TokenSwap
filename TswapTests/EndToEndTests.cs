@@ -1353,10 +1353,25 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     private const int EndedBySigint = 130;
 
     /// <summary>
-    /// Brief T56 (#361): a Ctrl-C typed as soon as the gate's prompt shows, without waiting for the key read. Which way it
-    /// lands depends on whether tswap reached the read first: inside it, Ctrl-C is a key and the gate refuses (exit 1);
-    /// before it, the line discipline sends SIGINT and tswap dies by the signal. Both are correct, and both leave the
-    /// same state, since approve.json is written only after the Enter: the request kept, no approve file, the host unchanged.
+    /// How long an early Ctrl-C has to end tswap before it counts as dropped. Both landings that end tswap (the SIGINT, the
+    /// gate's refusal) do it at once; the window only has to cover a slow runner, and it is the wait on every macOS run.
+    /// </summary>
+    private static readonly TimeSpan EarlyCtrlCWindow = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// Brief T56 (#361): a Ctrl-C typed as soon as the gate's prompt shows, without waiting for the key read. Where it lands
+    /// depends on whether tswap reached the read first, and on whether the terminal is tswap's controlling terminal:
+    /// <list type="bullet">
+    /// <item>inside the read, Ctrl-C is a key and the gate refuses (exit 1);</item>
+    /// <item>before it, on a controlling terminal (Linux, where the harness starts tswap under <c>setsid</c>), the line
+    /// discipline sends SIGINT and tswap dies by the signal (exit 130);</item>
+    /// <item>before it, on a terminal that is not the controlling terminal (macOS, which has no <c>/usr/bin/setsid</c>), the
+    /// SIGINT has no foreground process group and is dropped (or the byte is queued and the gate's type-ahead discard, #293,
+    /// eats it), so tswap stays at the gate. The test then finishes the gate itself: it waits for the key read and types
+    /// Ctrl-C again, and the gate refuses (exit 1).</item>
+    /// </list>
+    /// All three are correct, and all leave the same state, since approve.json is written only after the Enter: the request
+    /// kept, no approve file, the host unchanged. The test output names the landing.
     /// (Not <see cref="AssertTheRequestIsKept"/>, which pins exit 1 for the gate's own refusal.)
     /// </summary>
     [UnixFact]
@@ -1365,18 +1380,32 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         var enrol = new EnrolOnPty(_tempDir, _binaryPath, _testKeyHex);
         enrol.SetUp();
         var hostKeyring = File.ReadAllBytes(enrol.HostKeyringPath);
+        var dropped = false;
 
         var (exitCode, output, killed) = enrol.Run(pty =>
         {
             pty.WaitFor(EnterGatePrompt);
             pty.Type("\x03");
+            if (pty.WaitForExit(EarlyCtrlCWindow))
+                return;
+            dropped = true;
+            pty.WaitForKeyRead();
+            pty.Type("\x03");
+            pty.WaitFor("wasn't confirmed");
         });
 
-        _output.WriteLine($"exit code {exitCode}");
         Assert.False(killed, "tswap didn't exit by itself; the terminal showed:\n" + output);
         var refused = output.ReplaceLineEndings(" ").Replace("  ", " ").Contains(NotConfirmed, StringComparison.Ordinal);
-        Assert.True(exitCode == 1 && refused || exitCode == EndedBySigint && !refused,
-            $"exit code {exitCode}, the gate's refusal {(refused ? "shown" : "not shown")}; the terminal showed:\n{output}");
+        var landing = (dropped, exitCode, refused) switch
+        {
+            (false, 1, true) => "refused at the key read",
+            (false, EndedBySigint, false) => "SIGINT before the key read",
+            (true, 1, true) => "Ctrl-C dropped before the key read, then refused at the key read",
+            _ => null,
+        };
+        _output.WriteLine($"landing: {landing ?? "none of the expected ones"} (exit code {exitCode})");
+        Assert.True(landing is not null,
+            $"exit code {exitCode}, the gate's refusal {(refused ? "shown" : "not shown")}, the first Ctrl-C {(dropped ? "dropped" : "not dropped")}; the terminal showed:\n{output}");
         var folder = Assert.Single(Directory.GetDirectories(Path.Combine(enrol.JoinerDir, "enrol")));
         Assert.True(File.Exists(Path.Combine(folder, "request.json")));
         Assert.False(File.Exists(Path.Combine(folder, "approve.json")), "approve.json was left behind");
