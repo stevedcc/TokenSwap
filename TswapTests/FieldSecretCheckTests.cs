@@ -211,6 +211,38 @@ public sealed class FieldSecretCheckTests : IDisposable
             FingerprintIndex.Build([], _keys), SameWrite(decomposed), "grafana", "username", decomposed));
     }
 
+    // ------------------------------------------------------------------ Holders (brief T56, #395)
+
+    [Fact]
+    public void Holders_NamesEachSecretOnce_ByName_MarkingPreviousOnly()
+    {
+        _m.Ok("u3-old-value-before", "ingest", "u3");
+        _m.Ok("u3-new-value-after", "ingest", "--rotate", "u3");
+        _m.Ok("u2-current-value", "ingest", "u2");
+        _m.Ok("unrelated-value", "ingest", "u1");
+
+        var holders = FieldSecretCheck.Holders(Stored(), "a u3-old-value-before b u2-current-value c u2-current-value");
+
+        Assert.Equal([new FieldSecretCheck.SecretHolder("u2", false), new FieldSecretCheck.SecretHolder("u3", true)], holders);
+    }
+
+    [Fact]
+    public void Holders_NothingContained_Empty()
+    {
+        _m.Ok("u2-current-value", "ingest", "u2");
+
+        Assert.Empty(FieldSecretCheck.Holders(Stored(), "admin"));
+    }
+
+    [Fact]
+    public void Holders_DecomposedStoredValue_FoundInTheSameDecomposedForm()
+    {
+        const string decomposed = "Jose\u0301";
+        _m.Ok(decomposed, "ingest", "u2");
+
+        Assert.Equal([new FieldSecretCheck.SecretHolder("u2", false)], FieldSecretCheck.Holders(Stored(), decomposed));
+    }
+
     /// <summary>Review (task 4, Minor 1), the reverse: a decomposed new value is found in a field holding those exact characters.</summary>
     [Fact]
     public void FieldsContaining_FindsDecomposedValueInDecomposedField()

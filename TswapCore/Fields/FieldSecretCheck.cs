@@ -11,8 +11,8 @@ namespace TswapCore.Fields;
 /// secret, burned ones included; a tombstone has none, so a deleted secret's value is not checked).
 /// Values are normalised (<see cref="FieldRules.NormaliseValue"/>) here, before every scan, so a
 /// caller can't scan a spelling that differs from the one stored; the value as given is scanned too
-/// when it differs, since secret values are stored unnormalised. No message names the secret that
-/// matched.
+/// when it differs, since secret values are stored unnormalised. No message here names the secret that
+/// matched; <see cref="Holders"/> lists them for <c>field adopt</c> alone, which runs under sudo (brief T56).
 /// </summary>
 public static class FieldSecretCheck
 {
@@ -33,6 +33,34 @@ public static class FieldSecretCheck
         Contains(stored, value) || (sameWrite is not null && Contains(sameWrite, value))
             ? $"Refused: the value for '{name}.{field}' contains a stored secret value. Fields are visible; a secret never goes in one."
             : null;
+
+    /// <summary>A secret whose stored value a field value contains (<see cref="Holders"/>).</summary>
+    /// <param name="Name">The secret's name.</param>
+    /// <param name="PreviousOnly">True when every hit on that name is its previous value (the one a rotation replaced).</param>
+    public sealed record SecretHolder(string Name, bool PreviousOnly);
+
+    /// <summary>
+    /// Every secret whose stored value <paramref name="value"/> contains (scanned as <see cref="Contains"/> scans:
+    /// NFC and as given), distinct by name, ordered by name (ordinal); <see cref="SecretHolder.PreviousOnly"/> when
+    /// every hit on that name is a previous value. Brief T56 (#395): only <c>field adopt</c>, which runs under sudo,
+    /// names these; no value is in the result.
+    /// </summary>
+    public static IReadOnlyList<SecretHolder> Holders(FingerprintIndex stored, string value)
+    {
+        ArgumentNullException.ThrowIfNull(stored);
+        ArgumentNullException.ThrowIfNull(value);
+        var normalised = FieldRules.NormaliseValue(value);
+        IEnumerable<FingerprintHit> hits = stored.Scan(normalised);
+        if (!string.Equals(normalised, value, StringComparison.Ordinal))
+            hits = hits.Concat(stored.Scan(value));
+        return
+        [
+            .. hits
+                .GroupBy(h => h.Name, StringComparer.Ordinal)
+                .OrderBy(g => g.Key, StringComparer.Ordinal)
+                .Select(g => new SecretHolder(g.Key, g.All(h => h.IsPrevious))),
+        ];
+    }
 
     /// <summary>
     /// True when <paramref name="value"/> looks like a generated secret: at least

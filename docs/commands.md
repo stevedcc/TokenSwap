@@ -416,7 +416,7 @@ List all burned secrets
 ### field
 
 ```
-tswap field set NAME <FIELD=VALUE…|JSON|@FILE> [--by LABEL] | field unset NAME FIELD… [--by LABEL] | field show NAME [--history] [--json] | field adopt NAME FIELD --from SECRET
+tswap field set NAME <FIELD=VALUE…|JSON|@FILE> [--by LABEL] | field unset NAME FIELD… [--by LABEL] | field show NAME [--history] [--json] | field adopt NAME FIELD --from SECRET [NAME FIELD --from SECRET]…
 ```
 
 Plain, visible fields on a secret (username, url, consumers, source, kind, expires, rotate, ...): never secret, never substituted into commands; sudo for adopt
