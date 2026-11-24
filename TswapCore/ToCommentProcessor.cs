@@ -20,12 +20,8 @@ public static class ToCommentProcessor
     /// own pattern anchored at the start position (<c>\G</c>), in the order the one regex tried them.
     /// The lookbehind/lookahead keep a secret from matching inside a larger value: it must not be
     /// preceded or followed by a dash or word character, so "myapp" doesn't match in "myapp-database".
-    /// <para>
-    /// Known limitation: a secret appearing in prose still matches if surrounded by spaces (e.g.
-    /// "description: contact myapp support" would match "myapp"). This is acceptable since prose is
-    /// rarely found in YAML value positions, and requiring colon-space context would fail on valid
-    /// YAML like flow sequences or compact mappings.
-    /// </para>
+    /// A match is an occurrence; brief T50b (#394): the caller replaces it only where <see cref="FillsBack"/>
+    /// holds, so a value in prose, a path or a command line is left (and reported), never replaced.
     /// </summary>
     internal static Regex[] AnchoredPatterns(string searchText)
     {
@@ -40,6 +36,88 @@ public static class ToCommentProcessor
 
     /// <summary>What a match of <paramref name="token"/> becomes.</summary>
     internal static string Replacement(string token) => $"\"\"  # tswap: {token}";
+
+    // Brief T50b, rule (m): marker-shaped text as apply reads it, quote-blind: '#', 'tswap', ':'.
+    private static readonly Regex MarkerText = new(@"#\s*tswap\s*:");
+
+    /// <summary>
+    /// Brief T50b (#394): whether an occurrence is a whole value <c>apply</c> fills back exactly, so replacing it
+    /// with a marker loses nothing. All four hold, on the original text:
+    /// (a) <paramref name="before"/> (the line up to the occurrence) has no <c>#</c> outside quote regions, ends
+    /// outside every region and, without trailing spaces and tabs, is not empty and ends in <c>:</c> or <c>=</c>;
+    /// (m) neither <paramref name="before"/> nor <paramref name="after"/> holds marker-shaped text, quoted or not;
+    /// (a′) on a <c>=</c> line only an occurrence of the plain value without control characters qualifies
+    /// (<paramref name="envForm"/>); (b) <paramref name="after"/> (the line after the occurrence) is empty, only
+    /// spaces and tabs, or spaces/tabs and then a <c>#</c> comment. A <c># tswap:</c> marker the occurrence consumed
+    /// (<paramref name="consumedMarker"/>, empty when none) counts only with a space or tab before its <c>#</c>.
+    /// </summary>
+    internal static bool FillsBack(string before, string consumedMarker, string after, bool envForm)
+    {
+        if (MarkerText.IsMatch(before) || MarkerText.IsMatch(after))
+            return false;
+        if (SeparatorBefore(before) is not { } separator)
+            return false;
+        if (separator == '=' && !envForm)
+            return false;
+        if (consumedMarker.Length > 0 && consumedMarker.AsSpan(0, consumedMarker.IndexOf('#')).IndexOfAny(' ', '\t') < 0)
+            return false;
+        var i = 0;
+        while (i < after.Length && after[i] is ' ' or '\t')
+            i++;
+        return i == after.Length || (i > 0 && after[i] == '#');
+    }
+
+    /// <summary>
+    /// Brief T50b, rule (a): the <c>:</c> or <c>=</c> that <paramref name="before"/> ends in (trailing spaces and
+    /// tabs aside), or null when it ends otherwise, inside a quote region, or holds a <c>#</c> outside one. A
+    /// <c>"</c> region closes at the next <c>"</c> not preceded by <c>\</c>; a <c>'</c> region at the next <c>'</c>
+    /// that isn't part of <c>''</c> (the quote right after the opening one counts as such a pair, so an empty
+    /// <c>''</c> stays open: fail closed).
+    /// </summary>
+    private static char? SeparatorBefore(string before)
+    {
+        char open = '\0';
+        for (var i = 0; i < before.Length; i++)
+        {
+            var c = before[i];
+            switch (open)
+            {
+                case '\0' when c == '#':
+                    return null;
+                case '\0' when c is '"':
+                    open = c;
+                    break;
+                case '\0' when c is '\'':
+                    open = c;
+                    if (i + 1 < before.Length && before[i + 1] == '\'')
+                        i++;
+                    break;
+                case '"' when c == '"' && before[i - 1] != '\\':
+                    open = '\0';
+                    break;
+                case '\'' when c == '\'':
+                    if (i + 1 < before.Length && before[i + 1] == '\'')
+                        i++;
+                    else
+                        open = '\0';
+                    break;
+            }
+        }
+        if (open != '\0')
+            return null;
+        var trimmed = before.AsSpan().TrimEnd(" \t");
+        return trimmed is [.., ':' or '='] ? trimmed[^1] : null;
+    }
+
+    /// <summary>
+    /// Brief T50b (#394, owner decision 6): whether a secret's <b>name</b> marks it as a username (it holds
+    /// <c>user</c>, <c>login</c>, <c>account</c> or <c>email</c>, ignoring case). Never decided from the value.
+    /// </summary>
+    public static bool IsUsernameName(string name) =>
+        name.Contains("user", StringComparison.OrdinalIgnoreCase)
+        || name.Contains("login", StringComparison.OrdinalIgnoreCase)
+        || name.Contains("account", StringComparison.OrdinalIgnoreCase)
+        || name.Contains("email", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// The continuation lines of line <paramref name="index"/> (whose text before the replacement was

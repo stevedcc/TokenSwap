@@ -336,7 +336,7 @@ Limits:
   from the secret itself; such a value belongs in a field. `add`, `ingest`, `ingest --rotate`, `create`
   and `rotate` warn when they store a value shorter than 8 characters ([commands](commands.md#commands)).
   `redact` follows the same rule; `tocomment` already replaced a value only between `[-\w]` boundaries,
-  for every value, and still does. The fields guards (a field value containing a secret is refused) and
+  for every value, and still does; since 0.3.3 it also replaces one only where `apply` can fill it back. The fields guards (a field value containing a secret is refused) and
   the broker (it never emits a known form) still match every value anywhere. Streaming: a read boundary
   counts as a word boundary, and the redactor holds back the trailing word (up to 256 characters) so the
   next read starts on a word's first character; in rare cases (a run of word characters longer than 256

@@ -31,6 +31,14 @@ public class RedactTests
         return MakeDb(items);
     }
 
+    /// <summary>Brief T50b Task 2: <c>Redact.ToComment</c>, every marker it wrote checked to fill back (<see cref="ToCommentRoundTrip"/>).</summary>
+    private static (string Content, IReadOnlyList<LineDiff> Changes) ToComment(string content, SecretsDb db)
+    {
+        var result = Redact.ToComment(content, db);
+        ToCommentRoundTrip.Check(result.Changes, db);
+        return result;
+    }
+
     // -------------------------------------------------------------------------
     // Redact.RedactContent — plaintext
     // -------------------------------------------------------------------------
@@ -138,7 +146,7 @@ public class RedactTests
     public void ToComment_UnquotedValue_ReplacedWithMarker()
     {
         var db = MakeDb(("db-pass", "s3cr3t"));
-        var (content, changes) = Redact.ToComment("password: s3cr3t", db);
+        var (content, changes) = ToComment("password: s3cr3t", db);
         Assert.Equal("password: \"\"  # tswap: db-pass", content);
         Assert.Single(changes);
         Assert.Equal(1, changes[0].LineNumber);
@@ -148,7 +156,7 @@ public class RedactTests
     public void ToComment_QuotedValue_QuotesConsumed()
     {
         var db = MakeDb(("db-pass", "s3cr3t"));
-        var (content, _) = Redact.ToComment("password: \"s3cr3t\"", db);
+        var (content, _) = ToComment("password: \"s3cr3t\"", db);
         Assert.Equal("password: \"\"  # tswap: db-pass", content);
     }
 
@@ -156,7 +164,7 @@ public class RedactTests
     public void ToComment_SingleQuotedValue_QuotesConsumed()
     {
         var db = MakeDb(("db-pass", "s3cr3t"));
-        var (content, _) = Redact.ToComment("password: 's3cr3t'", db);
+        var (content, _) = ToComment("password: 's3cr3t'", db);
         Assert.Equal("password: \"\"  # tswap: db-pass", content);
     }
 
@@ -164,7 +172,7 @@ public class RedactTests
     public void ToComment_NoMatch_EmptyChanges()
     {
         var db = MakeDb(("pw", "mysecret"));
-        var (content, changes) = Redact.ToComment("nothing here", db);
+        var (content, changes) = ToComment("nothing here", db);
         Assert.Equal("nothing here", content);
         Assert.Empty(changes);
     }
@@ -173,7 +181,7 @@ public class RedactTests
     public void ToComment_MultipleLines_OnlyChangedLinesReported()
     {
         var db = MakeDb(("pw", "s3cr3t"));
-        var (content, changes) = Redact.ToComment("a: ok\nb: s3cr3t\nc: ok", db);
+        var (content, changes) = ToComment("a: ok\nb: s3cr3t\nc: ok", db);
         Assert.Equal("a: ok\nb: \"\"  # tswap: pw\nc: ok", content);
         Assert.Single(changes);
         Assert.Equal(2, changes[0].LineNumber);
@@ -185,7 +193,7 @@ public class RedactTests
         var db = MakeDb(("pw", "s3cr3t"));
         var converted = "password: \"\"  # tswap: pw";
         // Running tocomment again should produce no changes (value not present any more)
-        var (_, changes) = Redact.ToComment(converted, db);
+        var (_, changes) = ToComment(converted, db);
         Assert.Empty(changes);
     }
 
@@ -193,7 +201,7 @@ public class RedactTests
     public void ToComment_BurnedSecret_IsReplaced()
     {
         var db = MakeDb(("pw", "s3cr3t", true));
-        var (content, changes) = Redact.ToComment("password: s3cr3t", db);
+        var (content, changes) = ToComment("password: s3cr3t", db);
         Assert.Equal("password: \"\"  # tswap: pw", content);
         Assert.Single(changes);
     }
@@ -202,7 +210,7 @@ public class RedactTests
     public void ToComment_DiffRecordsBeforeAndAfter()
     {
         var db = MakeDb(("pw", "s3cr3t"));
-        var (_, changes) = Redact.ToComment("p: s3cr3t", db);
+        var (_, changes) = ToComment("p: s3cr3t", db);
         Assert.Single(changes);
         Assert.Equal("p: s3cr3t", changes[0].Before);
         Assert.Equal("p: \"\"  # tswap: pw", changes[0].After);
@@ -215,28 +223,30 @@ public class RedactTests
     [Fact]
     public void ToComment_YamlFlowMapping_UnquotedValueAdjacentToComma()
     {
-        // value sits between ": " and "," — comma must survive unchanged
+        // Brief T50b (#394, owner decision 1): a marker inside a flow mapping would turn the closing '}' into
+        // comment text, so the value is left (and reported as skipped; Task 1 rows 12-13 pin that).
         var db = MakeDb(("db-pass", "s3cr3t"));
-        var (content, _) = Redact.ToComment("{password: s3cr3t, host: local}", db);
-        Assert.Equal("{password: \"\"  # tswap: db-pass, host: local}", content);
+        var (content, _) = ToComment("{password: s3cr3t, host: local}", db);
+        Assert.Equal("{password: s3cr3t, host: local}", content);
     }
 
     [Fact]
     public void ToComment_YamlFlowMapping_DoubleQuotedValueAdjacentToComma()
     {
-        // double-quoted value inside a flow mapping — quotes consumed, comma survives
+        // double-quoted value inside a flow mapping — brief T50b (owner decision 1): left as it is
         var db = MakeDb(("db-pass", "s3cr3t"));
-        var (content, _) = Redact.ToComment("{password: \"s3cr3t\", host: local}", db);
-        Assert.Equal("{password: \"\"  # tswap: db-pass, host: local}", content);
+        var (content, _) = ToComment("{password: \"s3cr3t\", host: local}", db);
+        Assert.Equal("{password: \"s3cr3t\", host: local}", content);
     }
 
     [Fact]
     public void ToComment_YamlFlowSequence_ValueAdjacentToBracket()
     {
-        // value is the sole element of a flow sequence — bracket must survive
+        // value is the sole element of a flow sequence — brief T50b (owner decision 1): the marker would turn
+        // the ']' into comment text, so the line is left as it is
         var db = MakeDb(("db-pass", "s3cr3t"));
-        var (content, _) = Redact.ToComment("passwords: [s3cr3t]", db);
-        Assert.Equal("passwords: [\"\"  # tswap: db-pass]", content);
+        var (content, _) = ToComment("passwords: [s3cr3t]", db);
+        Assert.Equal("passwords: [s3cr3t]", content);
     }
 
     [Fact]
@@ -244,7 +254,7 @@ public class RedactTests
     {
         // compact "key:value" (no space) — value still matched and replaced
         var db = MakeDb(("db-pass", "s3cr3t"));
-        var (content, changes) = Redact.ToComment("password:s3cr3t", db);
+        var (content, changes) = ToComment("password:s3cr3t", db);
         Assert.Equal("password:\"\"  # tswap: db-pass", content);
         Assert.Single(changes);
     }
@@ -254,7 +264,7 @@ public class RedactTests
     {
         // existing inline comment is preserved (appended after the tswap marker)
         var db = MakeDb(("db-pass", "s3cr3t"));
-        var (content, _) = Redact.ToComment("password: s3cr3t  # legacy value", db);
+        var (content, _) = ToComment("password: s3cr3t  # legacy value", db);
         Assert.Equal("password: \"\"  # tswap: db-pass  # legacy value", content);
     }
 
@@ -263,7 +273,7 @@ public class RedactTests
     {
         // CRLF input must not leave stray \r in the output or miscount line numbers
         var db = MakeDb(("pw", "s3cr3t"));
-        var (content, changes) = Redact.ToComment("a: ok\r\nb: s3cr3t\r\nc: ok", db);
+        var (content, changes) = ToComment("a: ok\r\nb: s3cr3t\r\nc: ok", db);
         Assert.DoesNotContain("\r", content);
         Assert.Single(changes);
         Assert.Equal(2, changes[0].LineNumber);
@@ -275,7 +285,7 @@ public class RedactTests
         // "p+ss" as an unescaped regex matches "pss"/"ppss"/… but NOT the literal "p+ss".
         // Regex.Escape must be applied so only the exact value is replaced.
         var db = MakeDb(("api-key", "p+ss"));
-        var (content, changes) = Redact.ToComment("apikey: p+ss", db);
+        var (content, changes) = ToComment("apikey: p+ss", db);
         Assert.Equal("apikey: \"\"  # tswap: api-key", content);
         Assert.Single(changes);
     }
@@ -286,7 +296,7 @@ public class RedactTests
         // "pss" satisfies the unescaped regex "p+ss" but must NOT be replaced when
         // the actual stored secret is "p+ss".
         var db = MakeDb(("api-key", "p+ss"));
-        var (content, changes) = Redact.ToComment("apikey: pss", db);
+        var (content, changes) = ToComment("apikey: pss", db);
         Assert.Equal("apikey: pss", content);
         Assert.Empty(changes);
     }
@@ -310,7 +320,7 @@ stringData:
   username: myapp
   password: CHANGEME";
         
-        var (content, changes) = Redact.ToComment(yaml, db);
+        var (content, changes) = ToComment(yaml, db);
         
         // Only the actual secret value line should change
         Assert.Single(changes);
@@ -332,7 +342,7 @@ stringData:
 username: app
 other: app-config";
         
-        var (content, changes) = Redact.ToComment(yaml, db);
+        var (content, changes) = ToComment(yaml, db);
         
         // Should match line 2 (username: app) but not line 1 or 3
         Assert.Single(changes);
@@ -353,7 +363,7 @@ other: app-config";
 username: ""myapp""
 label: myapp-prod";
         
-        var (content, changes) = Redact.ToComment(yaml, db);
+        var (content, changes) = ToComment(yaml, db);
         
         // Only line 2 has the complete secret value
         Assert.Single(changes);
@@ -381,7 +391,7 @@ label: myapp-prod";
           export APP_NAME=""myapp""
           curl -sfL https://example.com | APP_NAME=""$APP_NAME"" sh";
 
-        var (content, changes) = Redact.ToComment(yaml, db);
+        var (content, changes) = ToComment(yaml, db);
 
         // Only the assignment line should be replaced
         Assert.Single(changes);
@@ -403,7 +413,7 @@ label: myapp-prod";
         // tocomment on that output must NOT produce: key: ""  # tswap: pw  # tswap: pw
         var db = MakeDb(("pw", "s3cr3t"));
         var applyOutput = "password: \"s3cr3t\"  # tswap: pw";
-        var (content, changes) = Redact.ToComment(applyOutput, db);
+        var (content, changes) = ToComment(applyOutput, db);
         Assert.Equal("password: \"\"  # tswap: pw", content);
         Assert.Single(changes);
     }
@@ -413,7 +423,7 @@ label: myapp-prod";
     {
         // Unquoted variant: password: s3cr3t  # tswap: pw
         var db = MakeDb(("pw", "s3cr3t"));
-        var (content, changes) = Redact.ToComment("password: s3cr3t  # tswap: pw", db);
+        var (content, changes) = ToComment("password: s3cr3t  # tswap: pw", db);
         Assert.Equal("password: \"\"  # tswap: pw", content);
         Assert.Single(changes);
     }
@@ -424,7 +434,7 @@ label: myapp-prod";
         // If the existing marker names a different secret, the correct secret wins.
         // The stale marker is consumed and replaced with the one matching the actual value.
         var db = MakeDb(("pw", "s3cr3t"));
-        var (content, changes) = Redact.ToComment("password: \"s3cr3t\"  # tswap: old-name", db);
+        var (content, changes) = ToComment("password: \"s3cr3t\"  # tswap: old-name", db);
         Assert.Equal("password: \"\"  # tswap: pw", content);
         Assert.Single(changes);
     }
@@ -434,7 +444,7 @@ label: myapp-prod";
     {
         // Marker is consumed; any trailing comments after the marker are unaffected.
         var db = MakeDb(("pw", "s3cr3t"));
-        var (content, _) = Redact.ToComment("password: \"s3cr3t\"  # tswap: pw  # set at deploy", db);
+        var (content, _) = ToComment("password: \"s3cr3t\"  # tswap: pw  # set at deploy", db);
         Assert.Equal("password: \"\"  # tswap: pw  # set at deploy", content);
     }
 
@@ -612,7 +622,7 @@ label: myapp-prod";
         
         // YAML with the base64 value on a single line
         var yaml = $"  ca.crt: {largeBase64}";
-        var (content, changes) = Redact.ToComment(yaml, db);
+        var (content, changes) = ToComment(yaml, db);
         
         // The entire value should be replaced, with no trailing garbage
         Assert.Equal("  ca.crt: \"\"  # tswap: k8s-cert", content);
@@ -642,7 +652,7 @@ label: myapp-prod";
   ca.crt: {line1}
     {line2}";
         
-        var (content, changes) = Redact.ToComment(yaml, db);
+        var (content, changes) = ToComment(yaml, db);
         
         // No match occurs because the secret is split across lines
         Assert.Empty(changes);
@@ -665,7 +675,7 @@ label: myapp-prod";
         // YAML with the base64 on ONE line (no multi-line formatting)
         var yaml = $"  certificate: {largeBase64}";
         
-        var (content, changes) = Redact.ToComment(yaml, db);
+        var (content, changes) = ToComment(yaml, db);
         
         // Should successfully replace the entire value
         Assert.Single(changes);
@@ -687,7 +697,7 @@ label: myapp-prod";
     T3JxS09jeEwxTTNxRUoya3V6
 kind: Secret";
         
-        var (content, changes) = Redact.ToComment(yaml, db);
+        var (content, changes) = ToComment(yaml, db);
         
         // File must be unchanged
         Assert.Equal(yaml, content);
