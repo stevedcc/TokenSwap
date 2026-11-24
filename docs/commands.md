@@ -227,7 +227,8 @@ tswap field show opnsense-root --history    # each field's last changes, removed
   `username`, `url`, `host` and `port` are conventions, not checked.
 - **No secret in a field.** Every value is checked against the fingerprints of every stored value (every retained
   version of every live secret, burned ones included; no value is decrypted), and with a value command also against
-  the value of that call. A value that contains one is refused without naming which secret:
+  the value of that call. A value that contains one is refused without naming which secret (`field adopt`, under
+  sudo, names them):
   `Refused: the value for 'NAME.FIELD' contains a stored secret value. Fields are visible; a secret never goes in
   one.` A value of 20 or more characters from the base64 or hex alphabet with no space is written with a warning
   on stderr asking whether it is a secret. The check's limits:
@@ -250,11 +251,15 @@ tswap field show opnsense-root --history    # each field's last changes, removed
   `--by` label and the machine (origin id). It lists **removed fields too**, marked `(removed)`, with who removed
   them and when; plain `show` lists live fields only. The user name is what that machine reports and `--by` is
   self-asserted: a history, not an authentication. `--json --history` adds the same under `history`.
-- **`sudo tswap field adopt NAME FIELD --from SECRET`** copies SECRET's current value (burned or not: the main
-  case is a username once stored as a secret) into the field `NAME.FIELD`, then deletes SECRET, in one commit. It
-  refuses when SECRET is NAME, when either doesn't exist, when `NAME.FIELD` has a value already (unset it first),
-  when SECRET has fields of its own (move them first) and when another live secret holds the same value. It is the
-  one deliberate path from secret to visible; no refusal prints the value.
+- **`sudo tswap field adopt NAME FIELD --from SECRET [NAME FIELD --from SECRET]…`** copies SECRET's current value
+  (burned or not: the main case is a username once stored as a secret) into the field `NAME.FIELD`, then deletes
+  SECRET, in one commit. Several `NAME FIELD --from SECRET` groups are adopted and deleted in the same commit: the
+  way to adopt one value held by several secrets (one username for two services), which one group at a time would
+  refuse. It refuses when SECRET is NAME, when either doesn't exist, when `NAME.FIELD` has a value already (unset it
+  first), when SECRET has fields of its own (move them first), when a SECRET or a `NAME.FIELD` is named twice or a
+  SECRET is another group's NAME, and when a live secret the command doesn't adopt holds the same value; that
+  refusal names those secrets (it runs under sudo, where `get` shows any value). Every check runs before anything
+  is written. It is the one deliberate path from secret to visible; no refusal prints the value.
 - `field set`, `unset` and `show` on a name that doesn't exist, or was deleted, refuse (`No secret 'NAME'.`).
   Deleting a secret drops its fields; a secret created again under that name starts with none.
 - `export` carries each secret's current fields (no history, no removed fields); see the
@@ -442,7 +447,7 @@ List all burned secrets
 ### field
 
 ```
-tswap field set NAME <FIELD=VALUE…|JSON|@FILE> [--by LABEL] | field unset NAME FIELD… [--by LABEL] | field show NAME [--history] [--json] | field adopt NAME FIELD --from SECRET
+tswap field set NAME <FIELD=VALUE…|JSON|@FILE> [--by LABEL] | field unset NAME FIELD… [--by LABEL] | field show NAME [--history] [--json] | field adopt NAME FIELD --from SECRET [NAME FIELD --from SECRET]…
 ```
 
 Plain, visible fields on a secret (username, url, consumers, source, kind, expires, rotate, ...): never secret, never substituted into commands; sudo for adopt

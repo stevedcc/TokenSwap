@@ -135,7 +135,8 @@ host; `--batch` carries the files on the session's stdin and stdout (`slot appro
   way into the real vault, but a joining machine that then wrote secrets would write them under a key
   the attacker knows. The host prints `Approve file fingerprint: ...` over the exact bytes it wrote,
   the joining machine prints `Approve file received: ...` over the exact bytes it got, and waits for
-  Enter. Like the requester's fingerprint, this is a human check, not a boundary (a same-user process on
+  Enter; it writes `approve.json` only after that Enter, so a Ctrl-C (or the process ending any other
+  way) before it leaves none behind. Like the requester's fingerprint, this is a human check, not a boundary (a same-user process on
   the host can also write to the session's terminal): it raises the bar from swapping a file to spoofing
   a terminal. It is the same exposure as the hand-carried flow, where `approve.json` sits in your folder
   too. In batch mode the approve file travels on the SSH session and never rests on the host.
@@ -753,7 +754,8 @@ formats: [commands.md](commands.md#fields-plain-data-next-to-a-secret).
 - **Guard rail 1: no secret in a field.** Every value a write sets is checked against the keyed
   fingerprints of every stored value (every retained version of every live secret, burned ones included;
   no value is decrypted), and with a value command also against the value of that call. A value that
-  contains one is refused without naming which secret. A long random-looking value only gets a warning.
+  contains one is refused without naming which secret (`field adopt`, under sudo, names them). A long
+  random-looking value only gets a warning.
   On a vault with records that have no fingerprints yet (format 2) every field write that sets a value is
   refused until `sudo tswap vault reindex`, since the check can't see those values (`field unset` sets
   none and works). Its limits:
@@ -778,8 +780,8 @@ formats: [commands.md](commands.md#fields-plain-data-next-to-a-secret).
     to 4096 characters (hundreds of candidates per call) against all live values at once, without needing a
     name. That speeds up brute force of small value spaces (the usernames and ports that belong in fields
     anyway); it doesn't touch a generated value. tswap doesn't restrict what agents run, and a limit on
-    `field set` alone would only move the probe to `run`; the refusal names no secret, and nothing else is
-    done.
+    `field set` alone would only move the probe to `run`; the refusal names no secret (only `field adopt`,
+    which needs sudo, names them), and nothing else is done.
 - **Guard rail 2: no field reaches a command.** `run` refuses any `{{NAME.anything}}` token, and
   `run … {{@file}}` and `apply` any `# tswap: NAME.anything` marker, before anything is filled in, so a
   dotted token or marker is never read as NAME plus text. Brace text that doesn't start with a secret name
@@ -798,7 +800,10 @@ formats: [commands.md](commands.md#fields-plain-data-next-to-a-secret).
   an authentication. `field show --history` lists removed fields too, with who removed them and when.
 - **`field adopt` is the deliberate exception**: `sudo tswap field adopt NAME FIELD --from SECRET` turns a
   secret's value (burned or not) into a visible field and deletes that secret. Sudo, because it makes a
-  secret visible; the owner approves each. It refuses when another live secret holds the same value.
+  secret visible; the owner approves each. Several `NAME FIELD --from SECRET` groups are adopted and deleted
+  in one commit, for one value held by several secrets. It refuses when a live secret the command doesn't
+  adopt holds the same value, and names those secrets: under sudo `get` shows any value, so naming them
+  tells the caller nothing more.
 - **Mixed versions.** A tswap 0.3.x machine keeps the fields' bytes but merges them by its own rule (the
   whole extension list of the newest write), so in a folder shared with 0.3.x machines field state is
   decided per record, not per field: a 0.3.x merge can drop a newer field change or bring back a removed

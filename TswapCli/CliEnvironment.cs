@@ -58,6 +58,12 @@ public sealed class CliEnvironment
     /// <summary>Command-line args with the leading global -v/--verbose flags removed.</summary>
     public required string[] CommandArgs { get; init; }
 
+    /// <summary>
+    /// Brief T56 (#382): reads the current folder, for <see cref="CurrentFolder.IsGone"/> after a failed command. A
+    /// test seam: production never sets it.
+    /// </summary>
+    public Func<string> CurrentDirectory { get; init; } = Directory.GetCurrentDirectory;
+
     public static CliEnvironment FromSystem(string[] args)
         => Create(args, Environment.GetEnvironmentVariable, Environment.IsPrivilegedProcess, Environment.ProcessPath, Console.Error);
 

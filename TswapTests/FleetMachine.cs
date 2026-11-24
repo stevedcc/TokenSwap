@@ -93,6 +93,12 @@ public sealed class FleetMachine : IDisposable
     public TimeProvider? Time { get; set; }
 
     /// <summary>
+    /// Brief T56 (#382): the current folder this machine's commands see (<see cref="CliEnvironment.CurrentDirectory"/>);
+    /// null keeps the real one. A test makes it throw to play a deleted folder.
+    /// </summary>
+    public Func<string>? CurrentDirectory { get; set; }
+
+    /// <summary>
     /// Brief T16-S2: run on the record store of each command this machine runs, before the command,
     /// so a test can watch what it decrypts (<c>ValueDecrypted</c>, <c>RecordDecrypted</c>). Null: none.
     /// </summary>
@@ -183,6 +189,7 @@ public sealed class FleetMachine : IDisposable
         {
             Prefix = "tswap", ConfigDir = Dir, Verbose = false, CommandArgs = args, YubiKeySerialVariable = YubiKeySerialVariable,
             AgentSocketVariable = AgentSocket, SudoEscalated = SudoEscalated,
+            CurrentDirectory = CurrentDirectory ?? Directory.GetCurrentDirectory,
         };
         List<IHardwareKeyService> backends = [];
         if (Tpm is not null) backends.Add(new SimulatedHardwareService(HardwareBackend.Tpm, Tpm));

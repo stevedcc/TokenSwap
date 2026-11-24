@@ -802,29 +802,70 @@ public class SlotEnrolTests : IDisposable
         Assert.DoesNotContain(ssh.Log, l => l.Contains("merge"));
     }
 
+    /// <summary>Brief T56 (#361): calls <paramref name="onApproveAccess"/> at each local access to <c>approve.json</c>, failing none.</summary>
+    private void OnApproveAccess(Action onApproveAccess) =>
+        _joiner.EnrolSeams = new TswapCli.Commands.EnrolFileSeams
+        {
+            BeforeLocalAccess = path =>
+            {
+                if (IsFile(path, "approve.json"))
+                    onApproveAccess();
+            },
+        };
+
     /// <summary>
-    /// Review round 1 (M5): at end of input at the gate, an approve file that can't be deleted (the seam fails its second
-    /// access, the delete; the first is the write) still gives the "wasn't confirmed" message, which names the file.
+    /// Brief T56 (#361, replaces EnterGate_ApproveFileNotDeletable_StillSaysWhatIsLeft, sanctioned by the owner: the delete
+    /// at the gate it pinned is gone): the approve file is written only after the Enter, so at end of input at the gate
+    /// (Ctrl-C on a real terminal) it was never written and there is nothing to delete.
     /// </summary>
     [Fact]
-    public void EnterGate_ApproveFileNotDeletable_StillSaysWhatIsLeft()
+    public void EnterGate_EndOfInput_NeverWritesTheApproveFile()
     {
         var ssh = InteractiveSsh();
         _joiner.Ssh = ssh;
         var approveAccesses = 0;
-        LocalAccessFails(path => IsFile(path, "approve.json") && ++approveAccesses == 2);
+        OnApproveAccess(() => approveAccesses++);
+        var hostKeyring = HostKeyringBytes();
 
         var (exit, _, stderr) = EnrolOnTerminal("\n\n\n"); // request's answers; then EOF at the Enter
 
         Assert.NotEqual(0, exit);
-        var approve = Path.Combine(Assert.Single(EnrolFolders), "approve.json");
         Assert.Contains("The approve file's fingerprint wasn't confirmed, so it was not accepted. This machine's pending request is kept; " +
                         $"nothing was added on {Via}.", stderr);
-        Assert.Contains($"Delete {approve} by hand (it couldn't be deleted: locked).", stderr);
-        Assert.Equal(2, approveAccesses);
-        Assert.True(File.Exists(approve));
+        Assert.DoesNotContain("by hand", stderr);
+        Assert.Equal(0, approveAccesses);
+        Assert.False(File.Exists(Path.Combine(Assert.Single(EnrolFolders), "approve.json")));
         Assert.NotNull(_joiner.Config.PendingSlotId);
+        Assert.Equal(hostKeyring, HostKeyringBytes());
         Assert.DoesNotContain(ssh.Log, l => l.Contains("merge"));
+    }
+
+    [Fact]
+    public void EnterGate_Enter_WritesTheApproveFileOnce()
+    {
+        _joiner.Ssh = InteractiveSsh();
+        var approveAccesses = 0;
+        OnApproveAccess(() => approveAccesses++);
+
+        var (exit, stdout, stderr) = EnrolOnTerminal(TerminalAnswers);
+
+        Assert.True(exit == 0, stderr + stdout);
+        AssertEnrolled(stdout, $"YubiKey {SerialB}");
+        Assert.Equal(1, approveAccesses);
+    }
+
+    [Fact]
+    public void EnterGate_TypedTextThenEnter_WritesNothingUntilTheEnter()
+    {
+        _joiner.Ssh = InteractiveSsh();
+        List<int> retriesPrintedAtAccess = [];
+        OnApproveAccess(() => retriesPrintedAtAccess.Add(CountOf(_joiner.LastConsole!.OutText, TswapCli.Commands.SlotCommand.EnterGateRetryText)));
+
+        var (exit, stdout, stderr) = EnrolOnTerminal("\n\n\n" + "x\n" + "\n");
+
+        Assert.True(exit == 0, stderr + stdout);
+        Assert.Equal(1, CountOf(stdout, TswapCli.Commands.SlotCommand.EnterGateRetryText));
+        Assert.Equal([1], retriesPrintedAtAccess); // one write, after the retry text, so after the gate's second input line (the empty Enter after the retry)
     }
 
     [Fact]

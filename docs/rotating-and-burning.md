@@ -42,7 +42,9 @@ stop working until they get the new one.
 
 On a record-store vault (what `init` makes since 0.2) the old version's burn stays in the record,
 and `tswap burned` lists it under "Rotated" instead of as outstanding (`burned --json` marks it
-`"status": "rotated"`). When copies of a vault folder are merged (`vault merge`, or a sync tool's
+`"status": "rotated"`). `tswap burned` starts with a count line (`0 outstanding, N rotated` when
+nothing needs rotation), and every row starts with its state, `outstanding` or `rotated`, so no part
+of the output (`tswap burned | tail`, say) reads as a list of secrets to rotate. When copies of a vault folder are merged (`vault merge`, or a sync tool's
 conflicted copies), a newer value supersedes the burn the same way: see
 [The merge rules](multi-machine.md#the-merge-rules).
 
