@@ -143,6 +143,18 @@ public static class SecretVariants
         return Fingerprinter.Compute(valueBytes, keys).Entries.Any(e => e.Kind.BaseKind() != e.Kind && !have.Contains(e.Kind));
     }
 
+    /// <summary>
+    /// T54 fix round 1 (MiMo M1, owner decision, controller ruling (b)): whether <paramref name="set"/> is of a
+    /// variant-set version this build knows (1 to <see cref="CurrentSetVersion"/>), whose base entries it can
+    /// recompute: base entries are the same in every known version. A set of a version it doesn't know (0, or a newer
+    /// build's) stays "taken as is" (T16-S1).
+    /// </summary>
+    public static bool IsKnownVersion(FingerprintSet set)
+    {
+        ArgumentNullException.ThrowIfNull(set);
+        return set.VariantSetVersion is >= 1 and <= CurrentSetVersion;
+    }
+
     public static bool IsCurrent(FingerprintSet set)
     {
         ArgumentNullException.ThrowIfNull(set);

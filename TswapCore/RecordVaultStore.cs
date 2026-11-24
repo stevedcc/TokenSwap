@@ -1065,7 +1065,9 @@ public sealed class RecordVaultStore : IFileVaultStore
         {
             throw new UnreadableRecordException(name, fileName, ex is CryptographicException ? "a value section fails authentication" : ex.Message);
         }
-        if (fingerprints is { } stored && SecretVariants.IsCurrent(stored))
+        // T54 fix round 1 (M1): every set of a version this build knows has its base entries checked; a version it
+        // doesn't know is taken as is (T16-S1).
+        if (fingerprints is { } stored && SecretVariants.IsKnownVersion(stored))
         {
             using var fingerprintKeys = FingerprintKeys.Derive(vaultKey);
             if (!Fingerprinter.Compute(value, fingerprintKeys).SameBaseEntries(stored))

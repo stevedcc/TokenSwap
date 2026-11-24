@@ -590,6 +590,23 @@ public class RecordMergeV3Tests
         Assert.Throws<RecordConflictException>(() => RecordMerge.ValidateFingerprints(lyingAsciiVersionOne, keys));
     }
 
+    /// <summary>
+    /// T54 fix round 1 (MiMo M1, owner decision, controller ruling (b)): a set of every version this build knows (1 to
+    /// CurrentSetVersion) has its base entries checked, so a version 1 set of a non-ASCII value that lies about its
+    /// value is refused; a true one passes. Versions it doesn't know stay "taken as is" (T16-S1).
+    /// </summary>
+    [Fact]
+    public void Validate_AVersionOneSetOfANonAsciiValue_HasItsBaseEntriesChecked()
+    {
+        using var keys = FingerprintKeys.Derive(VaultKey);
+        var good = Rec(S(1000), NonAscii);
+        var versionOne = good with { Fingerprints = VersionOne(good.Fingerprints!) };
+        var lying = good with { Fingerprints = WithEntry(VersionOne(good.Fingerprints!), VariantKind.Plain, OtherHmac) };
+
+        RecordMerge.ValidateFingerprints(versionOne, keys);
+        Assert.Throws<RecordConflictException>(() => RecordMerge.ValidateFingerprints(lying, keys));
+    }
+
     [Fact]
     public void Union_IsOrderIndependent_IdempotentAndRefusesOtherBaseEntriesOrVersions()
     {

@@ -392,10 +392,10 @@ public static class RecordMerge
     /// <paramref name="record"/>'s retained values from their plaintext, for the variant-set version
     /// this build computes (<see cref="SecretVariants.CurrentSetVersion"/>), and refuses a set that
     /// doesn't match. Full loads call it on every decoded copy before merging, so a stored set can't
-    /// claim fingerprints of a different value (which would hide it from redaction). A set of another
-    /// variant-set version can't be recomputed here and is taken as it is. Brief T54: a set counts as
-    /// this build's when <see cref="SecretVariants.IsCurrent"/> (a version 1 set of an ASCII value too),
-    /// and only its base entries must match (<see cref="FingerprintSet.SameBaseEntries"/>): form entries
+    /// claim fingerprints of a different value (which would hide it from redaction). A set of a
+    /// variant-set version this build doesn't know can't be recomputed here and is taken as it is. Brief T54: every set of a version
+    /// this build knows (<see cref="SecretVariants.IsKnownVersion"/>: 1 to the current one; fix round 1, M1) is
+    /// checked, and only its base entries must match (<see cref="FingerprintSet.SameBaseEntries"/>): form entries
     /// that another machine's Unicode library computed differently are accepted as written, since they
     /// can only add masking.
     /// </summary>
@@ -409,7 +409,7 @@ public static class RecordMerge
 
         static void Validate(byte[] value, FingerprintSet? stored, FingerprintKeys keys)
         {
-            if (stored is null || !SecretVariants.IsCurrent(stored))
+            if (stored is null || !SecretVariants.IsKnownVersion(stored))
                 return;
             if (!Fingerprinter.Compute(value, keys).SameBaseEntries(stored))
                 throw new RecordConflictException("a copy's fingerprints don't match its value");

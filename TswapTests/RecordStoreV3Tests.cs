@@ -625,6 +625,21 @@ public sealed class RecordStoreV3Tests : IDisposable
         Assert.Contains(Path.GetFileName(File("s")), Store(_m).LoadSecrets(_key, TextWriter.Null).UnreadableFiles!);
     }
 
+    /// <summary>T54 fix round 1 (MiMo M1, ruling (b)): the read path checks a version 1 set of a non-ASCII value too.</summary>
+    [Fact]
+    public void ReadSecretValue_AVersionOneSetThatLiesAboutANonAsciiValue_IsRefused()
+    {
+        WriteMarker(_m);
+        _m.Ok("caf\u00e9-db-pass", "ingest", "s");
+        var record = Read("s");
+        var versionOne = new FingerprintSet(1, [.. record.Fingerprints!.Entries.Where(e => e.Kind.BaseKind() == e.Kind)]);
+        Plant(File("s"), record with { Fingerprints = WithOtherHmac(versionOne, VariantKind.Plain) }, _key);
+
+        Assert.Contains("fingerprints don't match", Assert.Throws<TswapException>(() => Store(_m).ReadSecretValue("s", _key)).Message);
+        Plant(File("s"), record with { Fingerprints = versionOne }, _key);
+        Assert.Equal(Encoding.UTF8.GetBytes("caf\u00e9-db-pass"), Store(_m).ReadSecretValue("s", _key));
+    }
+
     [Fact]
     public void RawFileBytes_HoldNoFingerprintMaterial()
     {
