@@ -110,23 +110,43 @@ None of these texts (the refusal, the note, the warning) ever names a secret, a 
 
 Other changes in 0.3, from reading metadata only: `redact` masks a multi-line value (a PEM key) across
 lines; neither command matches a secret inside or across a label or marker it inserted itself;
-`tocomment --dry-run` redacts its "before" lines in one pass, so a value spanning two changed lines is
-masked there too; `get` and `apply` no longer report records they don't read; `check` no longer stops
-on an unreadable format 2 record that no marker names; and conflicted copies that only their
-plaintext could show equal make `list` and `check` refuse that record
+`tocomment --dry-run` redacts each changed line's "before" and "after" text on its own, and lists a
+replaced multi-line value as `[value over N lines]`, never its text; `get` and `apply` no longer report
+records they don't read; `check` no longer stops on an unreadable format 2 record that no marker
+names; and conflicted copies that only their plaintext could show equal make `list` and `check` refuse
+that record
 ([details](security-model.md#what-each-command-decrypts)).
 `tocomment` also adopts a YAML literal block scalar (`key: |`, `|-` or `|+`) whose content is exactly
 one stored value, a PEM key say: the key line becomes `key: ""  # tswap: <name>` and the block's lines
 go (`--dry-run` shows them as `[removed block line]`, never their text). Inside a block scalar (`|` or
 `>`, with any indicators, anchor or tag), a line holding an **encoded** form of a value (base64, base64url or
 the value without its whitespace) is left as it is, with a warning naming the line number and the
-secret, because a marker is always filled with the plain value. A plain value inside a block is still
-replaced by a marker, whose `#` then becomes part of the block's text: right for shell scripts and
-YAML kept in a block, not for JSON. Known gaps, handled as any other line: a document-root block
+secret, because a marker is always filled with the plain value. A plain value inside a block follows the
+same whole-value rule as any other line (below): `export TOKEN=…` is replaced, and the marker's `#` becomes
+part of the block's text, a shell comment; `run --user …` is not. Markers are not for JSON. Known gaps, handled as any other line: a document-root block
 (`--- |`, `--- >`), a bare nested entry (`- - |`), an empty key (`: |`) and keys containing `#`
 (`- - key: |` and `? key: |` are recognised). `check` warns (exit 2) about a
 marker under `data:` in a `kind: Secret` manifest, where Kubernetes expects base64 but the marker gets
 the raw value: use `stringData:` (JSON status `data-not-base64`).
+
+Since 0.3.3 `tocomment` replaces a value only where `apply` fills it back, double-quoted: after `key:`, or
+after `KEY=` when the value holds no control character; with nothing but a `#` comment after it, and
+whitespace before that `#`; with no `#` before it outside quotes; and with no other `# tswap:` text
+anywhere on the line. So `namespace: authentik` is replaced, while `- authentik.sources…`, a command line,
+a URL, a comment and a flow collection (`{user: x}`, `[x]`) are not. For each occurrence it leaves, it
+warns, naming the line and the secret, never the value ("…was left in place: …. If it is the secret
+there, move it out by hand."); a file it doesn't change then ends with `File unchanged.`, exit code 0. A
+value with a line break is found whatever the line endings of the value and of the file. It is replaced
+when it is such a value after `key:` (one change, shown as `[value over N lines]`), and warned about
+otherwise (`lines A-B`). `apply` writes the value double-quoted, so the YAML meaning can change: `user:authentik`
+was one plain scalar, and a quoted scalar broken over lines folded its line break. On a `KEY=` line
+`apply` writes `KEY="value"` and keeps the rest of the line. A reader that takes quotes and a ` # …`
+literally (`docker run --env-file`) sees them as part of the value, as for any marker on such a line. A
+value can't be told from a credential by its shape, so a username is replaced like a password.
+For each replaced secret whose **name** contains `user`, `login`, `account` or `email` (never decided from
+the value), `tocomment` prints one note pointing to `field adopt`
+(`sudo tswap field adopt NAME username --from <secret>`): a field is not a secret, so `tocomment` leaves it
+alone.
 
 `run` (since 0.3) decrypts only the value versions it substitutes and masks every other value in the
 vault that has fingerprints, in its stored forms (verbatim, whitespace-stripped, base64, base64url),
@@ -201,7 +221,8 @@ tswap field show opnsense-root --history    # each field's last changes, removed
   `username`, `url`, `host` and `port` are conventions, not checked.
 - **No secret in a field.** Every value is checked against the fingerprints of every stored value (every retained
   version of every live secret, burned ones included; no value is decrypted), and with a value command also against
-  the value of that call. A value that contains one is refused without naming which secret:
+  the value of that call. A value that contains one is refused without naming which secret (`field adopt`, under
+  sudo, names them):
   `Refused: the value for 'NAME.FIELD' contains a stored secret value. Fields are visible; a secret never goes in
   one.` A value of 20 or more characters from the base64 or hex alphabet with no space is written with a warning
   on stderr asking whether it is a secret. The check's limits:
@@ -224,11 +245,15 @@ tswap field show opnsense-root --history    # each field's last changes, removed
   `--by` label and the machine (origin id). It lists **removed fields too**, marked `(removed)`, with who removed
   them and when; plain `show` lists live fields only. The user name is what that machine reports and `--by` is
   self-asserted: a history, not an authentication. `--json --history` adds the same under `history`.
-- **`sudo tswap field adopt NAME FIELD --from SECRET`** copies SECRET's current value (burned or not: the main
-  case is a username once stored as a secret) into the field `NAME.FIELD`, then deletes SECRET, in one commit. It
-  refuses when SECRET is NAME, when either doesn't exist, when `NAME.FIELD` has a value already (unset it first),
-  when SECRET has fields of its own (move them first) and when another live secret holds the same value. It is the
-  one deliberate path from secret to visible; no refusal prints the value.
+- **`sudo tswap field adopt NAME FIELD --from SECRET [NAME FIELD --from SECRET]…`** copies SECRET's current value
+  (burned or not: the main case is a username once stored as a secret) into the field `NAME.FIELD`, then deletes
+  SECRET, in one commit. Several `NAME FIELD --from SECRET` groups are adopted and deleted in the same commit: the
+  way to adopt one value held by several secrets (one username for two services), which one group at a time would
+  refuse. It refuses when SECRET is NAME, when either doesn't exist, when `NAME.FIELD` has a value already (unset it
+  first), when SECRET has fields of its own (move them first), when a SECRET or a `NAME.FIELD` is named twice or a
+  SECRET is another group's NAME, and when a live secret the command doesn't adopt holds the same value; that
+  refusal names those secrets (it runs under sudo, where `get` shows any value). Every check runs before anything
+  is written. It is the one deliberate path from secret to visible; no refusal prints the value.
 - `field set`, `unset` and `show` on a name that doesn't exist, or was deleted, refuse (`No secret 'NAME'.`).
   Deleting a secret drops its fields; a secret created again under that name starts with none.
 - `export` carries each secret's current fields (no history, no removed fields); see the
@@ -416,7 +441,7 @@ List all burned secrets
 ### field
 
 ```
-tswap field set NAME <FIELD=VALUE…|JSON|@FILE> [--by LABEL] | field unset NAME FIELD… [--by LABEL] | field show NAME [--history] [--json] | field adopt NAME FIELD --from SECRET
+tswap field set NAME <FIELD=VALUE…|JSON|@FILE> [--by LABEL] | field unset NAME FIELD… [--by LABEL] | field show NAME [--history] [--json] | field adopt NAME FIELD --from SECRET [NAME FIELD --from SECRET]…
 ```
 
 Plain, visible fields on a secret (username, url, consumers, source, kind, expires, rotate, ...): never secret, never substituted into commands; sudo for adopt

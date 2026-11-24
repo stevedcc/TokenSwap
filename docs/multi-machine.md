@@ -139,8 +139,8 @@ What each step does in the interactive mode:
    step have no prefix: they are the host's terminal. It ends with `Approve file fingerprint: ...`.
    `tswap slot stage <id> get approve` brings the approve file back, and this machine prints
    `Approve file received: ...`: the two fingerprints must match. Press Enter to go on (only Enter:
-   anything typed at that point is not shown, and tswap asks again), or Ctrl-C if they differ (the
-   approve file is then deleted here).
+   anything typed at that point is not shown, and tswap asks again), or Ctrl-C if they differ (nothing
+   is saved here: tswap writes the approve file only after your Enter).
 4. **Accept, here**, exactly as `tswap slot accept`, without its instructions for carrying the files,
    with `--vault-dir <folder>` when given (a password-less shared folder is joined by accept alone). It
    checks the approve file against this machine's pending request, and asks for the vault password when

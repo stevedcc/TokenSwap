@@ -653,6 +653,59 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         Assert.DoesNotContain("s3cr3t", output);
     }
 
+    // --- Brief T56 task 3 (#382): a deleted current folder ---
+
+    /// <summary>
+    /// Runs tswap with <paramref name="args"/> from a folder deleted just before: <c>/bin/sh</c> enters it, removes it,
+    /// and execs tswap there (MakePsi's environment), so tswap's <c>getcwd</c> fails as in the issue.
+    /// </summary>
+    private (int exitCode, string stdout, string stderr) RunTswapInADeletedFolder(params string[] args)
+    {
+        var gone = Path.Combine(_tempDir, "gone-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(gone);
+        var psi = MakePsi();
+        psi.FileName = "/bin/sh";
+        foreach (var arg in (string[])["-c", "cd \"$1\" && rmdir \"$1\" && shift && exec \"$0\" \"$@\"", _binaryPath, gone, .. args])
+            psi.ArgumentList.Add(arg);
+
+        using var process = Process.Start(psi)!;
+        var stderrTask = process.StandardError.ReadToEndAsync();
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = stderrTask.GetAwaiter().GetResult();
+        process.WaitForExit();
+        Assert.False(Directory.Exists(gone), "the shell did not delete the folder");
+        return (process.ExitCode, stdout, stderr);
+    }
+
+    [UnixFact("Windows can't delete a process's current folder, so the state can't arise there")]
+    public void Run_InADeletedFolder_TheErrorSaysTheFolderIsGone()
+    {
+        RunTswap("init", "--yubikey", "--no-recovery");
+        Assert.Equal(0, RunTswap("create", "s").exitCode);
+
+        var (exit, _, stderr) = RunTswapInADeletedFolder("run", "true", "{{s}}");
+
+        _output.WriteLine(stderr);
+        Assert.Equal(1, exit);
+        var lines = stderr.Replace("\r\n", "\n").Split('\n');
+        var error = Array.FindIndex(lines, l => l.StartsWith("❌ Error: ", StringComparison.Ordinal));
+        Assert.True(error >= 0, stderr);
+        Assert.Equal(TswapCli.CurrentFolder.GoneText, lines[error + 1]);
+    }
+
+    [UnixFact("Windows can't delete a process's current folder, so the state can't arise there")]
+    public void Names_InADeletedFolder_WorksWithoutTheHint()
+    {
+        RunTswap("init", "--yubikey", "--no-recovery");
+        Assert.Equal(0, RunTswap("create", "s").exitCode);
+
+        var (exit, stdout, stderr) = RunTswapInADeletedFolder("names");
+
+        Assert.Equal(0, exit);
+        Assert.StartsWith("s ", stdout);
+        Assert.DoesNotContain(TswapCli.CurrentFolder.GoneText, stdout + stderr);
+    }
+
     // --- No args ---
 
     // --- Unknown command ---
@@ -1294,6 +1347,73 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         Assert.Contains("(what you typed was not shown or used).", afterGate);
         Assert.DoesNotContain("zq7x", output);
         AssertTheRequestIsKept(enrol, hostKeyring, exitCode, output, killed);
+    }
+
+    /// <summary>The exit code .NET reports for a child ended by SIGINT (128 + 2); observed on Linux.</summary>
+    private const int EndedBySigint = 130;
+
+    /// <summary>
+    /// How long an early Ctrl-C has to end tswap before it counts as dropped. Both landings that end tswap (the SIGINT, the
+    /// gate's refusal) do it at once; the window only has to cover a slow runner, and it is the wait on every macOS run.
+    /// </summary>
+    private static readonly TimeSpan EarlyCtrlCWindow = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// Brief T56 (#361): a Ctrl-C typed as soon as the gate's prompt shows, without waiting for the key read. Where it lands
+    /// depends on whether tswap reached the read first, and on whether the terminal is tswap's controlling terminal:
+    /// <list type="bullet">
+    /// <item>inside the read, Ctrl-C is a key and the gate refuses (exit 1);</item>
+    /// <item>before it, on a controlling terminal (Linux, where the harness starts tswap under <c>setsid</c>), the line
+    /// discipline sends SIGINT and tswap dies by the signal (exit 130);</item>
+    /// <item>before it, on a terminal that is not the controlling terminal (macOS, which has no <c>/usr/bin/setsid</c>), the
+    /// SIGINT has no foreground process group and is dropped (or the byte is queued and the gate's type-ahead discard, #293,
+    /// eats it), so tswap stays at the gate. The test then finishes the gate itself: it waits for the key read and types
+    /// Ctrl-C again, and the gate refuses (exit 1).</item>
+    /// </list>
+    /// All three are correct, and all leave the same state, since approve.json is written only after the Enter: the request
+    /// kept, no approve file, the host unchanged. The test output names the landing.
+    /// (Not <see cref="AssertTheRequestIsKept"/>, which pins exit 1 for the gate's own refusal.)
+    /// </summary>
+    [UnixFact]
+    public void Enrol_CtrlCAsSoonAsThePromptShows_OnARealTerminal_LeavesNoApproveFile()
+    {
+        var enrol = new EnrolOnPty(_tempDir, _binaryPath, _testKeyHex);
+        enrol.SetUp();
+        var hostKeyring = File.ReadAllBytes(enrol.HostKeyringPath);
+        var dropped = false;
+
+        var (exitCode, output, killed) = enrol.Run(pty =>
+        {
+            pty.WaitFor(EnterGatePrompt);
+            pty.Type("\x03");
+            if (pty.WaitForExit(EarlyCtrlCWindow))
+                return;
+            dropped = true;
+            pty.WaitForKeyRead();
+            pty.Type("\x03");
+            pty.WaitFor("wasn't confirmed");
+        });
+
+        Assert.False(killed, "tswap didn't exit by itself; the terminal showed:\n" + output);
+        var refused = output.ReplaceLineEndings(" ").Replace("  ", " ").Contains(NotConfirmed, StringComparison.Ordinal);
+        var landing = (dropped, exitCode, refused) switch
+        {
+            (false, 1, true) => "refused at the key read",
+            (false, EndedBySigint, false) => "SIGINT before the key read",
+            (true, 1, true) => "Ctrl-C dropped before the key read, then refused at the key read",
+            _ => null,
+        };
+        // The label is inferred from the window: a first Ctrl-C queued as type-ahead that refuses only after
+        // the window is recorded as "dropped, then refused". The assertions are the same either way.
+        _output.WriteLine($"landing: {landing ?? "none of the expected ones"} (exit code {exitCode})");
+        Assert.True(landing is not null,
+            $"exit code {exitCode}, the gate's refusal {(refused ? "shown" : "not shown")}, the first Ctrl-C {(dropped ? "dropped" : "not dropped")}; the terminal showed:\n{output}");
+        var folder = Assert.Single(Directory.GetDirectories(Path.Combine(enrol.JoinerDir, "enrol")));
+        Assert.True(File.Exists(Path.Combine(folder, "request.json")));
+        Assert.False(File.Exists(Path.Combine(folder, "approve.json")), "approve.json was left behind");
+        using var config = JsonDocument.Parse(File.ReadAllText(Path.Combine(enrol.JoinerDir, "config.json")));
+        Assert.Equal(JsonValueKind.String, config.RootElement.GetProperty("PendingSlotId").ValueKind);
+        Assert.Equal(hostKeyring, File.ReadAllBytes(enrol.HostKeyringPath));
     }
 
     // --- issue #85: Ctrl+C during ReadPassword restores terminal and prints "Cancelled" ---

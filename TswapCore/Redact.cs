@@ -52,6 +52,12 @@ public static class Redact
         matcher.ToCommentReporting(content);
 
     /// <summary>
+    /// Brief T50b (#394, #399): <c>tocomment</c>'s full report: the content and changes, the lines T22 left, the
+    /// occurrences left in place, and the names of the secrets replaced.
+    /// </summary>
+    public static ToCommentReport ToCommentReport(string content, SecretMatcher matcher) => matcher.ToCommentReport(content);
+
+    /// <summary>
     /// Brief T16-S2: <see cref="RedactContent(string, SecretMatcher)"/> over a loaded database, by
     /// fingerprinting its values under a random key. No command uses it (they never decrypt the
     /// values for this); it keeps the engine's tests written against plain values.
@@ -66,6 +72,10 @@ public static class Redact
     internal static (string Content, IReadOnlyList<LineDiff> Changes, IReadOnlyList<UnreplacedLine> Unreplaced) ToCommentReporting(
         string content, SecretsDb db) =>
         WithMatcher(db, m => m.ToCommentReporting(content));
+
+    /// <summary>Brief T50b: <see cref="ToCommentReport(string, SecretMatcher)"/> over a loaded database.</summary>
+    internal static ToCommentReport ToCommentReport(string content, SecretsDb db) =>
+        WithMatcher(db, m => m.ToCommentReport(content));
 
     private static T WithMatcher<T>(SecretsDb db, Func<SecretMatcher, T> use)
     {

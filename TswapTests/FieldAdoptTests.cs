@@ -311,12 +311,196 @@ public sealed class FieldAdoptTests : IDisposable
         Assert.Equal(user, File.ReadAllBytes(RecordFile(old, key, "db-user")));
     }
 
+    // ------------------------------------------------------------------ several groups in one command (brief T56, #395)
+
+    /// <summary>The password secrets <c>db</c> and <c>b</c>, and every one of <paramref name="holders"/> holding <see cref="Username"/>.</summary>
+    private void PlantHolders(params string[] holders)
+    {
+        _m.Ok(Password, "ingest", "db");
+        _m.Ok("another-password-0123456", "ingest", "b");
+        foreach (var holder in holders)
+            _m.Ok(Username, "ingest", holder);
+    }
+
+    private (int Exit, string Out, string Err) AdoptArgs(string args)
+    {
+        _now = _now.AddSeconds(1);
+        return _m.Run("", ["field", .. args.Split(' ')]);
+    }
+
+    private Dictionary<string, byte[]> AllRecords() => _m.RecordFiles.ToDictionary(f => f, f => File.ReadAllBytes(Path.Combine(_m.RecordsDir, f)));
+
+    /// <summary>
+    /// Runs <paramref name="args"/> and checks it was refused with <paramref name="message"/>, no record changed or was
+    /// added, and neither stream holds the value; returns stderr.
+    /// </summary>
+    private string AssertGroupsRefused(string message, string args)
+    {
+        var before = AllRecords();
+
+        var (exit, stdout, stderr) = AdoptArgs(args);
+
+        Assert.Equal(1, exit);
+        Assert.Contains(message, stderr);
+        Assert.Equal("", stdout);
+        Assert.DoesNotContain(Username, stdout + stderr);
+        var after = AllRecords();
+        Assert.Equal(before.Keys.Order(StringComparer.Ordinal), after.Keys.Order(StringComparer.Ordinal));
+        foreach (var (file, bytes) in before)
+            Assert.Equal(bytes, after[file]);
+        return stderr;
+    }
+
+    private static string HolderRefusal(string field, string holders) =>
+        $"Refused: the value for 'db.{field}' contains a stored secret value. Fields are visible; a secret never goes in one. " +
+        $"It contains the value of {holders}. If those hold the same setting (one username for two services, say), adopt " +
+        "them in the same command, one NAME FIELD --from SECRET group each; otherwise change them first.";
+
+    [Fact]
+    public void FieldAdopt_TwoHoldersInOneCommand_BothAdopted()
+    {
+        PlantHolders("u1", "u2");
+
+        var (exit, stdout, stderr) = AdoptArgs("adopt db username --from u1 b username --from u2");
+
+        Assert.True(exit == 0, stderr);
+        Assert.Equal(Username, FieldsOf("db").Get("username")!.Value);
+        Assert.Equal(Username, FieldsOf("b").Get("username")!.Value);
+        Assert.Equal(RecordType.Tombstone, ReadRecord(_m, _key, "u1").Type);
+        Assert.Equal(RecordType.Tombstone, ReadRecord(_m, _key, "u2").Type);
+        Assert.Equal(
+            [
+                "✓ The value of 'u1' is now the field 'db.username' (visible; tswap field show db); secret 'u1' deleted.",
+                "✓ The value of 'u2' is now the field 'b.username' (visible; tswap field show b); secret 'u2' deleted.",
+            ],
+            stdout.ReplaceLineEndings("\n").TrimEnd('\n').Split('\n'));
+        Assert.DoesNotContain(Username, stdout + stderr);
+        Assert.Equal(Password, _m.Get("db"));
+    }
+
+    [Fact]
+    public void FieldAdopt_OneOtherHolder_RefusedNamingIt()
+    {
+        PlantHolders("u1", "u2");
+
+        var stderr = AssertGroupsRefused("It contains the value of 'u2'. If those hold the same setting", "adopt db username --from u1");
+
+        Assert.Contains(HolderRefusal("username", "'u2'"), stderr);
+    }
+
+    [Fact]
+    public void FieldAdopt_TwoOtherHolders_RefusedNamingBothInOrder()
+    {
+        PlantHolders("u1", "u3", "u2");
+
+        AssertGroupsRefused(HolderRefusal("username", "'u2', 'u3'"), "adopt db username --from u1");
+    }
+
+    [Fact]
+    public void FieldAdopt_TwoGroups_ThirdHolderLeft_RefusedNamingOnlyIt()
+    {
+        PlantHolders("u1", "u2", "u3");
+
+        AssertGroupsRefused(HolderRefusal("username", "'u3'"), "adopt db username --from u1 b username --from u2");
+    }
+
+    [Fact]
+    public void FieldAdopt_PreviousValueHolder_RefusedNamingItsPreviousValue()
+    {
+        PlantHolders("u1", "u2");
+        _m.Ok("", "burn", "u2", "rotating");
+        _m.Ok("a-different-username", "ingest", "--rotate", "u2");
+
+        AssertGroupsRefused(HolderRefusal("username", "'u2' (its previous value)"), "adopt db username --from u1");
+    }
+
+    [Fact]
+    public void FieldAdopt_TwoFieldsOnOneName_OneFieldWrite()
+    {
+        PlantHolders("u1");
+        _m.Ok("db.example", "ingest", "h1");
+
+        var (exit, _, stderr) = AdoptArgs("adopt db username --from u1 db host --from h1");
+
+        Assert.True(exit == 0, stderr);
+        var fields = FieldsOf("db");
+        var username = fields.Get("username")!;
+        var host = fields.Get("host")!;
+        Assert.Equal(Username, username.Value);
+        Assert.Equal("db.example", host.Value);
+        // One field write for db (a second SetFields on one name is refused by the writer): both edits in the order
+        // given, stamped from the same clock reading, the record's write stamp not before the last of them.
+        Assert.True(username.Changed.CompareTo(host.Changed) < 0, $"{username.Changed} not before {host.Changed}");
+        Assert.Equal(username.Changed.Hlc.PhysicalMs, host.Changed.Hlc.PhysicalMs);
+        Assert.True(host.Changed.CompareTo(ReadRecord(_m, _key, "db").Write) <= 0);
+        Assert.Equal(RecordType.Tombstone, ReadRecord(_m, _key, "u1").Type);
+        Assert.Equal(RecordType.Tombstone, ReadRecord(_m, _key, "h1").Type);
+    }
+
+    [Fact]
+    public void FieldAdopt_SecondGroupNameMissing_NothingWritten()
+    {
+        PlantHolders("u1", "u2");
+
+        AssertGroupsRefused("No secret 'nope'.", "adopt db username --from u1 nope username --from u2");
+
+        Assert.NotEqual(RecordType.Tombstone, ReadRecord(_m, _key, "u1").Type);
+    }
+
+    [Fact]
+    public void FieldAdopt_SecondGroupFormatRefusal_FirstGroupNotWritten()
+    {
+        PlantHolders("u1", "u2");
+
+        AssertGroupsRefused("Refused field 'kind': the value of 'u2' is not a known kind", "adopt db username --from u1 b kind --from u2");
+
+        Assert.Null(FieldsOf("db").Get("username"));
+    }
+
+    [Theory]
+    [InlineData("u1", "adopt db username --from u1 b username --from u1", "'field adopt' names 'u1' twice after --from.")]
+    [InlineData("u1 u2", "adopt db username --from u1 db username --from u2", "'field adopt' names 'db.username' twice.")]
+    [InlineData("u1 u2", "adopt db username --from u1 u1 host --from u2",
+        "'u1' is adopted (and deleted) in this command, so it can't receive a field in it too.")]
+    public void FieldAdopt_GroupsThatClash_Refused(string holders, string args, string message)
+    {
+        PlantHolders(holders.Split(' '));
+
+        AssertGroupsRefused(message, args);
+    }
+
+    [Fact]
+    public void FieldAdopt_NamesDifferingInCase_AreTwoSecrets()
+    {
+        PlantHolders("u1", "U1");
+
+        var (exit, _, stderr) = AdoptArgs("adopt db username --from u1 b username --from U1");
+
+        Assert.True(exit == 0, stderr);
+        Assert.Equal(Username, FieldsOf("db").Get("username")!.Value);
+        Assert.Equal(Username, FieldsOf("b").Get("username")!.Value);
+    }
+
+    [Fact]
+    public void FieldAdopt_TwoGroupsWithoutSudo_Refused()
+    {
+        if (Environment.IsPrivilegedProcess)
+            return; // the refusal can't happen in a privileged process (Windows CI runs elevated)
+        PlantHolders("u1", "u2");
+        _m.Sudo = false;
+
+        AssertGroupsRefused("The 'field adopt' command requires", "adopt db username --from u1 b username --from u2");
+    }
+
     [Theory]
     [InlineData("adopt db username")]
     [InlineData("adopt db username --from")]
     [InlineData("adopt db username db-user")]
     [InlineData("adopt db --from db-user")]
     [InlineData("adopt db username --from db-user extra")]
+    [InlineData("adopt db username --from u1 b")]
+    [InlineData("adopt db username --from u1 b username u2 x")]
+    [InlineData("adopt db username --from u1 b username --from")]
     public void FieldAdopt_BadArguments_Usage(string args)
     {
         var (exit, _, stderr) = _m.Run("", ["field", .. args.Split(' ')]);

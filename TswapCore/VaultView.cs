@@ -118,12 +118,23 @@ public sealed class VaultView(RecordVaultStore store, byte[] vaultKey, TextWrite
     /// Issue #311: <paramref name="except"/> leaves that one secret's versions out (<c>field adopt</c>, whose
     /// source secret is deleted in the same commit).
     /// </summary>
-    public FingerprintIndex BuildIndex(FingerprintKeys keys, string? except = null)
+    public FingerprintIndex BuildIndex(FingerprintKeys keys, string? except = null) =>
+        BuildIndex(keys, except is null ? new HashSet<string>() : new HashSet<string>([except], StringComparer.Ordinal));
+
+    /// <summary>
+    /// <see cref="BuildIndex(FingerprintKeys, string?)"/> without every secret named in <paramref name="except"/>
+    /// (compared ordinally): brief T56 (#395), <c>field adopt</c> with several groups, whose source secrets are all
+    /// deleted in the same commit.
+    /// </summary>
+    public FingerprintIndex BuildIndex(FingerprintKeys keys, IReadOnlySet<string> except)
     {
+        ArgumentNullException.ThrowIfNull(except);
+        // A copy with the ordinal comparer, whatever comparer the caller's set uses.
+        var excluded = new HashSet<string>(except, StringComparer.Ordinal);
         var metadata = LoadedMetadata();
         return FingerprintIndex.Build(
             from record in metadata.Records
-            where !string.Equals(record.Name, except, StringComparison.Ordinal)
+            where !excluded.Contains(record.Name)
             from version in record.RetainedVersions()
             where version.Fingerprints is not null
             select (record.Name, version.IsPrevious, version.Fingerprints!),
