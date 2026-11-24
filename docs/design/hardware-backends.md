@@ -293,7 +293,10 @@ device implementations:
 SIGQUIT and SIGHUP, which still end the process; SIGTSTP is not intercepted, so Ctrl+Z really stops
 it, and SIGCONT turns the echo off again; a failed echo switch is a cancel. On Windows only the
 console check, it never reads). No terminal: no delegate,
-and the service refuses before any key call.
+and the service refuses before any key call. Since 0.3.3 the PIN typed there (Linux, macOS) is sent in NFC, as CTAP 2.1 §6.5.1
+requires (`Fido2PinPrompt.NormalisePin`; bytes that aren't UTF-8 are sent as they are), a new PIN's
+minimum counts characters, and a PIN ending in a NUL byte is refused before anything is sent (§6.5.1: a
+PIN must not end in 0x00). There is no second try with the typed bytes after the key refuses a PIN.
 
 **Unlock: pass 4.** `VaultUnlocker.Unlock` tries FIDO2 slots last, after pass 1 (password-free
 slots), pass 2 (the agent) and pass 3 (the vault-password prompt for other password slots). A vault

@@ -77,7 +77,9 @@ don't open the file. The message (one line on stderr, after `❌ Error:`, wrappe
 by a 0.1 machine on a shared folder) and format 3 ones written without fingerprints. Run
 `sudo tswap vault reindex` once ([what it does](multi-machine.md#record-format-3-and-vault-reindex)).
 Records fingerprinted by an older tswap are still matched with the fingerprints they have; the
-commands print a note naming the count and the reindex, which adds the newer variants.
+commands print a note naming the count and the reindex, which adds the newer variants. Since 0.3.3 the
+note appears for records holding non-ASCII values written before 0.3.3, and the reindex adds their
+other Unicode spellings (NFC and NFD); a record of an ASCII value needs nothing.
 
 `redact` masks a value with line breaks whatever the line endings of the value and of the file (`\r\n`
 or `\n`; a lone `\r` as a line ending is not handled).
@@ -128,6 +130,10 @@ part of the block's text, a shell comment; `run --user …` is not. Markers are 
 (`- - key: |` and `? key: |` are recognised). `check` warns (exit 2) about a
 marker under `data:` in a `kind: Secret` manifest, where Kubernetes expects base64 but the marker gets
 the raw value: use `stringData:` (JSON status `data-not-base64`).
+
+Since 0.3.3 a value found in its other Unicode spelling (an accented letter composed, NFC, or
+decomposed, NFD, the other way from how it is stored) is replaced too, by the whole-value rules below. `apply` and
+`run` then fill in the **stored** spelling, so the file's bytes for that value change.
 
 Since 0.3.3 `tocomment` replaces a value only where `apply` fills it back, double-quoted: after `key:`, or
 after `KEY=` when the value holds no control character; with nothing but a `#` comment after it, and
@@ -562,6 +568,13 @@ tswap version
 Print tswap's version (also: --version)
 
 <!-- END GENERATED: commands -->
+
+## `export` and `import` passphrases
+
+Since 0.3.3 the passphrase is compared in Unicode normal form C (NFC), so an accented letter such as `é`
+may be typed composed or decomposed, at `export` and at `import`, on any OS. An export made with an older
+tswap imports whichever way such a letter is typed, unless its passphrase mixed both spellings when it
+was made.
 
 ## `run` and batch files
 

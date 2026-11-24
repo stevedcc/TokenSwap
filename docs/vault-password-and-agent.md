@@ -19,6 +19,10 @@ a password slot without the password. How hard it is to guess depends on the har
 - There is **one password per vault**. Every slot with a password uses the same one.
 - Slots without it keep working as before, so a vault can mix both.
 - A vault without a password behaves exactly as before: no prompt, no agent.
+- The password is compared in Unicode normal form C (NFC), so an accented letter such as `é` works typed
+  either way (composed or decomposed) on every OS. The limit: a character newer than a machine's Unicode
+  library may be normalised differently there, and the vault may not open on that machine with it. Keep
+  vault passwords to characters a few years old.
 
 ## Setting up a password
 
