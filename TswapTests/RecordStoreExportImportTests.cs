@@ -364,7 +364,10 @@ public sealed class RecordStoreExportImportTests : IDisposable
     {
         var path = Export(PassNfc, PassNfd);
 
-        Assert.Equal(0, ImportFresh(path, PassNfc).Exit);
+        var (exit, err, value) = ImportFresh(path, PassNfc);
+
+        Assert.True(exit == 0, err);
+        Assert.Equal("s-value-0042", value);
     }
 
     [Fact]

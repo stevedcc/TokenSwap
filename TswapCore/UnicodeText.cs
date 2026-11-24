@@ -2,7 +2,8 @@ namespace TswapCore;
 
 /// <summary>
 /// Brief T54: Unicode checks shared by the paths that normalise text. <see cref="string.Normalize()"/> throws on a
-/// lone surrogate, so each of them asks <see cref="FindLoneSurrogate"/> first.
+/// lone surrogate, so every path that normalises a string which can hold one asks <see cref="FindLoneSurrogate"/>
+/// first (text from a strict UTF-8 decode, as the FIDO2 PIN's and the broker's, can't hold one and needs no check).
 /// </summary>
 internal static class UnicodeText
 {

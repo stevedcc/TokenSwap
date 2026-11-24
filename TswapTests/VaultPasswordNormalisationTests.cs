@@ -50,7 +50,7 @@ public sealed class VaultPasswordNormalisationTests : IDisposable
 
     [Theory]
     [InlineData(Nfd, 0)]
-    [InlineData("pa\u0308sswort-wrong", 1)]
+    [InlineData("pa\u0308sswort-wrong", 1)] // tswap's own failure exit, not any failure
     public void ATypedPassword_IsOneTpmAuthorisation_RightOrWrong(string typed, int expectedExit)
     {
         var m = Vault("pw-one-call", Nfc);
@@ -64,7 +64,7 @@ public sealed class VaultPasswordNormalisationTests : IDisposable
                }))
             result = m.RunOnTerminal(typed + "\n", "create", "db");
 
-        Assert.Equal(expectedExit, result.Exit == 0 ? 0 : 1);
+        Assert.Equal(expectedExit, result.Exit);
         Assert.Equal(1, unlocks);
     }
 

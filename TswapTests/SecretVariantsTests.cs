@@ -82,7 +82,8 @@ public class SecretVariantsTests
             ]
         },
         {
-            // U+0958 is a composition exclusion: NFC decomposes it, so the decomposed texts come in under the Nfc
+            // U+0958 decomposes canonically to U+0915 U+093C and is a composition exclusion, so NFC doesn't compose it
+            // back: NFC(U+0958) is U+0915 U+093C, and the decomposed texts come in under the Nfc
             // kinds, and the NFD list adds nothing (its texts are already present).
             "\u0958x",
             [

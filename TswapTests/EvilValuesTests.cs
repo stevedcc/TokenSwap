@@ -2,7 +2,6 @@ using TswapCli;
 using TswapCore;
 using TswapCore.Vault;
 using Xunit;
-using Xunit.Abstractions;
 using static TswapTests.EvilValues;
 
 namespace TswapTests;
@@ -26,11 +25,8 @@ public sealed class EvilValuesTests : IDisposable
     private readonly string _filesRoot;
     private readonly byte[] _testKey =
         Convert.FromHexString("0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF");
-    private readonly ITestOutputHelper _output;
-
-    public EvilValuesTests(ITestOutputHelper output)
+    public EvilValuesTests()
     {
-        _output = output;
         _tempDir = Path.Combine(Path.GetTempPath(), "tswap-evil-test-" + Guid.NewGuid().ToString("N")[..8]);
         _configDir = Path.Combine(_tempDir, "config");
         _work = Path.Combine(_tempDir, "work");
