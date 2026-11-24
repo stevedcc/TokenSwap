@@ -111,9 +111,10 @@ None of these texts (the refusal, the note, the warning) ever names a secret, a 
 Other changes in 0.3, from reading metadata only: `redact` masks a multi-line value (a PEM key) across
 lines; neither command matches a secret inside or across a label or marker it inserted itself;
 `tocomment --dry-run` redacts each changed line's "before" and "after" text on its own, and lists a
-replaced multi-line value as `[value over N lines]`, never its text; `get` and `apply` no longer report records they don't read; `check` no longer stops
-on an unreadable format 2 record that no marker names; and conflicted copies that only their
-plaintext could show equal make `list` and `check` refuse that record
+replaced multi-line value as `[value over N lines]`, never its text; `get` and `apply` no longer report
+records they don't read; `check` no longer stops on an unreadable format 2 record that no marker
+names; and conflicted copies that only their plaintext could show equal make `list` and `check` refuse
+that record
 ([details](security-model.md#what-each-command-decrypts)).
 `tocomment` also adopts a YAML literal block scalar (`key: |`, `|-` or `|+`) whose content is exactly
 one stored value, a PEM key say: the key line becomes `key: ""  # tswap: <name>` and the block's lines

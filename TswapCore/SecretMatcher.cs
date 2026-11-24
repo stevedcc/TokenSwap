@@ -169,9 +169,10 @@ public sealed class SecretMatcher(FingerprintIndex index, IReadOnlySet<string> b
                     diffs.Add(new MultiLineDiff(i + 1, multi.Last + 1, string.Join('\n', lines[i..(multi.Last + 1)]), after));
                     replacedNames.Add(BaseName(multi.Token));
                     replacedRanges.Add((multi.Start, multi.End));
-                    // What the line path's finder sees in the kept text: before the value on line a, after it on line b.
+                    // What the line path's finder sees in the kept text: before the value on line a, after it (and after
+                    // the marker it consumed) on line b.
                     ReportKept(original[..(multi.Start - lineStarts[i])], i, skipped);
-                    ReportKept(lines[multi.Last][(multi.End - lineStarts[multi.Last])..], multi.Last, skipped);
+                    ReportKept(lines[multi.Last][(multi.MarkerEnd - lineStarts[multi.Last])..], multi.Last, skipped);
                     lines[i] = after;
                     for (var j = i + 1; j <= multi.Last; j++)
                     {
@@ -321,8 +322,10 @@ public sealed class SecretMatcher(FingerprintIndex index, IReadOnlySet<string> b
         foreach (var span in taken.Values)
         {
             var (start, end) = (span.Start, span.End);
+            // Code review (MiMo I-1): a final CR that is the CR of a CRLF, or the file's last character, ends at a line
+            // break too: replacing it would consume the line break (or index past the normalised line).
             var atLineBreak = content[start] == '\n' || (content[start] == '\r' && start + 1 < content.Length && content[start + 1] == '\n')
-                || content[end - 1] == '\n';
+                || content[end - 1] == '\n' || (content[end - 1] == '\r' && (end == content.Length || content[end] == '\n'));
             if (start > 0 && content[start - 1] is '"' or '\'' && end < content.Length && content[end] == content[start - 1])
                 (start, end) = (start - 1, end + 1);
             var lineEnd = content.IndexOf('\n', end) is var lf and >= 0 ? lf : content.Length;

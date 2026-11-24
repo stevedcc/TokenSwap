@@ -160,6 +160,56 @@ public sealed class ToCommentLineBreakTests
         AssertUnchanged(report, content, (1, 2, "s", SkippedReason.NotWholeValue));
     }
 
+    /// <summary>
+    /// Code review (MiMo I-1): a value ending in a CR that is the CR of the file's CRLF, or a CR at the end of the file,
+    /// ends at a line break: it is left and reported (it used to throw, or consume the file's last line break).
+    /// </summary>
+    [Theory]
+    [InlineData("token: line-one\nline-two\r\nnext: 1\r\n")]
+    [InlineData("token: line-one\nline-two\r")]
+    public void EndsWithTheCrOfALineBreak_Left(string content)
+    {
+        var report = Report(content, Db(("s", "line-one\nline-two\r")));
+
+        AssertUnchanged(report, content, (1, 2, "s", SkippedReason.NotWholeValue));
+    }
+
+    /// <summary>Code review (MiMo M-2): a value in the marker a multi-line replacement consumes is gone, so it is not reported.</summary>
+    [Fact]
+    public void ValueInsideTheConsumedMarker_NotReported()
+    {
+        var report = Report("token: line-one\nline-two  # tswap: old-name\n", Db(("s", Two), ("o", "old-name")));
+
+        Assert.Equal("token: \"\"  # tswap: s\n", report.Content);
+        Assert.Empty(report.Skipped);
+    }
+
+    /// <summary>Code review (MiMo M-4): two multi-line values competing for overlapping text; the longer one is taken first.</summary>
+    [Fact]
+    public void CompetingMultiLineValues_TheLongerFirst()
+    {
+        const string content = "k: one-x\ntwo-x\nthree-x\n";
+
+        var report = Report(content, Db(("s1", "one-x\ntwo-x"), ("s2", "two-x\nthree-x")));
+
+        AssertUnchanged(report, content, (2, 3, "s2", SkippedReason.NotWholeValue));
+    }
+
+    /// <summary>Code review (MiMo M-4): a multi-line value shorter than 8 characters, as a whole value and inside a word.</summary>
+    [Fact]
+    public void ShortMultiLineValue()
+    {
+        var db = Db(("s", "a1\nb2"));
+
+        var whole = Report("k: a1\nb2\n", db);
+        Assert.Equal("k: \"\"  # tswap: s\n", whole.Content);
+        Assert.Equal(new LineDiff[] { new MultiLineDiff(1, 2, "k: a1\nb2", "k: \"\"  # tswap: s") }, whole.Changes);
+
+        var inWord = Report("k: xa1\nb2\n", db);
+        Assert.Equal("k: xa1\nb2\n", inWord.Content);
+        Assert.Empty(inWord.Changes);
+    }
+
     [Fact]
     public void Row17_EndsWithALineBreak_TheLinePathReplacesTheStrippedForm()
     {

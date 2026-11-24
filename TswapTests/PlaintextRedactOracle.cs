@@ -288,7 +288,8 @@ internal static class PlaintextRedactOracle
             }
             foreach (var (valueStart, valueEnd, token) in taken)
             {
-                var atBreak = content[valueStart] == '\n' || content.AsSpan(valueStart).StartsWith("\r\n") || content[valueEnd - 1] == '\n';
+                var atBreak = content[valueStart] == '\n' || content.AsSpan(valueStart).StartsWith("\r\n") || content[valueEnd - 1] == '\n'
+                    || (content[valueEnd - 1] == '\r' && (valueEnd == content.Length || content[valueEnd] == '\n'));
                 var (start, end) = (valueStart, valueEnd);
                 if (start > 0 && end < content.Length && (content[start - 1] == '"' || content[start - 1] == '\'') && content[end] == content[start - 1])
                 {
