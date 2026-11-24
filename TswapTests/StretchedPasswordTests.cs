@@ -105,6 +105,23 @@ public class StretchedPasswordTests(ITestOutputHelper output)
         Assert.Equal(StretchToBytes(nfc, Cheap), StretchToBytes(nfd, Cheap));
     }
 
+    /// <summary>
+    /// Brief T54 Task 5: a known-answer vector, so a change to the normal form (NFKC), the encoding or the Argon2
+    /// binding can't pass the agreement tests above and lock every vault out. The constant was computed with the code
+    /// at 666336c, before any change in brief T54. The NFD spelling must give the same bytes.
+    /// </summary>
+    [Fact]
+    public void Stretch_KnownAnswer()
+    {
+        const string nfc = "p\u00e4sswort-kat";
+        const string nfd = "pa\u0308sswort-kat";
+        var salt = Enumerable.Range(0, 32).Select(i => (byte)i).ToArray();
+
+        const string expected = "E442527CF56C0E582FF03BC93661E9CD1040B1C763D07F2A369A6F6BC8FE5A91";
+        Assert.Equal(expected, Convert.ToHexString(StretchToBytes(nfc, PasswordVaultTestSupport.Cheap, salt)));
+        Assert.Equal(expected, Convert.ToHexString(StretchToBytes(nfd, PasswordVaultTestSupport.Cheap, salt)));
+    }
+
     [Fact]
     public void Stretch_ZeroesItsBuffer()
     {

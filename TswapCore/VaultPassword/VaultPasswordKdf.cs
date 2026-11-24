@@ -43,6 +43,10 @@ public static class VaultPasswordKdf
 {
     public const int SaltSize = 32;
 
+    /// <summary>Brief T54: a password holding a lone UTF-16 surrogate can't be normalised, so it is refused.</summary>
+    public const string LoneSurrogateText =
+        "The vault password holds half of a character (a lone UTF-16 surrogate), so it can't be used. Type it again.";
+
     /// <summary>Test seam: sees the output buffer after the copy into the holder, once zeroed.</summary>
     internal static Action<ReadOnlySpan<byte>>? OutputBufferObserver;
 
@@ -64,6 +68,9 @@ public static class VaultPasswordKdf
         if (p.OutOfBounds() is { } bad)
             throw new TswapException($"The vault password's Argon2id parameters are out of bounds: {bad}.");
 
+        // Brief T54: normalising throws .NET's ArgumentException on a lone surrogate; refuse it in tswap's words.
+        if (UnicodeText.FindLoneSurrogate(password) is not null)
+            throw new TswapException(LoneSurrogateText);
         var passwordBytes = Encoding.UTF8.GetBytes(password.Normalize(NormalizationForm.FormC));
         var output = new byte[StretchedPassword.Size];
         try

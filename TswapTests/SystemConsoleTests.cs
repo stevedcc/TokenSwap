@@ -90,6 +90,28 @@ public sealed class SystemConsoleTests
         Assert.Equal(writer.NewLine, writer.ToString());
     }
 
+    // ---- brief T54 Task 5: backspace removes a whole character
+
+    [Fact]
+    public void ReadPassword_BackspaceAfterASurrogatePair_RemovesTheWholeCharacter()
+    {
+        var input = new ScriptedInput(redirected: false, keys: [Key('a'), Unit('\uD83D'), Unit('\uDE00'), Backspace, Key('b'), Enter]);
+        var console = new SystemConsole(input);
+        var echo = new StringWriter();
+
+        Assert.Equal("ab", console.ReadPassword(echo));
+        Assert.Equal("***" + "\b \b\b \b" + "*" + echo.NewLine, echo.ToString());
+    }
+
+    [Fact]
+    public void ReadLineWithoutEcho_BackspaceAfterASurrogatePair_RemovesTheWholeCharacter()
+    {
+        var input = new ScriptedInput(redirected: false, keys: [Key('a'), Unit('\uD83D'), Unit('\uDE00'), Backspace, Enter]);
+        var console = new SystemConsole(input);
+
+        Assert.Equal("a", console.ReadLineWithoutEcho());
+    }
+
     // ---- brief T34 (#337.5): ReadLineWithoutEcho
 
     [Fact]
@@ -146,6 +168,9 @@ public sealed class SystemConsoleTests
     private static ConsoleKeyInfo Digit(char c) => new(c, ConsoleKey.D0 + (c - '0'), shift: false, alt: false, control: false);
 
     private static readonly ConsoleKeyInfo Backspace = new('\b', ConsoleKey.Backspace, false, false, false);
+
+    /// <summary>A key that types one UTF-16 unit (half of a surrogate pair, say), as a console delivers it.</summary>
+    private static ConsoleKeyInfo Unit(char c) => new(c, 0, shift: false, alt: false, control: false);
 
     private static readonly ConsoleKeyInfo CtrlD = new('\x04', ConsoleKey.D, shift: false, alt: false, control: true);
 
