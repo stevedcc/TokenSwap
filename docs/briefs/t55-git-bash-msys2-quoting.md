@@ -25,6 +25,39 @@ its checks); this brief's code goes in a new file. No message and no test failur
 - **R1-R3 stay refusals, not warnings.** A secret that silently arrives altered counts as data loss, so `run` refuses
   rather than starting the child with a value it can't pass exactly.
 
+## Review round 1 amendments (GLM, MiMo; 2026-11-24) — these bind and win over the text below
+
+Folded into the text: Task 1 hard-codes the code page 932 bytes (no `CodePagesEncodingProvider`, no new package) and gains the
+`t55probe2` row; Task 2's `.exe` rule follows CreateProcess's documented rule (no `.exe` for a name holding a path) unless
+that row says otherwise; Task 5's break-it-once reverts the whole Task 4 commit and names the cases that really change.
+The rest:
+
+1. **Line references** were taken at 666336c; T50b and T56 moved `EndToEndTests.cs` (~+120 lines) and `EvilValues.cs`
+   (~3). Find each place by the name the brief gives; names win over numbers. `max-length` is a `Cases` entry.
+2. **"No message holds a value"** means tswap's own output and refusal texts. Test failure text and the spike's table may
+   show values: they are test data.
+3. **R1** refuses when an argument holds `\` or `"` and the `MSYS` variable changes the glob option: one of its words
+   (split at whitespace, ignoring case) is `noglob` or starts with `glob:`. A plain `glob` is the default and does not
+   refuse. Word R1's message and Task 6's sentence as "`MSYS` changes the glob option and an argument holds a backslash or
+   double quote" (not "sets a glob option").
+4. **Rule 4 (globify)** calls `glob` with `GLOB_TILDE | GLOB_NOCHECK | GLOB_BRACE | GLOB_QUOTE`; `GLOB_QUOTE` is what makes
+   the escape-every-character step produce literals. A pattern with an illegal byte sequence matches nothing even with
+   `GLOB_NOCHECK`, and the word then keeps its quotes: unreachable for values `ingest` stores (well-formed text), noted only.
+5. **`{what}`**: rules in the order R1, R2, R3; the first rule that finds anything decides; within it, every argument in
+   argv order, and the tokens whose substituted text the rule found, each named once (as `BatchArgumentRefusal` does).
+6. **R2 and R3 skip the program** because it is not a value (after `Resolve`, argv[0] is the path P). Don't "fix" that.
+7. **R2 keeps refusing a locale with no charset part** (`LANG=de_DE`): deliberate, fail closed. The spike records
+   `de_DE`; if it shows such values pass, the controller may relax it later in its own change.
+8. **`ForThisProcess()` is null off Windows**: that test is `[UnixFact]` (or skips on Windows), beside the `[WindowsFact]` rows.
+9. **`Run_GitBashScript_EvilValues_ArriveExactly_Windows`**: its child environment removes `LC_ALL`, `LC_CTYPE` and `LANG`,
+   so a runner's locale can't make R2 refuse the non-ASCII cases. A test-input change; say so in the commit.
+10. **`Resolve` divergences accepted** (documented in its XML comment): an empty `PATH` entry is skipped, and a
+    drive-relative name (`C:file.exe`) is taken as is.
+11. **Accepted as written:** `IsMsys2` recognises the two shapes only (a bash.exe that finds `msys-2.0.dll` through PATH is
+    not detected; Task 6 says "recognises"); R1/R2 also refuse when the trigger is in a literal argument (fail closed);
+    `Prompt.cs`'s "(its arguments may arrive altered)" stays (still true for refused and undetected setups; prompt hash).
+12. **Release note**: add "and with RedactingPty 1.3.0 a value holding a line break reaches any Windows program whole".
+
 ## What is wrong (evidence)
 
 `run` hands the child its argv through RedactingPty (`RunCommand.cs:303-311`, `CommandContext.cs:136`, package
@@ -122,10 +155,12 @@ Values: the corpus (`EvilValues.Cases` and `BatchCases` without `max-length`), a
 `"x\uF080y"`; and an empty argument (M and N only).
 
 Runs: every value with M, W, N and R through `bin\bash.exe`; every value with M through `usr\bin\bash.exe`; M with
-`MSYS=noglob`; M with `LANG=ja_JP.SJIS` (expected bytes: code page 932 via `CodePagesEncodingProvider`); M with
+`MSYS=noglob`; M with `LANG=ja_JP.SJIS` (expected bytes hard-coded, no code-page provider: `\u8868x` is `95 5C 78` and `\u30BDx` is `83 5C 78` in code page 932; the second byte of each is `\`); M with
 `LANG=de_DE` (record only). One more row, the program search: copy `System32\whoami.exe` to the work folder as
 `t55probe.exe` and start `FileName = "t55probe"` (working folder the work folder) once as is and once with
-`NoDefaultCurrentDirectoryInExePath=1` set in the spike's own process (restored after); record started or not.
+`NoDefaultCurrentDirectoryInExePath=1` set in the spike's own process (restored after); record started or not. And
+once more with a path and no extension: copy it again as `t55probe2.exe` and start `FileName = "<work>\t55probe2"`
+(full path, no `.exe`); record started or not (it settles `Resolve`'s `.exe` rule, Task 2).
 
 Expected, and what changes if CI disagrees:
 
@@ -138,6 +173,7 @@ Expected, and what changes if CI disagrees:
 | M under `MSYS=noglob` | only values holding `\` or `"` altered | if others are altered, refusal R1 drops its `\`/`"` condition |
 | M under `ja_JP.SJIS` on `\u8868x`, `\u30BDx` | altered or split | if intact, stop: the source reading is wrong somewhere, the controller decides R2 |
 | M on U+F0xx values, default | `ok` (current runtimes) | R3 stays either way (older runtimes) |
+| `<work>\t55probe2` (path, no extension) | not started (CreateProcess's documented rule: no `.exe` for a name holding a path) | `Resolve` appends `.exe` to path names too, and the `C:/msys64/usr/bin/bash` row becomes `C:\msys64\usr\bin\bash.exe`, yes |
 | `t55probe` with the variable | not started | if started, Task 2's search keeps the current folder when the variable is set |
 
 ## Task 2: detect an MSYS2 target
@@ -161,7 +197,8 @@ public static bool IsMsys2(string path, Func<string, bool> fileExists);
 **`Resolve`** returns the file `CreateProcess` starts for `program` (its documented search for a command line with no
 application name), or null. Both methods first turn every `/` into `\` (Windows reads them alike) and check paths only
 through `FileExists` (the tests' fake ignores case, as Windows does). The name gets `.exe` appended when its last
-component has no `.`. A program holding `\` or `:` is not searched: one that starts with `\` or with a letter and `:` is
+component has no `.` and the name holds no `\` or `:` (CreateProcess's documented rule; the spike's `t55probe2`
+row confirms it or changes it, see Task 1). A program holding `\` or `:` is not searched: one that starts with `\` or with a letter and `:` is
 taken as is, any other is joined to `CurrentDirectory`. Otherwise the first folder, in this order,
 where `FileExists(folder\name)` is true: `ExeDirectory` (when not null), `CurrentDirectory` (skipped when
 `GetVariable("NoDefaultCurrentDirectoryInExePath")` is not null, unless the spike says otherwise), `SystemDirectory`,
@@ -184,7 +221,8 @@ Git's files `C:\Program Files\Git\bin\bash.exe`, `...\Git\bin\sh.exe`, `...\Git\
 | `bash` | none | `C:\Program Files\Git\bin\bash.exe` | yes (launcher) |
 | `sh.exe` | none | `C:\Program Files\Git\bin\sh.exe` | yes (launcher) |
 | `C:\Program Files\Git\usr\bin\bash.exe` | none | itself | yes (dll beside) |
-| `C:/msys64/usr/bin/bash` | none | `C:\msys64\usr\bin\bash.exe` | yes |
+| `C:/msys64/usr/bin/bash` | none | null (a path gets no `.exe`) | no: started as today |
+| `C:/msys64/usr/bin/bash.exe` | none | `C:\msys64\usr\bin\bash.exe` | yes |
 | `bash` | `C:\work\bash.exe` | `C:\work\bash.exe` | no |
 | `bash`, `NoDefaultCurrentDirectoryInExePath=1` | `C:\work\bash.exe` | `C:\Program Files\Git\bin\bash.exe` | yes |
 | `bash` | `C:\tools\bash.exe` | `C:\tools\bash.exe` | no |
@@ -294,8 +332,11 @@ extra runs. Add to `GitBashExtras` (class `git-bash`): `double-backslash` `"abc\
 `tilde` `"~/x-value"`; and in `RunGitBashCases` also create an empty `a-value` in the work folder (so `[ab]-value` has a
 match). The `--env` test runs the new extras too. No assertion changes.
 
-Break-it-once (the controller's, on Windows CI): revert Task 4's `RunCommand` change; `single-quote`, `token-syntax`,
-`lf-inside` (ConPTY leg), `glob-star`, `double-backslash` and `at-file` must be listed as altered.
+Break-it-once (the controller's, on Windows CI): revert Task 4's whole commit, the `[1.3.0]` pin included (with 1.3.0
+kept, its whitespace quoting alone already passes the line-break values). Then `single-quote`, `owner-escaping-set`,
+`token-syntax`, `file-token-syntax`, `embedded-token-syntax`, `glob-star`, `at-file`, `brace-list`, `glob-class`,
+`tilde`, and `lf-inside`, `crlf-inside` and `cr-inside` (ConPTY leg) must be listed as altered. `double-backslash`
+and the other backslash extras are not: they prove M's quoting does not break values that already pass.
 
 ## Task 6: docs
 
