@@ -94,6 +94,86 @@ public static class MsysTarget
                && fileExists(Join(root, @"usr\bin\msys-2.0.dll"));
     }
 
+    /// <summary>
+    /// The arguments part of an MSYS2 program's command line: each argument in <c>"</c>, every <c>\</c> and <c>"</c> in it
+    /// preceded by one <c>\</c>, joined by one space. By MSYS2's rules (<c>build_argv</c>, <c>quoted</c> and <c>globify</c>
+    /// in msys2-runtime's <c>dcrt0.cc</c>) each is one word, never split (CR and LF are inside the quotes), never an
+    /// <c>@file</c> (it starts with <c>"</c>) and never expanded, and <c>\\</c> and <c>\"</c> decode to <c>\</c> and
+    /// <c>"</c>. Brief T55 spike round 2: every tested value arrived exactly, through Git's launcher and MSYS2's bash.
+    /// </summary>
+    public static string QuoteArguments(IReadOnlyList<string> arguments) =>
+        string.Join(' ', arguments.Select(a => "\"" + a.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\""));
+
+    private const string EnvironmentWay = "the secret in the environment ('run --env PW={{name}} -- <bash.exe> ./script.sh', read as \"$PW\").";
+
+    /// <summary>
+    /// The refusal of an MSYS2 child's <paramref name="arguments"/> (argv without the program) that
+    /// <see cref="QuoteArguments"/> can't pass exactly, or null. <paramref name="childVariable"/> reads the child's
+    /// environment (names ignoring case). In order, the first that finds anything: R1, <c>MSYS</c> changes the glob
+    /// option (a word <c>noglob</c> or starting with <c>glob:</c>, ignoring case) and an argument holds <c>\</c> or
+    /// <c>"</c>; R2, the locale (the first non-empty of <c>LC_ALL</c>, <c>LC_CTYPE</c>, <c>LANG</c>) is set and is not
+    /// <c>C</c>, <c>POSIX</c> or a UTF-8 charset, and an argument holds a character above U+007F; R3, an argument holds a
+    /// character from U+F000 to U+F0FF (older runtimes turn them into ASCII). The text names the tokens whose
+    /// substituted text holds what the rule found (<paramref name="tokens"/>, whose <c>ArgIndex</c> counts the program
+    /// as 0, so a token in the program is never named), in argv order and each once, and never a value, a variable's
+    /// value or the character.
+    /// </summary>
+    public static string? Refusal(IReadOnlyList<string> arguments, IReadOnlyList<Validation.SubstitutedToken> tokens,
+        Func<string, string?> childVariable)
+    {
+        string What(Func<char, bool> found)
+        {
+            var named = tokens.Where(t => t.ArgIndex > 0 && t.Value.Any(found))
+                .OrderBy(t => t.ArgIndex)
+                .Select(t => t.IsFile ? $"'{{{{@{Validation.Printable(t.Name)}}}}}'" : $"'{t.Name}'")
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
+            return named.Count == 0 ? "an argument" : "the argument(s) from " + string.Join(", ", named);
+        }
+        bool Any(Func<char, bool> found) => arguments.Any(a => a.Any(found));
+
+        static bool GlobCharacter(char c) => c is '\\' or '"';
+        if (ChangesGlobOption(childVariable("MSYS")) && Any(GlobCharacter))
+            return "Refused: MSYS changes the glob option and an argument holds a backslash or double quote; with that option " +
+                   "Git Bash (MSYS2) reads backslashes and double quotes in its arguments differently, so tswap can't pass " +
+                   $"{What(GlobCharacter)} exactly. Remove the glob option from MSYS for this command, or pass {EnvironmentWay}";
+
+        static bool NonAscii(char c) => c > '\u007F';
+        if (!IsUtf8Locale(childVariable) && Any(NonAscii))
+            return "Refused: the locale (LC_ALL, LC_CTYPE or LANG) is not UTF-8, and in it Git Bash (MSYS2) can read part of a " +
+                   $"non-ASCII character as a backslash, so tswap can't pass {What(NonAscii)} exactly. Use a UTF-8 locale for " +
+                   $"this command, or pass {EnvironmentWay}";
+
+        static bool PrivateUse(char c) => c is >= '\uF000' and <= '\uF0FF';
+        if (Any(PrivateUse))
+            return $"Refused: {What(PrivateUse)} holds a character from U+F000 to U+F0FF, which older MSYS2 runtimes turn into " +
+                   "ASCII such as a quote or a space before reading the command line. Pass " + EnvironmentWay;
+
+        return null;
+    }
+
+    // Brief T55 amendment 3: MSYS's options are words; 'noglob' or 'glob:...' changes the glob option ('glob' is the default).
+    private static bool ChangesGlobOption(string? msys) =>
+        msys is not null && msys.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Any(word =>
+            word.Equals("noglob", StringComparison.OrdinalIgnoreCase) || word.StartsWith("glob:", StringComparison.OrdinalIgnoreCase));
+
+    // The runtime's locale: the first non-empty of LC_ALL, LC_CTYPE, LANG; unset, C and POSIX convert as UTF-8. A
+    // locale without a charset part is not UTF-8 (spike round 2: de_DE converts as ISO-8859-1).
+    private static bool IsUtf8Locale(Func<string, string?> childVariable)
+    {
+        var locale = new[] { "LC_ALL", "LC_CTYPE", "LANG" }.Select(childVariable).FirstOrDefault(v => !string.IsNullOrEmpty(v));
+        if (locale is null or "C" or "POSIX")
+            return true;
+        var dot = locale.IndexOf('.');
+        if (dot < 0)
+            return false;
+        var charset = locale[(dot + 1)..];
+        var at = charset.IndexOf('@');
+        if (at >= 0)
+            charset = charset[..at];
+        return charset.Equals("UTF-8", StringComparison.OrdinalIgnoreCase) || charset.Equals("utf8", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static string Join(string folder, string name) => folder.TrimEnd('\\', '/') + "\\" + name;
 
     private static string? Parent(string path)
