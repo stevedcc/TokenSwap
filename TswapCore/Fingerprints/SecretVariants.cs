@@ -125,6 +125,24 @@ public static class SecretVariants
     /// UTF-16 length exactly when every character is ASCII (any other character takes more UTF-8 bytes than UTF-16
     /// units).
     /// </summary>
+    /// <summary>
+    /// T54 fix round 1 (GLM Minor 1, controller ruling): whether <paramref name="stored"/>, a set of
+    /// <see cref="CurrentSetVersion"/> for <paramref name="valueBytes"/>, lacks a form kind (NFC or NFD) that this
+    /// machine's recomputation has. A machine without a Unicode library (.NET's invariant mode, no ICU) computes no form
+    /// entries; with the value known, such a set is treated as out of date and recomputed. Only the kinds are
+    /// compared: a form entry another library computed differently (same kind, another HMAC) is kept as written.
+    /// ASCII values have no forms, so they are never recomputed for this.
+    /// </summary>
+    public static bool LacksFormsOf(FingerprintSet stored, byte[] valueBytes, FingerprintKeys keys)
+    {
+        ArgumentNullException.ThrowIfNull(stored);
+        ArgumentNullException.ThrowIfNull(valueBytes);
+        if (stored.VariantSetVersion != CurrentSetVersion || System.Text.Ascii.IsValid(valueBytes))
+            return false;
+        var have = stored.Entries.Select(static e => e.Kind).ToHashSet();
+        return Fingerprinter.Compute(valueBytes, keys).Entries.Any(e => e.Kind.BaseKind() != e.Kind && !have.Contains(e.Kind));
+    }
+
     public static bool IsCurrent(FingerprintSet set)
     {
         ArgumentNullException.ThrowIfNull(set);

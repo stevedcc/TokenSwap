@@ -1415,7 +1415,7 @@ public sealed class RecordVaultStore : IFileVaultStore
                 continue; // no main file and no usable copy: nothing to rewrite
             if (state.Type == RecordType.Tombstone)
                 tombstones++;
-            if (IsCurrent(record))
+            if (IsCurrent(record, vaultKey))
             {
                 alreadyCurrent++;
                 continue;
@@ -1429,7 +1429,7 @@ public sealed class RecordVaultStore : IFileVaultStore
     }
 
     /// <summary>Ruling 9: a record <see cref="Reindex"/> leaves as it is.</summary>
-    private static bool IsCurrent(LoadedRecord record)
+    private static bool IsCurrent(LoadedRecord record, byte[] vaultKey)
     {
         if (record.FoldedCopies is { Count: > 0 } || record.MainBytes is null || record.MainState is not { } main || record.State is not { } state)
             return false;
@@ -1439,10 +1439,14 @@ public sealed class RecordVaultStore : IFileVaultStore
             return false;
         if (state.Type == RecordType.Tombstone)
             return true;
-        return CurrentSet(state.Fingerprints) && (state.Previous is null || CurrentSet(state.Previous.Fingerprints));
+        using var keys = FingerprintKeys.Derive(vaultKey);
+        return CurrentSet(state.Fingerprints, state.Value) && (state.Previous is null || CurrentSet(state.Previous.Fingerprints, state.Previous.Value));
 
-        static bool CurrentSet(FingerprintSet? set) =>
-            set is not null && (set.VariantSetVersion >= SecretVariants.CurrentSetVersion || SecretVariants.IsCurrent(set));
+        // T54 fix round 1 (GLM Minor 1): with the value known, a set missing form kinds this machine computes (written
+        // where normalising is a no-op) is not current either.
+        bool CurrentSet(FingerprintSet? set, byte[] value) =>
+            set is not null && (set.VariantSetVersion >= SecretVariants.CurrentSetVersion || SecretVariants.IsCurrent(set))
+            && !SecretVariants.LacksFormsOf(set, value, keys);
     }
 
     private TswapException NewerFormatMarker() => new(
@@ -2051,9 +2055,12 @@ public sealed class RecordVaultStore : IFileVaultStore
     {
         if (record.Type == RecordType.Tombstone)
             return record with { Fingerprints = null, Previous = null, Sealed = null };
+        // T54 fix round 1 (GLM Minor 1): with the value known, a set missing form kinds this machine computes is
+        // recomputed too, by any write that writes the record from its plaintext.
         FingerprintSet For(byte[] value, FingerprintSet? stored) =>
             stored is not null
             && !(recomputeOlderSets && stored.VariantSetVersion < SecretVariants.CurrentSetVersion && !SecretVariants.IsCurrent(stored))
+            && !SecretVariants.LacksFormsOf(stored, value, keys)
                 ? stored
                 : Fingerprinter.Compute(value, keys);
         var previous = record.Previous is { } p ? p with { Fingerprints = For(p.Value, p.Fingerprints) } : null;

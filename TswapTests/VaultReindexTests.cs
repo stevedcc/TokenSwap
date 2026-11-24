@@ -179,6 +179,33 @@ public sealed class VaultReindexTests : IDisposable
         Assert.Equal(Fingerprints(_key, Encoding.UTF8.GetBytes("caf\u00e9-value")), ReadRecord(_m, _key, "c").Fingerprints);
     }
 
+    /// <summary>
+    /// T54 fix round 1 (GLM Minor 1, controller ruling): a version 2 set written where string.Normalize is a no-op
+    /// (.NET's invariant mode, no ICU) holds no form entries. With the value known, a set that lacks form kinds its
+    /// recomputation here has is not current: reindex recomputes it (a full load: the value is known). Write commands
+    /// that decrypt no value (T16-S2b) keep the set as it is.
+    /// </summary>
+    [Fact]
+    public void Reindex_AVersionTwoSetWithoutItsFormEntries_IsRecomputed()
+    {
+        WriteMarker(_m);
+        _m.Ok("caf\u00e9-value", "ingest", "c");
+        _m.Ok("ascii-value", "ingest", "a");
+        foreach (var name in new[] { "a", "c" })
+        {
+            var record = ReadRecord(_m, _key, name);
+            var baseOnly = new FingerprintSet(SecretVariants.CurrentSetVersion, [.. record.Fingerprints!.Entries.Where(e => e.Kind.BaseKind() == e.Kind)]);
+            File.WriteAllBytes(RecordFile(_m, _key, name), SecretRecordCodec.Encode(record with { Fingerprints = baseOnly }, _key, 3));
+        }
+        var asciiBefore = File.ReadAllBytes(RecordFile(_m, _key, "a"));
+
+        var result = Store(_m).Reindex(_key);
+
+        Assert.Equal(new ReindexResult(Rewritten: 1, AlreadyCurrent: 1, Tombstones: 0), result);
+        Assert.Equal(Fingerprints(_key, Encoding.UTF8.GetBytes("caf\u00e9-value")), ReadRecord(_m, _key, "c").Fingerprints);
+        Assert.Equal(asciiBefore, File.ReadAllBytes(RecordFile(_m, _key, "a")));
+    }
+
     [Fact]
     public void Reindex_UnreadableRecord_RefusesBeforeWriting()
     {
