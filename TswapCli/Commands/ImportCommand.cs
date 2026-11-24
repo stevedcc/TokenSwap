@@ -44,12 +44,30 @@ public sealed class ImportCommand : ICliCommand
         if (passphrase.Length == 0 && exportFile.Version != ExportFile.V1)
             throw new TswapException("No import passphrase was entered.");
         var salt = Convert.FromBase64String(exportFile.Salt);
-        var exportKey = ExportCrypto.DeriveKey(passphrase, salt, exportFile);
 
-        byte[] plaintext;
-        try { plaintext = Crypto.Decrypt(Convert.FromBase64String(exportFile.Ciphertext), exportKey); }
-        catch (CryptographicException) { throw new TswapException("Decryption failed — wrong passphrase or file tampered"); }
-        catch (FormatException) { throw new TswapException("Export file is corrupted (base64 decode failed)"); }
+        // Brief T54: an export since T54 derives from the NFC passphrase; an older one from the bytes as typed then.
+        // Each candidate in order (ExportCrypto.PassphraseCandidates); the first that authenticates wins, and every
+        // key that fails is zeroed.
+        byte[]? plaintext = null;
+        foreach (var candidate in ExportCrypto.PassphraseCandidates(passphrase))
+        {
+            var exportKey = ExportCrypto.DeriveKey(candidate, salt, exportFile);
+            try
+            {
+                plaintext = Crypto.Decrypt(Convert.FromBase64String(exportFile.Ciphertext), exportKey);
+                break;
+            }
+            catch (CryptographicException)
+            {
+            }
+            catch (FormatException) { throw new TswapException("Export file is corrupted (base64 decode failed)"); }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(exportKey);
+            }
+        }
+        if (plaintext is null)
+            throw new TswapException("Decryption failed — wrong passphrase or file tampered");
 
         SecretsDb exportedDb;
         try

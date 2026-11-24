@@ -293,4 +293,111 @@ public sealed class RecordStoreExportImportTests : IDisposable
         Assert.Equal(1, exit);
         Assert.Contains("Refused: the fields of 'big' are over a cap.", stderr);
     }
+
+    // ------------------------------------------------------------------ brief T54 Task 6: passphrases in NFC
+
+    private const string PassNfc = "p\u00e4ss-export-1";
+    private const string PassNfd = "pa\u0308ss-export-1";
+    private const string LoneSurrogatePass = "x\uD800y";
+
+    /// <summary>Imports <paramref name="path"/> into a fresh vault with <paramref name="typed"/>; returns the run and that vault's value of s.</summary>
+    private static (int Exit, string Err, string? Value) ImportFresh(string path, string typed)
+    {
+        using var fresh = new FleetMachine("import-fresh", SimulatedYubiKeyService.WithKeys(SerialA));
+        InitRecordVault(fresh);
+        var (exit, _, err) = fresh.Run(typed + "\n", "import", path);
+        return (exit, err, exit == 0 ? fresh.Get("s") : null);
+    }
+
+    /// <summary>An export "made by an older tswap": the key derived over the raw passphrase, a fixed salt.</summary>
+    private string OlderExport(string version, string passphrase)
+    {
+        var salt = Enumerable.Range(0, 32).Select(i => (byte)i).ToArray();
+        var kdf = version == ExportFile.V1 ? null : ExportCrypto.DefaultArgon2idParams;
+        var file = new ExportFile(version, TestTime.Fixed, Convert.ToBase64String(salt), "", kdf);
+        var key = ExportCrypto.DeriveKey(passphrase, salt, file);
+        var ciphertext = Crypto.Encrypt(Encoding.UTF8.GetBytes(PayloadOf(("s", null))), key);
+        var path = _m.PathOf($"older-{version}.json");
+        File.WriteAllText(path, JsonSerializer.Serialize(file with { Ciphertext = Convert.ToBase64String(ciphertext) }, TswapJsonContext.Default.ExportFile));
+        return path;
+    }
+
+    private string Export(string passphrase, string confirmation)
+    {
+        _m.Ok("s-value-0042", "ingest", "s");
+        var path = _m.PathOf("unicode-export.json");
+        var (exit, _, err) = _m.Run(passphrase + "\n" + confirmation + "\n", "export", path);
+        Assert.True(exit == 0, err);
+        return path;
+    }
+
+    [Theory]
+    [InlineData(PassNfc, PassNfd)]
+    [InlineData(PassNfd, PassNfc)]
+    public void Export_ImportsWhicheverSpellingIsTyped(string exportedWith, string importedWith)
+    {
+        var path = Export(exportedWith, exportedWith);
+
+        var (exit, err, value) = ImportFresh(path, importedWith);
+
+        Assert.True(exit == 0, err);
+        Assert.Equal("s-value-0042", value);
+    }
+
+    [Theory]
+    [InlineData("tswap-export-v3", PassNfd, PassNfc)] // the NFD candidate (typed NFC is its own NFC: the second of two)
+    [InlineData("tswap-export-v3", PassNfc, PassNfd)] // the first candidate
+    [InlineData("tswap-export-v1", PassNfd, PassNfc)] // PBKDF2
+    [InlineData("tswap-export-v3", LoneSurrogatePass, LoneSurrogatePass)] // [typed]
+    public void OlderExport_MadeOverTheRawPassphrase_Imports(string version, string madeWith, string typed)
+    {
+        var path = OlderExport(version, madeWith);
+
+        var (exit, err, value) = ImportFresh(path, typed);
+
+        Assert.True(exit == 0, err);
+        Assert.Equal("s-value-0042", value);
+    }
+
+    [Fact]
+    public void Export_ConfirmationInTheOtherSpelling_IsAccepted()
+    {
+        var path = Export(PassNfc, PassNfd);
+
+        Assert.Equal(0, ImportFresh(path, PassNfc).Exit);
+    }
+
+    [Fact]
+    public void Export_ALoneSurrogatePassphrase_IsRefused_NothingWritten()
+    {
+        _m.Ok("s-value-0042", "ingest", "s");
+        var path = _m.PathOf("refused-export.json");
+
+        var (exit, _, err) = _m.Run(LoneSurrogatePass + "\n" + LoneSurrogatePass + "\n", "export", path);
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("The passphrase holds half of a character (a lone UTF-16 surrogate); type it again.", err);
+        Assert.False(File.Exists(path));
+    }
+
+    [Fact]
+    public void Import_AWrongPassphrase_IsTodaysDecryptionFailure()
+    {
+        var path = Export(PassNfc, PassNfc);
+
+        var (exit, err, _) = ImportFresh(path, "pa\u0308ss-export-2");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("Decryption failed — wrong passphrase or file tampered", err);
+    }
+
+    [Fact]
+    public void PassphraseCandidates_AreNfcTypedNfd_WithoutDuplicates()
+    {
+        Assert.Equal([PassNfc, PassNfd], ExportCrypto.PassphraseCandidates(PassNfd));
+        Assert.Equal([PassNfc, PassNfd], ExportCrypto.PassphraseCandidates(PassNfc));
+        Assert.Equal(["abc"], ExportCrypto.PassphraseCandidates("abc"));
+        Assert.Equal([LoneSurrogatePass], ExportCrypto.PassphraseCandidates(LoneSurrogatePass));
+        Assert.Equal(PassNfc, ExportCrypto.NormalisePassphrase(PassNfd));
+    }
 }

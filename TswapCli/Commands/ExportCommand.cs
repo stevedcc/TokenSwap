@@ -34,9 +34,12 @@ public sealed class ExportCommand : ICliCommand
         var passphrase = ctx.Console.ReadPassword(ctx.Console.Error);
         if (passphrase.Length == 0)
             throw new TswapException($"An empty passphrase can't protect an export. Run 'sudo {ctx.Prefix} export' again.");
+        // Brief T54: both readings in NFC, so a confirmation typed in the other spelling matches and the key
+        // derives from the spelling every import tries first.
+        passphrase = ExportCrypto.NormalisePassphrase(passphrase);
         ctx.Console.Error.Write("Confirm passphrase: ");
-        var confirm = ctx.Console.ReadPassword(ctx.Console.Error);
-        if (passphrase != confirm)
+        var confirm = ExportCrypto.NormalisePassphrase(ctx.Console.ReadPassword(ctx.Console.Error));
+        if (!string.Equals(passphrase, confirm, StringComparison.Ordinal))
             throw new TswapException("Passphrases don't match");
 
         var config = ctx.Storage.LoadConfig();
