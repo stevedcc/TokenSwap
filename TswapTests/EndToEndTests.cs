@@ -1349,6 +1349,42 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         AssertTheRequestIsKept(enrol, hostKeyring, exitCode, output, killed);
     }
 
+    /// <summary>The exit code .NET reports for a child ended by SIGINT (128 + 2); observed on Linux.</summary>
+    private const int EndedBySigint = 130;
+
+    /// <summary>
+    /// Brief T56 (#361): a Ctrl-C typed as soon as the gate's prompt shows, without waiting for the key read. Which way it
+    /// lands depends on whether tswap reached the read first: inside it, Ctrl-C is a key and the gate refuses (exit 1);
+    /// before it, the line discipline sends SIGINT and tswap dies by the signal. Both are correct, and both leave the
+    /// same state, since approve.json is written only after the Enter: the request kept, no approve file, the host unchanged.
+    /// (Not <see cref="AssertTheRequestIsKept"/>, which pins exit 1 for the gate's own refusal.)
+    /// </summary>
+    [UnixFact]
+    public void Enrol_CtrlCAsSoonAsThePromptShows_OnARealTerminal_LeavesNoApproveFile()
+    {
+        var enrol = new EnrolOnPty(_tempDir, _binaryPath, _testKeyHex);
+        enrol.SetUp();
+        var hostKeyring = File.ReadAllBytes(enrol.HostKeyringPath);
+
+        var (exitCode, output, killed) = enrol.Run(pty =>
+        {
+            pty.WaitFor(EnterGatePrompt);
+            pty.Type("\x03");
+        });
+
+        _output.WriteLine($"exit code {exitCode}");
+        Assert.False(killed, "tswap didn't exit by itself; the terminal showed:\n" + output);
+        var refused = output.ReplaceLineEndings(" ").Replace("  ", " ").Contains(NotConfirmed, StringComparison.Ordinal);
+        Assert.True(exitCode == 1 && refused || exitCode == EndedBySigint && !refused,
+            $"exit code {exitCode}, the gate's refusal {(refused ? "shown" : "not shown")}; the terminal showed:\n{output}");
+        var folder = Assert.Single(Directory.GetDirectories(Path.Combine(enrol.JoinerDir, "enrol")));
+        Assert.True(File.Exists(Path.Combine(folder, "request.json")));
+        Assert.False(File.Exists(Path.Combine(folder, "approve.json")), "approve.json was left behind");
+        using var config = JsonDocument.Parse(File.ReadAllText(Path.Combine(enrol.JoinerDir, "config.json")));
+        Assert.Equal(JsonValueKind.String, config.RootElement.GetProperty("PendingSlotId").ValueKind);
+        Assert.Equal(hostKeyring, File.ReadAllBytes(enrol.HostKeyringPath));
+    }
+
     // --- issue #85: Ctrl+C during ReadPassword restores terminal and prints "Cancelled" ---
     // These tests require a PTY so ReadPassword takes the interactive path.
     // Before the fix, Ctrl+C raised SIGINT and the process died without printing "Cancelled".
