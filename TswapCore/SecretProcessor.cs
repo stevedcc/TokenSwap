@@ -102,8 +102,11 @@ public abstract class SecretProcessor
         return list;
     }
 
-    /// <summary>The match type of a variant: plain and whitespace-stripped are both plaintext.</summary>
-    internal static MatchType TypeOf(VariantKind kind) => kind switch
+    /// <summary>
+    /// The match type of a variant: plain and whitespace-stripped are both plaintext. A form kind (brief T54) has its
+    /// base kind's type, so a match never says which spelling was found.
+    /// </summary>
+    internal static MatchType TypeOf(VariantKind kind) => kind.BaseKind() switch
     {
         VariantKind.Base64 => MatchType.Base64,
         VariantKind.Base64Url => MatchType.Base64Url,

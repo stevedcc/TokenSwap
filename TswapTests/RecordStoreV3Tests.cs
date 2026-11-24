@@ -67,6 +67,22 @@ public sealed class RecordStoreV3Tests : IDisposable
         Assert.NotEmpty(record.Fingerprints.Entries);
     }
 
+    /// <summary>Brief T54 Task 1: a non-ASCII value's version 2 set, form entries and all, round-trips through the codec.</summary>
+    [Fact]
+    public void Ingest_NonAsciiValue_RoundTripsItsVersionTwoSet()
+    {
+        WriteMarker(_m);
+
+        _m.Ok("caf\u00e9", "ingest", "s");
+
+        var record = Read("s");
+        var expected = Fingerprints(_key, Encoding.UTF8.GetBytes("caf\u00e9"));
+        Assert.Equal(2, expected.VariantSetVersion);
+        Assert.Equal(5, expected.Entries.Count);
+        Assert.Equal(expected, record.Fingerprints);
+        Assert.Equal(expected, SecretRecordCodec.Decode(SecretRecordCodec.Encode(record, _key, 3), _key).Fingerprints);
+    }
+
     [Fact]
     public void AnyV3RecordRead_WritesV3EvenWithoutMarker()
     {

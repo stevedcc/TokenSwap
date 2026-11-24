@@ -57,9 +57,130 @@ public class SecretVariantsTests
     }
 
     [Fact]
-    public void CurrentSetVersion_IsOne()
+    public void CurrentSetVersion_IsTwo()
     {
-        Assert.Equal(1, SecretVariants.CurrentSetVersion);
+        Assert.Equal(2, SecretVariants.CurrentSetVersion);
+    }
+
+    // ------------------------------------------------------------------ brief T54 Task 1: form variants
+
+    public static TheoryData<string, (VariantKind, string)[]> FormRows => new()
+    {
+        { "abc", [(VariantKind.Plain, "abc"), (VariantKind.Base64, "YWJj")] },
+        {
+            "caf\u00e9",
+            [
+                (VariantKind.Plain, "caf\u00e9"), (VariantKind.Base64, "Y2Fmw6k="), (VariantKind.Base64Url, "Y2Fmw6k"),
+                (VariantKind.NfdPlain, "cafe\u0301"), (VariantKind.NfdBase64, "Y2FmZcyB"),
+            ]
+        },
+        {
+            "cafe\u0301",
+            [
+                (VariantKind.Plain, "cafe\u0301"), (VariantKind.Base64, "Y2FmZcyB"),
+                (VariantKind.NfcPlain, "caf\u00e9"), (VariantKind.NfcBase64, "Y2Fmw6k="), (VariantKind.NfcBase64Url, "Y2Fmw6k"),
+            ]
+        },
+        {
+            // U+0958 is a composition exclusion: NFC decomposes it, so the decomposed texts come in under the Nfc
+            // kinds, and the NFD list adds nothing (its texts are already present).
+            "\u0958x",
+            [
+                (VariantKind.Plain, "\u0958x"), (VariantKind.Base64, "4KWYeA=="), (VariantKind.Base64Url, "4KWYeA"),
+                (VariantKind.NfcPlain, "\u0915\u093cx"), (VariantKind.NfcBase64, "4KSV4KS8eA=="), (VariantKind.NfcBase64Url, "4KSV4KS8eA"),
+            ]
+        },
+        {
+            "p\u00e4ss w\u00f6rd",
+            [
+                (VariantKind.Plain, "p\u00e4ss w\u00f6rd"), (VariantKind.WhitespaceStripped, "p\u00e4ssw\u00f6rd"),
+                (VariantKind.Base64, "cMOkc3Mgd8O2cmQ="), (VariantKind.Base64Url, "cMOkc3Mgd8O2cmQ"),
+                (VariantKind.NfdPlain, "pa\u0308ss wo\u0308rd"), (VariantKind.NfdWhitespaceStripped, "pa\u0308sswo\u0308rd"),
+                (VariantKind.NfdBase64, "cGHMiHNzIHdvzIhyZA=="), (VariantKind.NfdBase64Url, "cGHMiHNzIHdvzIhyZA"),
+            ]
+        },
+        {
+            // A lone surrogate can't be normalised: the base kinds only.
+            "x\uD800y",
+            [(VariantKind.Plain, "x\uD800y"), (VariantKind.Base64, "eO+/vXk="), (VariantKind.Base64Url, "eO-_vXk")]
+        },
+    };
+
+    [Theory]
+    [MemberData(nameof(FormRows))]
+    public void For_AddsTheNfcAndNfdForms(string value, (VariantKind, string)[] expected)
+    {
+        Assert.Equal(expected, SecretVariants.For(value));
+    }
+
+    [Fact]
+    public void BaseKind_MapsEveryFormKindToItsBaseKind_AndLeavesOthers()
+    {
+        VariantKind[] bases = [VariantKind.Plain, VariantKind.WhitespaceStripped, VariantKind.Base64, VariantKind.Base64Url];
+        VariantKind[] all =
+        [
+            VariantKind.Plain, VariantKind.WhitespaceStripped, VariantKind.Base64, VariantKind.Base64Url,
+            VariantKind.NfcPlain, VariantKind.NfcWhitespaceStripped, VariantKind.NfcBase64, VariantKind.NfcBase64Url,
+            VariantKind.NfdPlain, VariantKind.NfdWhitespaceStripped, VariantKind.NfdBase64, VariantKind.NfdBase64Url,
+        ];
+        Assert.Equal([.. bases, .. bases, .. bases], all.Select(k => k.BaseKind()));
+        Assert.Equal((VariantKind)200, ((VariantKind)200).BaseKind());
+        Assert.Equal((VariantKind)12, ((VariantKind)12).BaseKind());
+    }
+
+    [Fact]
+    public void VariantKind_FormValues_ArePinned()
+    {
+        // The byte values are record format: appended, never renumbered.
+        Assert.Equal(
+            [4, 5, 6, 7, 8, 9, 10, 11],
+            new[]
+            {
+                VariantKind.NfcPlain, VariantKind.NfcWhitespaceStripped, VariantKind.NfcBase64, VariantKind.NfcBase64Url,
+                VariantKind.NfdPlain, VariantKind.NfdWhitespaceStripped, VariantKind.NfdBase64, VariantKind.NfdBase64Url,
+            }.Select(k => (int)k));
+    }
+
+    private static FingerprintSet Set(string value, byte version)
+    {
+        using var keys = FingerprintKeys.Derive(new byte[32]);
+        return Fingerprinter.Compute(Encoding.UTF8.GetBytes(value), keys) with { VariantSetVersion = version };
+    }
+
+    [Fact]
+    public void Compute_NonAsciiValue_HasItsFormEntries_AndVersionTwo()
+    {
+        using var keys = FingerprintKeys.Derive(new byte[32]);
+        var computed = Fingerprinter.Compute(Encoding.UTF8.GetBytes("caf\u00e9"), keys);
+
+        Assert.Equal(2, computed.VariantSetVersion);
+        Assert.Equal(
+            [VariantKind.Plain, VariantKind.Base64, VariantKind.Base64Url, VariantKind.NfdPlain, VariantKind.NfdBase64],
+            computed.Entries.Select(e => e.Kind));
+    }
+
+    [Theory]
+    [InlineData("caf\u00e9", 2, true)]
+    [InlineData("abc", 1, true)]
+    [InlineData("ab", 1, true)]
+    [InlineData("??>", 1, true)]
+    [InlineData("caf\u00e9", 1, false)]
+    [InlineData("\U0001F600", 1, false)]
+    [InlineData("", 1, true)]
+    [InlineData("abc", 0, false)]
+    public void IsCurrent_VersionTwo_OrAVersionOneSetThatProvesItsValueAscii(string value, byte version, bool expected)
+    {
+        Assert.Equal(expected, SecretVariants.IsCurrent(Set(value, version)));
+    }
+
+    [Fact]
+    public void IsCurrent_VersionOneWithoutItsBase64Entry_IsNotCurrent()
+    {
+        var set = Set("abc", 1);
+        var withoutBase64 = set with { Entries = [.. set.Entries.Where(e => e.Kind != VariantKind.Base64)] };
+
+        Assert.True(SecretVariants.IsCurrent(set));
+        Assert.False(SecretVariants.IsCurrent(withoutBase64));
     }
 
     /// <summary>
@@ -95,12 +216,19 @@ public class SecretVariantsTests
                 .Select(e => (e.Type, e.SearchText))
                 .Order(PairOrder.Instance)
                 .ToList();
-            var fromVariants = SecretVariants.For(value)
+            var variants = SecretVariants.For(value);
+            var fromVariants = variants
+                .Select(v => (Map(v.Kind), v.Text))
+                .Order(PairOrder.Instance)
+                .ToList();
+            var baseVariants = variants
+                .Where(v => v.Kind.BaseKind() == v.Kind)
                 .Select(v => (Map(v.Kind), v.Text))
                 .Order(PairOrder.Instance)
                 .ToList();
             var pinned = PinnedMatcherVariants(value).Order(PairOrder.Instance).ToList();
-            Assert.Equal(pinned, fromVariants);
+            Assert.Equal(pinned, baseVariants);
+            Assert.Equal(PinnedFormVariants(value), variants.Where(v => v.Kind.BaseKind() != v.Kind));
             Assert.Equal(fromVariants, fromMatcher);
         }
     }
@@ -123,7 +251,49 @@ public class SecretVariantsTests
         return list;
     }
 
-    private static MatchType Map(VariantKind kind) => kind switch
+    /// <summary>
+    /// Brief T54 Task 1, written out apart from <see cref="SecretVariants.For"/>: unless the value holds a lone
+    /// surrogate, the variants of its NFC form under the Nfc kinds, then those of its NFD form under the Nfd kinds,
+    /// each form only when it differs from the value, and each text only when no earlier variant has it.
+    /// </summary>
+    private static List<(VariantKind Kind, string Text)> PinnedFormVariants(string value)
+    {
+        List<(VariantKind Kind, string Text)> forms = [];
+        if (string.IsNullOrEmpty(value)) return forms;
+        for (var i = 0; i < value.Length; i++)
+        {
+            if (char.IsHighSurrogate(value[i]) && i + 1 < value.Length && char.IsLowSurrogate(value[i + 1])) i++;
+            else if (char.IsSurrogate(value[i])) return forms;
+        }
+
+        HashSet<string> seen = [.. PinnedKinds(value).Select(v => v.Text)];
+        foreach (var (form, offset) in new[] { (value.Normalize(NormalizationForm.FormC), 4), (value.Normalize(NormalizationForm.FormD), 8) })
+        {
+            if (form == value) continue;
+            foreach (var (kind, text) in PinnedKinds(form))
+                if (seen.Add(text))
+                    forms.Add(((VariantKind)((int)kind + offset), text));
+        }
+        return forms;
+    }
+
+    /// <summary>The base variants of one form with their kinds, by the rule <see cref="PinnedMatcherVariants"/> pins.</summary>
+    private static List<(VariantKind Kind, string Text)> PinnedKinds(string form)
+    {
+        List<(VariantKind Kind, string Text)> list = [(VariantKind.Plain, form)];
+        var stripped = form.Replace("\r", "").Replace("\n", "").Replace(" ", "").Replace("\t", "");
+        if (stripped != form && stripped.Length > 0)
+            list.Add((VariantKind.WhitespaceStripped, stripped));
+        var base64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(form));
+        if (base64 != form)
+            list.Add((VariantKind.Base64, base64));
+        var base64Url = base64.Replace('+', '-').Replace('/', '_').TrimEnd('=');
+        if (base64Url != base64 && base64Url != form)
+            list.Add((VariantKind.Base64Url, base64Url));
+        return list;
+    }
+
+    private static MatchType Map(VariantKind kind) => kind.BaseKind() switch
     {
         VariantKind.Plain or VariantKind.WhitespaceStripped => MatchType.Plaintext,
         VariantKind.Base64 => MatchType.Base64,

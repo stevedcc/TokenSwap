@@ -100,7 +100,7 @@ public class FingerprintTests
     {
         using var keys = FingerprintKeys.Derive(RandomKey());
         var set = Fingerprinter.Compute([], keys);
-        Assert.Equal(1, set.VariantSetVersion);
+        Assert.Equal(SecretVariants.CurrentSetVersion, set.VariantSetVersion);
         Assert.Empty(set.Entries);
     }
 
