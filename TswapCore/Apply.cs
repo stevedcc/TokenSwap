@@ -190,10 +190,10 @@ public static class Apply
     /// three YAML also folds as line breaks inside double quotes (U+0085, U+2028, U+2029), and the rest
     /// of YAML's non-printables (the C1 controls U+0080–U+009F, U+FFFE, U+FFFF; GLM code review).
     /// </summary>
-    private static bool IsControlCharacter(char c) =>
+    internal static bool IsControlCharacter(char c) =>
         c < ' ' || c is >= '\u007F' and <= '\u009F' or '\u2028' or '\u2029' or '\uFFFE' or '\uFFFF';
 
-    private static bool HasControlCharacter(string value) => value.Any(IsControlCharacter);
+    internal static bool HasControlCharacter(string value) => value.Any(IsControlCharacter);
 
     /// <summary>
     /// The value as the inside of a double-quoted string, which YAML double quotes and JSON strings

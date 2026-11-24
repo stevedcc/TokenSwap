@@ -468,11 +468,42 @@ public sealed class EvilValuesTests : IDisposable
 
     // Findings (A1): each pair is left out of its theory by KnownFindings; the full assertion is here, skipped.
 
-    [Fact(Skip = "T46 finding 2: tocomment matches line by line, so a value holding a line break inside a line is not found (#399)")]
-    public void Finding2_LfInside_TocommentDryrun() => CheckTocommentDryrun("lf-inside");
+    /// <summary>
+    /// Brief T50b Task 3 (#399): a value with a line break, replaced by tocomment as one marker, is filled back by
+    /// <c>run {{@file}}</c> to exactly the stored value, and no stream holds a window of it.
+    /// </summary>
+    [Theory]
+    [InlineData("lf-inside")]
+    [InlineData("crlf-inside")]
+    public void Tocomment_MultiLineValue_RoundTripsThroughRun(string caseName)
+    {
+        var stored = Stored(EvilValues.Get(caseName).Value);
+        IngestCase(caseName, EvilValues.Get(caseName).Value);
+        var file = FileNameFor(caseName, stored, "file.yaml", "values.yml");
+        var path = Path.Combine(_work, file);
+        File.WriteAllText(path, $"key: {stored}\n");
 
-    [Fact(Skip = "T46 finding 2: tocomment matches line by line, so a value holding a line break inside a line is not found (#399)")]
-    public void Finding2_CrlfInside_TocommentDryrun() => CheckTocommentDryrun("crlf-inside");
+        var (tocommentExit, tocommentOut, tocommentErr) = Execute("", ["tocomment", path]);
+
+        Assert.True(tocommentExit == 0, $"{caseName}: tocomment failed: {tocommentErr.Length} chars of stderr");
+        string? copy = null;
+        var pty = new RecordingPty();
+        pty.Child = argv =>
+        {
+            copy = File.ReadAllText(argv[1]);
+            return "";
+        };
+
+        var (exit, stdout, err) = Execute("", ["run", "tool", "{{@" + file + "}}"], pty);
+
+        Assert.True(exit == 0, $"{caseName}: run failed: {err}");
+        Assert.True(copy is not null, $"{caseName}: the child never read the filled copy");
+        Assert.True(DecodeFilledLine(caseName, copy!) == stored, $"{caseName}: the filled copy decodes to another value than the stored one");
+        AssertNoValueIn(caseName, stored, "tocomment's stdout", tocommentOut);
+        AssertNoValueIn(caseName, stored, "tocomment's stderr", tocommentErr);
+        AssertNoValueIn(caseName, stored, "run's stdout", stdout);
+        AssertNoValueIn(caseName, stored, "run's stderr", err);
+    }
 
     // ── Task 2, invariant 4: export, then import into a fresh vault ────────────────────────────────────────────
 
