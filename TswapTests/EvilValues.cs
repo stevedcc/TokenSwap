@@ -175,22 +175,10 @@ public static class EvilValues
     public static readonly IReadOnlyDictionary<(string Case, string Invariant), (int Number, string Line)> KnownFindings =
         new Dictionary<(string, string), (int, string)>
         {
-            // Brief T47 Task 2f: Git Bash (MSYS2) on Windows, CI run 45021236991, both legs unless the line says so (#402).
-            // All of them ASCII cases (brief T48: the non-ASCII values run too, RunGitBashCases).
-            [("single-quote", GitBashExact)] = (3, Finding3),
-            [("owner-escaping-set", GitBashExact)] = (3, Finding3),
-            [("token-syntax", GitBashExact)] = (4, Finding4),
-            [("file-token-syntax", GitBashExact)] = (4, Finding4),
-            [("embedded-token-syntax", GitBashExact)] = (4, Finding4),
-            [("lf-inside", GitBashExact)] = (5, Finding5),
-            [("crlf-inside", GitBashExact)] = (5, Finding5),
-            [("cr-inside", GitBashExact)] = (5, Finding5),
+            // Brief T55 (#402): findings 3-5 (Git Bash, git-bash-exact) are retired: run quotes Git Bash's arguments by
+            // MSYS2's rules, and Run_GitBashScript_EvilValues_ArriveExactly_Windows runs those cases with its full
+            // assertion. None is open.
         };
-
-    // Brief T47 Task 2f (#402): public, so the skipped facts' Skip text is built from the same line.
-    public const string Finding3 = "Git Bash (MSYS2) parses run's unquoted argument by its own rules and removes the ' (#402)";
-    public const string Finding4 = "Git Bash (MSYS2) expands the braces of run's unquoted argument, so {{x}} arrives as x (#402)";
-    public const string Finding5 = "on the ConPTY leg a value holding a line break reaches Git Bash (MSYS2) cut at the break (#402)";
 
     /// <summary>
     /// The theory data of <paramref name="invariant"/>: the names of the cases <paramref name="where"/> selects (all
