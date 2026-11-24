@@ -11,9 +11,10 @@ public static class RedactProcessor
 {
     /// <summary>
     /// The label of a match of <paramref name="token"/> (<c>name</c> or <c>name:previous</c>) in the
-    /// variant <paramref name="kind"/>: the one definition of <c>redact</c>'s labels.
+    /// variant <paramref name="kind"/>: the one definition of <c>redact</c>'s labels. A form kind (brief T54)
+    /// has its base kind's label: a label never says which Unicode spelling was found.
     /// </summary>
-    internal static string Label(string token, VariantKind kind) => kind switch
+    internal static string Label(string token, VariantKind kind) => kind.BaseKind() switch
     {
         VariantKind.Base64 => $"[REDACTED: {token} (base64)]",
         VariantKind.Base64Url => $"[REDACTED: {token} (base64url)]",

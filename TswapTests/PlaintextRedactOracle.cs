@@ -8,8 +8,10 @@ namespace TswapTests;
 /// Brief T16-S2 task 5: a frozen copy of the plaintext redaction engine as it was before Stage 2
 /// (<c>SecretProcessor</c>, <c>RedactProcessor</c>, <c>ToCommentProcessor</c> at 65b41ed), the
 /// reference the fingerprint engine is compared with (<c>Engine_MatchesOracle_OnRandomCorpus</c>).
-/// Only the names changed; never edit its behaviour. Frozen at 65b41ed, plus T50b's whole-value rule and
-/// line-break pass (owner decision 2026-11-23): <see cref="ToCommenter"/> only; the redact path is unchanged.
+/// Only the names changed; never edit its behaviour. Frozen at 65b41ed, plus the owner-sanctioned rule changes of
+/// T50b (2026-11-23: the whole-value rule and line-break pass, <see cref="ToCommenter"/> only) and T54 (2026-11-24:
+/// a variant's label and plain test go by its base kind, <see cref="VariantKinds.BaseKind"/>, so an NFC or NFD
+/// spelling is treated as the kind it is a spelling of; values with only base kinds behave as before).
 /// </summary>
 internal static class PlaintextRedactOracle
 {
@@ -33,7 +35,7 @@ internal static class PlaintextRedactOracle
             {
                 foreach (var (kind, text) in SecretVariants.For(value))
                 {
-                    var type = kind switch
+                    var type = kind.BaseKind() switch
                     {
                         VariantKind.Base64 => Kind.Base64,
                         VariantKind.Base64Url => Kind.Base64Url,
