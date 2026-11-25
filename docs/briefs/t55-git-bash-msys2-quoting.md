@@ -140,6 +140,21 @@ Spike round 3 (`MsysSpike2Tests.Spike3_…` on the `t55-spike` branch; msys runt
       MiMo M4 stays as is.
     - GLM M5 (a native program beside `msys-2.0.dll`, e.g. `winpty-agent.exe`) goes to the follow-up issue, not this brief.
 
+## Code review round 2 amendment (MiMo I1; controller, 2026-11-25) — binds, wins over amendment 14's step 1
+
+16. **R1 judges every way MSYS2 can cut a word at a quote.** msys2-runtime's `strbrk` (environ.cc) splits `MSYS` at spaces
+    and tabs and also ends a token at the closing `"` of a quoted run, even mid-word. Amendment 14 removed every `"` first,
+    so `glob:"":x`, `glob:""x`, `glob="":x`, `"glob:"":x` and `noglob""x` turn globbing off and are not refused.
+    - **Rule** (replaces step 1, fail closed). Split `MSYS` at spaces and tabs. Split each word at every `"` into pieces.
+      Steps 2–4 of amendment 14 and its "changed" test then apply to every **contiguous run of pieces**, joined without
+      the quotes. For a word with pieces p1..pk, that is p1, p1p2, …, p2, p2p3, …, the whole word without its quotes.
+      R1 refuses when any run changes the option and an argument holds `\` or `"`.
+    - **Why every run:** every token `strbrk` can produce is such a run. The rule never has to model where `strbrk` cuts.
+    - **Unchanged rows:** every row of amendment 14 keeps its outcome, `"no"glob` included (still over-refused).
+    - **New rows, refused with `a\b`:** `glob:"":x`, `glob:""x`, `glob="":x`, `"glob:"":x`, `noglob""x`.
+    - **New rows, allowed:** `glob:"x"` and `"glob:ignorecase"`. Neither has a run that changes the option.
+    - Correct `ChangesGlobOption`'s comment to state this rule.
+
 ## What is wrong (evidence)
 
 `run` hands the child its argv through RedactingPty (`RunCommand.cs:303-311`, `CommandContext.cs:136`, package
