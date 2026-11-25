@@ -80,6 +80,66 @@ Task 1 is done; don't redo it. What the table showed, and what follows:
   holds a path (the brief's original rule; amendment I2's "no `.exe` for a path" is withdrawn), and the
   `C:/msys64/usr/bin/bash` row is `C:\msys64\usr\bin\bash.exe`, MSYS2 yes. Keep the `C:/msys64/usr/bin/bash.exe` row.
 
+## Code review round 1 amendments (GLM C1, I1, Minors; MiMo Minors; spike round 3, Windows CI run 45570077353; controller, 2026-11-25) — bind
+
+Spike round 3 (`MsysSpike2Tests.Spike3_…` on the `t55-spike` branch; msys runtime 3.6.10) measured both findings. The table is in
+`t55-spike3-table.txt` beside the worktrees; the rows below are what binds.
+
+13. **R4 (new, GLM C1): refuse an argument longer than 8,000 bytes in UTF-8.**
+    - **Measured.** A quoted (globified) word is cut without an error.
+      - UTF-8 locale (default, or `LANG=C.UTF-8`): 8,186 characters arrive whole, and an 8,187 to 30,000-character value
+        arrives as its first 8,186 characters (`é` × 8,200 too: the limit counts characters there).
+      - `LANG=C`: 8,191 *bytes*, and `é` × 4,100 arrives cut in the middle of a character.
+      - The same cut hit .NET's own quoting (column N) before T55 for any long value .NET quotes, i.e. one holding a space or
+        `"`; T55's always-quote widens it to every long value. Unquoted long values (N, `a` × 30,000) arrive whole.
+    - **Rule.** R4 counts UTF-8 bytes, so one bound is safe in every locale R2 lets through: refuse when any argument (argv
+      without the program, as R1–R3) is longer than **8,000 bytes in UTF-8**.
+      - Order: R1, R2, R3, R4. `{what}` as amendment 5.
+      - Text: `Refused: {what} is longer than 8,000 bytes, and Git Bash (MSYS2) cuts a longer argument without an error, so
+        tswap can't pass it exactly. Pass ` + `EnvironmentWay`.
+    - **Unit rows.**
+      - Allowed: `a` × 8,000 and `é` × 4,000 (8,000 bytes).
+      - Refused: `a` × 8,001 and `é` × 4,001 (8,002 bytes).
+      - A long program path is not an argument and is allowed.
+      - No message holds the value.
+    - **Windows E2E (also GLM M6: a refusal proven in the real binary).** An 8,200-character value through Git Bash on both
+      legs (`--pty` and not): exit 1, no `out.txt`, the output names the token and holds no value. Then the same value through
+      `run --env` arrives whole (`$#` 1, `out.txt` exact).
+    - **Docs and release note.** `docs/scripts.md`: the sentence that says the value arrives exactly gets "up to 8,000 bytes;
+      longer values are refused, pass them with `--env`". The release note says the same, and that longer values holding a
+      space or quote were already cut silently before.
+14. **R1 follows MSYS2's spellings (GLM I1), replacing amendment 3's word rule.**
+    - **Measured with `a\b` and `a"b`.**
+      - Globbing is off (both arrive altered) under: `noglob`, `-glob`, `glob=`, `glob:`, `noglob:`, `noglob=`, `"noglob"`,
+        `"glob:"`, `NOGLOB`, `Glob:`, `glob:""`, `  noglob`, `noglob  `, `winsymlinks:nativestrict noglob`.
+      - Globbing is on (both arrive exactly) under: unset, `glob`, `glob:normal`, `glob=normal`, `glob:ignorecase`,
+        `glob=ignorecase`, `glob:off`, `glob:no`, `glob:false`, `nonoglob`, `--glob`, `no-glob`, `"no"glob`.
+    - **Rule** (fail closed). Split `MSYS` at spaces and tabs. For each word:
+      1. remove every `"`;
+      2. compare case-insensitively;
+      3. strip any run of leading `no` and `-` prefixes, noting whether one was stripped;
+      4. what is left is `glob` with an optional value, after `:` or `=`.
+
+      The option is changed when a prefix was stripped, or the separator is there and the value is empty. R1 refuses when any
+      word changes it and an argument holds `\` or `"`. A non-empty value with no prefix (`glob:ignorecase`, `glob:off`)
+      leaves globbing on and is **no longer refused** (spike: exact).
+    - **Accepted over-refusals:** `nonoglob`, `--glob`, `no-glob` and `"no"glob` leave globbing on but are refused. That is
+      fail closed and needs no fix.
+    - **Unit rows:** every spelling above, each with its measured outcome (the over-refusals as refused), plus
+      `a b`-free values under `noglob` (null).
+15. **Minors.**
+    - Drop `tilde` from the break-it-once remark in `EndToEndTests.cs` and from Task 5's list (GLM M1, MiMo M1). It arrives
+      intact (`GLOB_NOCHECK` returns the pattern untouched), as spike round 2 showed.
+    - 402eb29's seam default (`MsysProbe` defaults to null; only `CliHost` sets `ForThisProcess`) is accepted. It supersedes
+      Task 4's text (GLM M2, MiMo). Leave `FleetMachine`'s explicit null (GLM M3).
+    - `Resolve_SearchesPathEntriesInOrder_SkippingEmptyOnes_AndRemovingQuotes` gets a fake `\tool.exe` (what `Join("", name)`
+      builds), so the test fails if empty entries are not skipped (GLM M4).
+    - "The folder tswap was started from" becomes "the folder the tswap executable is in" in `MsysTarget`'s summaries
+      (MiMo M2).
+    - The `Refusal_R1_*`, `R2_*`, `R3_*` and `RulesInOrder_*` tests pass the arguments only, without `./s.sh` (MiMo M3).
+      MiMo M4 stays as is.
+    - GLM M5 (a native program beside `msys-2.0.dll`, e.g. `winpty-agent.exe`) goes to the follow-up issue, not this brief.
+
 ## What is wrong (evidence)
 
 `run` hands the child its argv through RedactingPty (`RunCommand.cs:303-311`, `CommandContext.cs:136`, package
