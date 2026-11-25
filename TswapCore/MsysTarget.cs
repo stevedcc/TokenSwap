@@ -1,3 +1,5 @@
+using System.Text;
+
 namespace TswapCore;
 
 /// <summary>
@@ -104,6 +106,9 @@ public static class MsysTarget
     public static string QuoteArguments(IReadOnlyList<string> arguments) =>
         string.Join(' ', arguments.Select(a => "\"" + a.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\""));
 
+    /// <summary>Brief T55 amendment 13 (R4): the longest argument, in UTF-8 bytes, an MSYS2 child gets.</summary>
+    public const int MaxArgumentBytes = 8000;
+
     private const string EnvironmentWay = "the secret in the environment ('run --env PW={{name}} -- <bash.exe> ./script.sh', read as \"$PW\").";
 
     /// <summary>
@@ -113,17 +118,19 @@ public static class MsysTarget
     /// option (a word <c>noglob</c> or starting with <c>glob:</c>, ignoring case) and an argument holds <c>\</c> or
     /// <c>"</c>; R2, the locale (the first non-empty of <c>LC_ALL</c>, <c>LC_CTYPE</c>, <c>LANG</c>) is set and is not
     /// <c>C</c>, <c>POSIX</c> or a UTF-8 charset, and an argument holds a character above U+007F; R3, an argument holds a
-    /// character from U+F000 to U+F0FF (older runtimes turn them into ASCII). The text names the tokens whose
-    /// substituted text holds what the rule found (<paramref name="tokens"/>, whose <c>ArgIndex</c> counts the program
-    /// as 0, so a token in the program is never named), in argv order and each once, and never a value, a variable's
-    /// value or the character.
+    /// character from U+F000 to U+F0FF (older runtimes turn them into ASCII); R4, an argument is longer than
+    /// <see cref="MaxArgumentBytes"/> bytes in UTF-8 (MSYS2 cuts a longer quoted word without an error). The text names
+    /// the tokens whose substituted text holds what the rule found, for R4 the tokens in a too-long argument
+    /// (<paramref name="tokens"/>, whose <c>ArgIndex</c> counts the program as 0, so a token in the program is never
+    /// named), in argv order and each once, and never a value, a variable's value or the character.
     /// </summary>
     public static string? Refusal(IReadOnlyList<string> arguments, IReadOnlyList<Validation.SubstitutedToken> tokens,
         Func<string, string?> childVariable)
     {
-        string What(Func<char, bool> found)
+        string What(Func<char, bool> found) => WhatOf(t => t.Value.Any(found));
+        string WhatOf(Func<Validation.SubstitutedToken, bool> found)
         {
-            var named = tokens.Where(t => t.ArgIndex > 0 && t.Value.Any(found))
+            var named = tokens.Where(t => t.ArgIndex > 0 && found(t))
                 .OrderBy(t => t.ArgIndex)
                 .Select(t => t.IsFile ? $"'{{{{@{Validation.Printable(t.Name)}}}}}'" : $"'{t.Name}'")
                 .Distinct(StringComparer.Ordinal)
@@ -148,6 +155,14 @@ public static class MsysTarget
         if (Any(PrivateUse))
             return $"Refused: {What(PrivateUse)} holds a character from U+F000 to U+F0FF, which older MSYS2 runtimes turn into " +
                    "ASCII such as a quote or a space before reading the command line. Pass " + EnvironmentWay;
+
+        // Brief T55 amendment 13 (spike round 3): MSYS2 cuts a quoted word after 8,186 characters (UTF-8 locales) or
+        // 8,191 bytes (LANG=C) without an error; 8,000 UTF-8 bytes is under both in every locale R2 lets through.
+        static bool TooLong(string argument) => Encoding.UTF8.GetByteCount(argument) > MaxArgumentBytes;
+        if (arguments.Any(TooLong))
+            return $"Refused: {WhatOf(t => t.ArgIndex - 1 < arguments.Count && TooLong(arguments[t.ArgIndex - 1]))} is longer " +
+                   "than 8,000 bytes, and Git Bash (MSYS2) cuts a longer argument without an error, so tswap can't pass it " +
+                   "exactly. Pass " + EnvironmentWay;
 
         return null;
     }

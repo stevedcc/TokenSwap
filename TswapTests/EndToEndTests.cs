@@ -2318,6 +2318,79 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     }
 
     /// <summary>
+    /// Brief T55 amendment 13 (R4, #402): MSYS2 cuts a quoted argument longer than 8,186 characters (8,191 bytes under
+    /// <c>LANG=C</c>) without an error (spike round 3), so <c>run</c> refuses an argument longer than 8,000 bytes in UTF-8
+    /// for an MSYS2 child. An 8,200-character value as <c>tswap run &lt;Git Bash&gt; ./capture.sh {{name}}</c>, on both
+    /// legs: exit 1, no <c>out.txt</c> (the script never ran), the output names the token and holds no part of the
+    /// value. The same value through <c>run --env PW={{name}} -- &lt;Git Bash&gt; ./capture-env.sh</c>, on both legs,
+    /// arrives whole: <c>capture-env.sh</c> makes it its one positional argument (<c>n.txt</c> holds <c>1</c>) and
+    /// writes it to <c>out.txt</c>, which holds the value exactly.
+    /// </summary>
+    /// <remarks>
+    /// Break-it-once (the controller's, on Windows CI): in <c>MsysTarget.Refusal</c> change R4's <c>if</c> to
+    /// <c>if (false &amp;&amp; ...)</c>; both argument legs then fail with <c>out.txt</c> written (the first 8,186
+    /// characters), and the <c>--env</c> legs still pass.
+    /// </remarks>
+    [WindowsFact("Git Bash (MSYS2) started by a Windows program exists only on Windows")]
+    public void Run_GitBashScript_ValueOver8000Bytes_IsRefused_AndArrivesWholeThroughEnv_Windows()
+    {
+        var (work, _, _) = ScriptWork();
+        File.WriteAllText(Path.Combine(work.FullName, "capture.sh"), "printf '%s' \"$#\" > n.txt\nprintf '%s' \"$1\" > out.txt\n");
+        File.WriteAllText(Path.Combine(work.FullName, "capture-env.sh"),
+            "set -- \"$PW\"\nprintf '%s' \"$#\" > n.txt\nprintf '%s' \"$1\" > out.txt\n");
+        var outFile = Path.Combine(work.FullName, "out.txt");
+        var countFile = Path.Combine(work.FullName, "n.txt");
+        const string chunk = "k7Qz-Mx9w-";
+        var value = string.Concat(Enumerable.Repeat(chunk, 820));
+        Assert.Equal(8200, value.Length);
+
+        var (initExit, _, initErr) = RunTswap("init", "--yubikey", "--no-recovery");
+        Assert.True(initExit == 0, $"init failed: {initErr}");
+        const string name = "lv1";
+        Assert.True(EvilValues.NameIsSafeFor(name, value), $"the name {name} holds part of the value");
+        var (ingestExit, _, ingestErr) = RunTswapWithStdin(value, "ingest", name);
+        Assert.True(ingestExit == 0, $"ingest failed: {ingestErr}");
+        var bash = FindGitBash();
+        Assert.True(bash is not null, "no Git Bash (a bash.exe under a \\Git\\ folder) on PATH: it is on every GitHub Windows runner");
+
+        List<string> failures = [];
+        foreach (var leg in WindowsLegs("T55 long value"))
+        {
+            File.Delete(outFile);
+            File.Delete(countFile);
+            var (exit, output) = RunWindowsLeg(work, leg, name, bash!, "./capture.sh", "{{" + name + "}}");
+            var where = $"[{leg} leg, argument]";
+            if (exit != 1)
+                failures.Add($"{where}: exit {exit}, expected 1 (refused)");
+            if (File.Exists(outFile))
+                failures.Add($"{where}: out.txt written ({File.ReadAllText(outFile, Encoding.UTF8).Length} chars): the script ran");
+            if (!output.Contains($"Refused: the argument(s) from '{name}' is longer than 8,000 bytes", StringComparison.Ordinal))
+                failures.Add($"{where}: no R4 refusal naming '{name}' in the output");
+            if (output.Contains(chunk, StringComparison.Ordinal))
+                failures.Add($"{where}: the output holds part of the value");
+            _output.WriteLine($"T55 long value: {where}: exit {exit}; out.txt {(File.Exists(outFile) ? "WRITTEN" : "absent")}");
+
+            File.Delete(outFile);
+            File.Delete(countFile);
+            var (envExit, envOutput) = RunWindowsLeg(work, leg, name, "--env", "PW={{" + name + "}}", "--", bash!, "./capture-env.sh");
+            where = $"[{leg} leg, --env]";
+            if (envExit != 0)
+                failures.Add($"{where}: exit {envExit}, expected 0");
+            if (!File.Exists(countFile) || File.ReadAllText(countFile) != "1")
+                failures.Add($"{where}: n.txt is not 1 ({(File.Exists(countFile) ? File.ReadAllText(countFile) : "absent")})");
+            if (!File.Exists(outFile))
+                failures.Add($"{where}: no out.txt (exit {envExit})");
+            else if (File.ReadAllText(outFile, Encoding.UTF8) is var captured && captured != value)
+                failures.Add($"{where}: ALTERED: {captured.Length} chars arrived, expected {value.Length}");
+            if (envOutput.Contains(chunk, StringComparison.Ordinal))
+                failures.Add($"{where}: the output holds part of the value");
+            _output.WriteLine($"T55 long value: {where}: exit {envExit}");
+        }
+
+        Assert.True(failures.Count == 0, $"{failures.Count} failure(s):\n" + string.Join("\n", failures));
+    }
+
+    /// <summary>
     /// Brief T47 Task 2e: the values built for Git Bash (a Unix-looking path, a glob star, a glob question mark), and brief
     /// T55 Task 5's (#402).
     /// </summary>

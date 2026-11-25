@@ -108,6 +108,37 @@ public sealed class RunMsysTargetTests : IDisposable
     }
 
     [Fact]
+    public void AValueLongerThan8000Bytes_Refuses_TheChildNeverStarts()
+    {
+        var value = string.Concat(Enumerable.Repeat("k7Qz-long-", 820)); // 8,200 bytes
+        Secret("pw", value);
+
+        var (exit, output, err) = Run(OSPlatform.Windows, Probe(), "bash", "./capture.sh", "{{pw}}");
+
+        Assert.True(exit == 1, $"exit {exit}: {err}");
+        Assert.Equal(0, _pty.Starts);
+        Assert.Contains("Refused: the argument(s) from 'pw' is longer than 8,000 bytes", err);
+        Assert.DoesNotContain("k7Qz", err + output);
+    }
+
+    [Fact]
+    public void ALongProgramPath_IsNotAnArgument_AndStarts()
+    {
+        // Brief T55 amendment 13: R4 measures the arguments only; the program is a path, not a value.
+        var folder = @"C:\" + string.Join('\\', Enumerable.Repeat(new string('d', 200), 41)); // over 8,000 characters
+        var bash = folder + @"\usr\bin\bash.exe";
+        var probe = MsysTargetTests.FakeProbe([bash, folder + @"\usr\bin\msys-2.0.dll"]);
+        Secret("pw", Value);
+
+        var (exit, _, err) = Run(OSPlatform.Windows, probe, bash, "./capture.sh", "{{pw}}");
+
+        Assert.True(exit == 0, err);
+        Assert.Equal(1, _pty.Starts);
+        Assert.Equal([bash], _pty.Argv!);
+        Assert.Equal("\"./capture.sh\" \"a\\\\b\\\"c\"", _pty.Options!.WindowsArguments);
+    }
+
+    [Fact]
     public void AValueInTheEnvironment_GitBashGetsOnlyTheScript()
     {
         Secret("pw", Value);

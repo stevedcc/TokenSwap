@@ -47,9 +47,9 @@ Tested by `EndToEndTests.Run_UnixShellScripts_EvilValues_ArriveExactly`.
 **Git Bash on Windows.** Git Bash's `bash.exe` is an MSYS2 program, and MSYS2 parses the command line a Windows
 program (such as tswap) starts it with by its own rules, not Microsoft's. On Windows, `run` recognises an MSYS2 program
 as the program it starts (one with `msys-2.0.dll` beside it, or Git's `bin\bash.exe` or `bin\sh.exe` launcher), starts
-it by that path and quotes each argument by MSYS2's rules, so the script's `"$1"` holds the value exactly: quotes,
-braces, globs, backslashes and line breaks no longer change it
-([#402](https://github.com/stevedcc/TokenSwap/issues/402)). Tested by
+it by that path and quotes each argument by MSYS2's rules, so the script's `"$1"` holds the value exactly, up to 8,000
+bytes; longer values are refused, pass them with `--env`. Quotes, braces, globs, backslashes and line breaks no longer
+change it ([#402](https://github.com/stevedcc/TokenSwap/issues/402)). Tested by
 `EndToEndTests.Run_GitBashScript_EvilValues_ArriveExactly_Windows`. A bare `bash` can still start WSL's `bash.exe` in
 System32, which `run` leaves alone, so name Git Bash by its path: `tswap run "C:\Program Files\Git\bin\bash.exe"
 ./deploy.sh {{db-pw}}`. `run` refuses, before the script starts, when `MSYS` changes the glob option (`noglob`,

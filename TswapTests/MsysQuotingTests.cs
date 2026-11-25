@@ -185,6 +185,67 @@ public class MsysQuotingTests
         Assert.Contains(R3Middle, Refuse(["\uF022"], new() { ["MSYS"] = "noglob" }));
     }
 
+    private const string R4Middle = "is longer than 8,000 bytes";
+
+    public static TheoryData<string, bool> LengthRows => new()
+    {
+        // Brief T55 amendment 13: R4 counts UTF-8 bytes (spike round 3: a longer quoted word is cut without an error).
+        { new string('a', 8000), false },
+        { new string('\u00E9', 4000), false }, // 8,000 bytes
+        { new string('a', 8001), true },
+        { new string('\u00E9', 4001), true }, // 8,002 bytes
+    };
+
+    [Theory]
+    [MemberData(nameof(LengthRows))]
+    public void Refusal_R4_AnArgumentLongerThan8000BytesInUtf8(string argument, bool refused)
+    {
+        var text = Refuse([argument]);
+
+        if (refused)
+            Assert.Equal(
+                "Refused: an argument is longer than 8,000 bytes, and Git Bash (MSYS2) cuts a longer argument without an error, so " +
+                "tswap can't pass it exactly. Pass the secret in the environment " +
+                "('run --env PW={{name}} -- <bash.exe> ./script.sh', read as \"$PW\").",
+                text);
+        else
+            Assert.Null(text);
+    }
+
+    [Fact]
+    public void Refusal_RulesInOrder_R4AfterR1R2AndR3()
+    {
+        Dictionary<string, string> all = new() { ["MSYS"] = "noglob", ["LANG"] = "de_DE" };
+        var tooLong = new string('a', 8001);
+
+        Assert.StartsWith(R1Start, Refuse(["a\\\u00E9\uF022" + tooLong], all));
+        Assert.StartsWith(R2Start, Refuse(["\u00E9\uF022" + tooLong], all));
+        Assert.Contains(R3Middle, Refuse(["\uF022" + tooLong], new() { ["MSYS"] = "noglob" }));
+        Assert.Contains(R4Middle, Refuse([tooLong], all));
+    }
+
+    [Fact]
+    public void Refusal_R4_NamesTheTokensInTheLongArgument_AndNeverHoldsTheValue()
+    {
+        var value = string.Concat(Enumerable.Repeat("k7Qz-long-", 801)); // 8,010 bytes
+        Validation.SubstitutedToken[] tokens = [new("short", 1, "abc"), new("pw", 2, value)];
+
+        var text = Refuse(["abc", value], tokens: tokens);
+
+        Assert.NotNull(text);
+        Assert.StartsWith("Refused: the argument(s) from 'pw' " + R4Middle, text);
+        Assert.DoesNotContain("k7Qz", text);
+    }
+
+    [Fact]
+    public void Refusal_R4_TheProgramIsNotAnArgument()
+    {
+        // Amendment 6: the arguments exclude the program, so a long program (a token at ArgIndex 0) is never measured.
+        Validation.SubstitutedToken[] tokens = [new("prog", 0, new string('p', 9000))];
+
+        Assert.Null(Refuse(["abc"], tokens: tokens));
+    }
+
     [Fact]
     public void Refusal_TheProgramIsNotAnArgument_NorAProgramToken()
     {
