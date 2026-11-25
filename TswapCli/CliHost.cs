@@ -97,6 +97,9 @@ internal static class CliHost
                 Fido2 = fido2,
                 // Test mode has no FIDO2 service, so it needs no terminal either (a test's own may never answer).
                 Terminal = testKey is null ? ControllingTerminal.Open : null,
+                // Brief T55 (#402): run's MSYS2 detection reads this machine (null off Windows), also in test mode: the
+                // end-to-end Git Bash tests start the real binary.
+                MsysProbe = MsysTarget.Probe.ForThisProcess,
             };
             return CliRunner.Run(ctx, env.CommandArgs);
         }

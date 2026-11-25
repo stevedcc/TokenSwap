@@ -2249,9 +2249,10 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     /// <summary>
     /// Brief T47 Task 2e (owner: "And bash on Windows"): <c>tswap run &lt;Git Bash&gt; ./capture.sh {{name}}</c>, where
     /// <c>capture.sh</c> writes <c>"$1"</c> to <c>out.txt</c> exactly (<c>printf '%s' "$1"</c>), on both legs (redirected
-    /// and ConPTY, as T46's batch test), for every corpus value (T46's cases and batch cases) and three built here: an
-    /// absolute Unix-looking path, a glob star and a glob question mark (with <c>abcXdef-value-2</c> in the work folder,
-    /// so a glob has something to match). Invariant (git-bash-exact): <c>out.txt</c> holds exactly the stored value, and
+    /// and ConPTY, as T46's batch test), for every corpus value (T46's cases and batch cases) and the extras built here
+    /// (<see cref="GitBashExtras"/>: an absolute Unix-looking path, globs, and since brief T55 backslashes, drive and UNC
+    /// paths, an @file, a brace list and a tilde; <c>abcXdef-value-2</c> and <c>a-value</c> in the work folder give a
+    /// glob something to match). Brief T55 (#402): <c>run</c> quotes Git Bash's arguments by MSYS2's rules. Invariant (git-bash-exact): <c>out.txt</c> holds exactly the stored value, and
     /// <c>marker.txt</c> never appears. MSYS2 converts path-like arguments when a non-MSYS program starts it, and may
     /// glob: an alteration is a finding (T46's mechanism, <see cref="EvilValues.KnownFindings"/>, pairs left out here),
     /// never a reason to weaken this test; the failure lists every altered case with its leg, for the controller's ruling.
@@ -2265,23 +2266,41 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     /// <code>
     /// File.WriteAllText(Path.Combine(work.FullName, "capture.sh"), "eval \"$1\"\nprintf '%s' \"$1\" &gt; out.txt\n");
     /// </code>
+    /// <para>Break-it-once of brief T55 Task 5 (the controller's, on Windows CI): revert T55 Task 4's whole commit, the
+    /// RedactingPty <c>[1.3.0]</c> pin included; then single-quote, owner-escaping-set, token-syntax, file-token-syntax,
+    /// embedded-token-syntax, glob-star, at-file, brace-list, glob-class, and lf-inside, crlf-inside and cr-inside
+    /// (ConPTY leg) are listed as altered, and the backslash extras are not. (tilde arrives intact either way:
+    /// <c>GLOB_NOCHECK</c> returns the unmatched pattern untouched, spike round 2.)</para>
     /// </remarks>
     [WindowsFact("Git Bash (MSYS2) started by a Windows program exists only on Windows")]
     public void Run_GitBashScript_EvilValues_ArriveExactly_Windows()
     {
-        // Task 2f: the extras are local to this test, outside the corpus KnownFindings checks, so glob-star (altered
-        // on CI, #402) is left out here with a line, not registered.
-        _output.WriteLine("T47 git bash: glob-star is left out (Git Bash expands the glob, #402; T47 Task 2f)");
-        var cases = EvilValues.Cases.Concat(EvilValues.BatchCases).Concat(GitBashExtras.Where(c => c.Name != "glob-star"))
+        var cases = EvilValues.Cases.Concat(EvilValues.BatchCases).Concat(GitBashExtras)
             .Where(c => !EvilValues.KnownFindings.ContainsKey((c.Name, EvilValues.GitBashExact)));
-        var failures = RunGitBashCases(cases, viaEnv: false);
+        // Brief T55 amendment 9: tswap (and so Git Bash) starts without LC_ALL, LC_CTYPE and LANG, so a runner's locale
+        // can't make run refuse the non-ASCII cases (R2). Set on this process for the test (both legs inherit it, and
+        // the suite runs its tests one at a time), then put back.
+        string[] locale = ["LC_ALL", "LC_CTYPE", "LANG"];
+        var saved = locale.ToDictionary(name => name, Environment.GetEnvironmentVariable);
+        foreach (var name in locale)
+            Environment.SetEnvironmentVariable(name, null);
+        List<string> failures;
+        try
+        {
+            failures = RunGitBashCases(cases, viaEnv: false);
+        }
+        finally
+        {
+            foreach (var (name, value) in saved)
+                Environment.SetEnvironmentVariable(name, value);
+        }
         Assert.True(failures.Count == 0, $"{failures.Count} finding(s):\n" + string.Join("\n", failures));
     }
 
     /// <summary>
     /// Brief T47 Task 2f: the guide's and the prompt's way with Git Bash, <c>tswap run --env PW={{name}} -- &lt;Git
     /// Bash&gt; ./capture-env.sh</c>, where <c>capture-env.sh</c> writes <c>"$PW"</c> to <c>out.txt</c> exactly
-    /// (<c>printf '%s' "$PW"</c>), on both legs, for every corpus value, the batch cases and the three extras (#402's spike:
+    /// (<c>printf '%s' "$PW"</c>), on both legs, for every corpus value, the batch cases and the extras (#402's spike:
     /// all 73 values intact). Invariant: <c>out.txt</c> holds exactly the stored value, and <c>marker.txt</c> never
     /// appears. Left out, with a line (<see cref="RunGitBashCases"/>): max-length.
     /// </summary>
@@ -2299,12 +2318,99 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         Assert.True(failures.Count == 0, $"{failures.Count} failure(s):\n" + string.Join("\n", failures));
     }
 
-    /// <summary>Brief T47 Task 2e: the three values built for Git Bash (a Unix-looking path, a glob star, a glob question mark).</summary>
+    /// <summary>
+    /// Brief T55 amendment 13 (R4, #402): MSYS2 cuts a quoted argument longer than 8,186 characters (8,191 bytes under
+    /// <c>LANG=C</c>) without an error (spike round 3), so <c>run</c> refuses an argument longer than 8,000 bytes in UTF-8
+    /// for an MSYS2 child. An 8,200-character value as <c>tswap run &lt;Git Bash&gt; ./capture.sh {{name}}</c>, on both
+    /// legs: exit 1, no <c>out.txt</c> (the script never ran), the output names the token and holds no part of the
+    /// value. The same value through <c>run --env PW={{name}} -- &lt;Git Bash&gt; ./capture-env.sh</c>, on both legs,
+    /// arrives whole: <c>capture-env.sh</c> makes it its one positional argument (<c>n.txt</c> holds <c>1</c>) and
+    /// writes it to <c>out.txt</c>, which holds the value exactly.
+    /// </summary>
+    /// <remarks>
+    /// Break-it-once (the controller's, on Windows CI): in <c>MsysTarget.Refusal</c> change R4's <c>if</c> to
+    /// <c>if (false &amp;&amp; ...)</c>; both argument legs then fail with <c>out.txt</c> written (the first 8,186
+    /// characters), and the <c>--env</c> legs still pass.
+    /// </remarks>
+    [WindowsFact("Git Bash (MSYS2) started by a Windows program exists only on Windows")]
+    public void Run_GitBashScript_ValueOver8000Bytes_IsRefused_AndArrivesWholeThroughEnv_Windows()
+    {
+        var (work, _, _) = ScriptWork();
+        File.WriteAllText(Path.Combine(work.FullName, "capture.sh"), "printf '%s' \"$#\" > n.txt\nprintf '%s' \"$1\" > out.txt\n");
+        File.WriteAllText(Path.Combine(work.FullName, "capture-env.sh"),
+            "set -- \"$PW\"\nprintf '%s' \"$#\" > n.txt\nprintf '%s' \"$1\" > out.txt\n");
+        var outFile = Path.Combine(work.FullName, "out.txt");
+        var countFile = Path.Combine(work.FullName, "n.txt");
+        const string chunk = "k7Qz-Mx9w-";
+        var value = string.Concat(Enumerable.Repeat(chunk, 820));
+        Assert.Equal(8200, value.Length);
+
+        var (initExit, _, initErr) = RunTswap("init", "--yubikey", "--no-recovery");
+        Assert.True(initExit == 0, $"init failed: {initErr}");
+        const string name = "lv1";
+        Assert.True(EvilValues.NameIsSafeFor(name, value), $"the name {name} holds part of the value");
+        var (ingestExit, _, ingestErr) = RunTswapWithStdin(value, "ingest", name);
+        Assert.True(ingestExit == 0, $"ingest failed: {ingestErr}");
+        var bash = FindGitBash();
+        Assert.True(bash is not null, "no Git Bash (a bash.exe under a \\Git\\ folder) on PATH: it is on every GitHub Windows runner");
+
+        List<string> failures = [];
+        foreach (var leg in WindowsLegs("T55 long value"))
+        {
+            File.Delete(outFile);
+            File.Delete(countFile);
+            var (exit, output) = RunWindowsLeg(work, leg, name, bash!, "./capture.sh", "{{" + name + "}}");
+            var where = $"[{leg} leg, argument]";
+            if (exit != 1)
+                failures.Add($"{where}: exit {exit}, expected 1 (refused)");
+            if (File.Exists(outFile))
+                failures.Add($"{where}: out.txt written ({File.ReadAllText(outFile, Encoding.UTF8).Length} chars): the script ran");
+            if (!output.Contains($"Refused: the argument(s) from '{name}' is longer than 8,000 bytes", StringComparison.Ordinal))
+                failures.Add($"{where}: no R4 refusal naming '{name}' in the output");
+            if (output.Contains(chunk, StringComparison.Ordinal))
+                failures.Add($"{where}: the output holds part of the value");
+            _output.WriteLine($"T55 long value: {where}: exit {exit}; out.txt {(File.Exists(outFile) ? "WRITTEN" : "absent")}");
+
+            File.Delete(outFile);
+            File.Delete(countFile);
+            var (envExit, envOutput) = RunWindowsLeg(work, leg, name, "--env", "PW={{" + name + "}}", "--", bash!, "./capture-env.sh");
+            where = $"[{leg} leg, --env]";
+            if (envExit != 0)
+                failures.Add($"{where}: exit {envExit}, expected 0");
+            if (!File.Exists(countFile) || File.ReadAllText(countFile) != "1")
+                failures.Add($"{where}: n.txt is not 1 ({(File.Exists(countFile) ? File.ReadAllText(countFile) : "absent")})");
+            if (!File.Exists(outFile))
+                failures.Add($"{where}: no out.txt (exit {envExit})");
+            else if (File.ReadAllText(outFile, Encoding.UTF8) is var captured && captured != value)
+                failures.Add($"{where}: ALTERED: {captured.Length} chars arrived, expected {value.Length}");
+            if (envOutput.Contains(chunk, StringComparison.Ordinal))
+                failures.Add($"{where}: the output holds part of the value");
+            _output.WriteLine($"T55 long value: {where}: exit {envExit}");
+        }
+
+        Assert.True(failures.Count == 0, $"{failures.Count} failure(s):\n" + string.Join("\n", failures));
+    }
+
+    /// <summary>
+    /// Brief T47 Task 2e: the values built for Git Bash (a Unix-looking path, a glob star, a glob question mark), and brief
+    /// T55 Task 5's (#402).
+    /// </summary>
     private static readonly EvilValues.Case[] GitBashExtras =
     [
         new("unix-absolute-path", "/abc/def-value-1", "git-bash"),
         new("glob-star", "abc*def-value-2", "git-bash"),
         new("glob-question-mark", "abc?def-value-3", "git-bash"),
+        // Brief T55 Task 5 (#402): what MSYS2 reads specially in an argument: backslashes, a quote after one, drive and
+        // UNC paths, an @file, a brace list, a glob class (a-value in the work folder matches it) and a tilde.
+        new("double-backslash", "abc\\\\def-value", "git-bash"),
+        new("trailing-backslash", "abc-value\\", "git-bash"),
+        new("backslash-quote", "abc\\\"def-value", "git-bash"),
+        new("drive-path-backslash", "C:\\abc\\def-value", "git-bash"),
+        new("unc-path", "\\\\srv\\share\\def-value", "git-bash"),
+        new("at-file", "@abcXdef-value-2", "git-bash"),
+        new("brace-list", "{a,b}-value", "git-bash"),
+        new("glob-class", "[ab]-value", "git-bash"),
+        new("tilde", "~/x-value", "git-bash"),
     ];
 
     /// <summary>
@@ -2321,6 +2427,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         var script = viaEnv ? "capture-env.sh" : "capture.sh";
         File.WriteAllText(Path.Combine(work.FullName, script), viaEnv ? "printf '%s' \"$PW\" > out.txt\n" : "printf '%s' \"$1\" > out.txt\n");
         File.WriteAllText(Path.Combine(work.FullName, "abcXdef-value-2"), "");
+        File.WriteAllText(Path.Combine(work.FullName, "a-value"), "");
         var outFile = Path.Combine(work.FullName, "out.txt");
 
         var (initExit, _, initErr) = RunTswap("init", "--yubikey", "--no-recovery");
@@ -2361,42 +2468,6 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         removeMarkers();
         return failures;
     }
-
-    /// <summary>
-    /// Brief T47 Task 2f: a git-bash-exact finding's full assertion, the one case through <see cref="RunGitBashCases"/>
-    /// as an argument. Its facts are plain skipped <c>[Fact]</c>s (T46's protocol); un-skipping one means making it a
-    /// <c>[WindowsFact]</c> as well (#402).
-    /// </summary>
-    private void AssertGitBashArrivesExactly(string caseName)
-    {
-        var failures = RunGitBashCases([EvilValues.Get(caseName)], viaEnv: false);
-        Assert.True(failures.Count == 0, string.Join("\n", failures));
-    }
-
-    // Brief T47 Task 2f: the git-bash-exact findings of CI run 45021236991 (#402), one fact per (case, invariant).
-    [Fact(Skip = "T46 finding 3: " + EvilValues.Finding3)]
-    public void Finding3_SingleQuote_GitBashExact() => AssertGitBashArrivesExactly("single-quote");
-
-    [Fact(Skip = "T46 finding 3: " + EvilValues.Finding3)]
-    public void Finding3_OwnerEscapingSet_GitBashExact() => AssertGitBashArrivesExactly("owner-escaping-set");
-
-    [Fact(Skip = "T46 finding 4: " + EvilValues.Finding4)]
-    public void Finding4_TokenSyntax_GitBashExact() => AssertGitBashArrivesExactly("token-syntax");
-
-    [Fact(Skip = "T46 finding 4: " + EvilValues.Finding4)]
-    public void Finding4_FileTokenSyntax_GitBashExact() => AssertGitBashArrivesExactly("file-token-syntax");
-
-    [Fact(Skip = "T46 finding 4: " + EvilValues.Finding4)]
-    public void Finding4_EmbeddedTokenSyntax_GitBashExact() => AssertGitBashArrivesExactly("embedded-token-syntax");
-
-    [Fact(Skip = "T46 finding 5: " + EvilValues.Finding5)]
-    public void Finding5_LfInside_GitBashExact() => AssertGitBashArrivesExactly("lf-inside");
-
-    [Fact(Skip = "T46 finding 5: " + EvilValues.Finding5)]
-    public void Finding5_CrlfInside_GitBashExact() => AssertGitBashArrivesExactly("crlf-inside");
-
-    [Fact(Skip = "T46 finding 5: " + EvilValues.Finding5)]
-    public void Finding5_CrInside_GitBashExact() => AssertGitBashArrivesExactly("cr-inside");
 
     /// <summary>
     /// Brief T47 Task 2d, the calling shell (A11): a script that itself runs <c>tswap -v run true {{pw}}</c>, the token
