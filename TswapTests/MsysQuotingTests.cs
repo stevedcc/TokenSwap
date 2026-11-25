@@ -121,7 +121,7 @@ public class MsysQuotingTests
     [InlineData("MSYS", "winsymlinks:native  NoGlob", "a\\b", true)]
     public void Refusal_R1_TheGlobOptionChanged_AndABackslashOrQuote(string name, string value, string argument, bool refused)
     {
-        var text = Refuse(["./s.sh", argument], new() { [name] = value });
+        var text = Refuse([argument], new() { [name] = value });
 
         if (refused)
             Assert.StartsWith(R1Start, text);
@@ -207,7 +207,7 @@ public class MsysQuotingTests
     [MemberData(nameof(LocaleRows))]
     public void Refusal_R2_ALocaleThatIsNotUtf8_AndANonAsciiArgument(Dictionary<string, string> variables, string argument, bool refused)
     {
-        var text = Refuse(["./s.sh", argument], variables);
+        var text = Refuse([argument], variables);
 
         if (refused)
             Assert.StartsWith(R2Start, text);
@@ -223,7 +223,7 @@ public class MsysQuotingTests
     [InlineData("x\uF100y", false)]
     public void Refusal_R3_APrivateUseCharacterOlderRuntimesTurnIntoAscii(string argument, bool refused)
     {
-        var text = Refuse(["./s.sh", argument]);
+        var text = Refuse([argument]);
 
         if (refused)
             Assert.Equal(

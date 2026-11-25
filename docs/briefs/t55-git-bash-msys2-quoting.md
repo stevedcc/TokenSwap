@@ -416,7 +416,7 @@ match). The `--env` test runs the new extras too. No assertion changes.
 Break-it-once (the controller's, on Windows CI): revert Task 4's whole commit, the `[1.3.0]` pin included (with 1.3.0
 kept, its whitespace quoting alone already passes the line-break values). Then `single-quote`, `owner-escaping-set`,
 `token-syntax`, `file-token-syntax`, `embedded-token-syntax`, `glob-star`, `at-file`, `brace-list`, `glob-class`,
-`tilde`, and `lf-inside`, `crlf-inside` and `cr-inside` (ConPTY leg) must be listed as altered. `double-backslash`
+and `lf-inside`, `crlf-inside` and `cr-inside` (ConPTY leg) must be listed as altered. `double-backslash`
 and the other backslash extras are not: they prove M's quoting does not break values that already pass.
 
 ## Task 6: docs

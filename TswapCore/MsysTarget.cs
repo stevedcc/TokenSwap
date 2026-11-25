@@ -12,8 +12,9 @@ namespace TswapCore;
 public static class MsysTarget
 {
     /// <summary>
-    /// What <see cref="Resolve"/> reads of the machine: the folder tswap was started from, the current folder, the
-    /// system and Windows folders, the environment (tswap's own, as CreateProcess searches with it) and the file system.
+    /// What <see cref="Resolve"/> reads of the machine: the folder the tswap executable is in, the current folder,
+    /// the system and Windows folders, the environment (tswap's own, as CreateProcess searches with it) and the file
+    /// system.
     /// </summary>
     public sealed record Probe(string? ExeDirectory, string CurrentDirectory, string SystemDirectory, string WindowsDirectory,
         Func<string, string?> GetVariable, Func<string, bool> FileExists)
@@ -32,8 +33,8 @@ public static class MsysTarget
     /// <c>.</c>, also for a name holding a path (brief T55 spike round 2: Windows started <c>&lt;folder&gt;\t55probe2</c>
     /// as <c>t55probe2.exe</c>). A name holding <c>\</c> or <c>:</c> is not searched: one starting with <c>\</c> or a
     /// drive letter and <c>:</c> is taken as is, any other is joined to the current folder. Otherwise the first of: the
-    /// folder tswap was started from, the current folder (unless <c>NoDefaultCurrentDirectoryInExePath</c> is set),
-    /// the system folder, <c>&lt;Windows&gt;\System</c>, the Windows folder, then each <c>PATH</c> entry.
+    /// folder the tswap executable is in, the current folder (unless <c>NoDefaultCurrentDirectoryInExePath</c> is
+    /// set), the system folder, <c>&lt;Windows&gt;\System</c>, the Windows folder, then each <c>PATH</c> entry.
     /// </summary>
     /// <remarks>
     /// Accepted divergences from Windows (brief T55, review round 1 amendment 10): an empty <c>PATH</c> entry is skipped,

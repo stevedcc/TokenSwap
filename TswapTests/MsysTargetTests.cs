@@ -69,7 +69,9 @@ public class MsysTargetTests
     [Fact]
     public void Resolve_SearchesPathEntriesInOrder_SkippingEmptyOnes_AndRemovingQuotes()
     {
-        var probe = FakeProbe([@"C:\b\tool.exe", @"C:\c\tool.exe"],
+        // Brief T55 amendment 15 (GLM M4): \tool.exe is what an empty entry would build (Join("", name)), so the
+        // result shows that empty entries are skipped.
+        var probe = FakeProbe([@"\tool.exe", @"C:\b\tool.exe", @"C:\c\tool.exe"],
             new Dictionary<string, string> { ["PATH"] = @";C:\a;""C:\b\"";C:\c" });
 
         Assert.Equal(@"C:\b\tool.exe", MsysTarget.Resolve("tool", probe));

@@ -2268,8 +2268,9 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     /// </code>
     /// <para>Break-it-once of brief T55 Task 5 (the controller's, on Windows CI): revert T55 Task 4's whole commit, the
     /// RedactingPty <c>[1.3.0]</c> pin included; then single-quote, owner-escaping-set, token-syntax, file-token-syntax,
-    /// embedded-token-syntax, glob-star, at-file, brace-list, glob-class, tilde, and lf-inside, crlf-inside and
-    /// cr-inside (ConPTY leg) are listed as altered, and the backslash extras are not.</para>
+    /// embedded-token-syntax, glob-star, at-file, brace-list, glob-class, and lf-inside, crlf-inside and cr-inside
+    /// (ConPTY leg) are listed as altered, and the backslash extras are not. (tilde arrives intact either way:
+    /// <c>GLOB_NOCHECK</c> returns the unmatched pattern untouched, spike round 2.)</para>
     /// </remarks>
     [WindowsFact("Git Bash (MSYS2) started by a Windows program exists only on Windows")]
     public void Run_GitBashScript_EvilValues_ArriveExactly_Windows()
