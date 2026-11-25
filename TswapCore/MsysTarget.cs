@@ -168,18 +168,31 @@ public static class MsysTarget
         return null;
     }
 
-    // Brief T55 amendment 14 (spike round 3, msys runtime 3.6.10): whether MSYS turns globbing off, fail closed. Each word
-    // (split at spaces and tabs) loses its double quotes, then any run of leading "no" and "-" prefixes (ignoring case);
-    // what is left must be "glob", optionally followed by ':' or '=' and a value. The word changes the option when a
-    // prefix was stripped (noglob, -glob) or the separator is there with an empty value (glob:, glob=, glob:""). A
-    // non-empty value with no prefix (glob:ignorecase, glob:off) leaves globbing on. Accepted over-refusals: nonoglob,
-    // --glob, no-glob and "no"glob leave globbing on but count as changed.
+    // Brief T55 amendments 14 and 16 (spike round 3, msys runtime 3.6.10; MiMo round 2 I1): whether MSYS turns globbing
+    // off, fail closed. MSYS is split at spaces and tabs, and each word at every '"' into pieces: msys2-runtime's strbrk
+    // also ends a token at the closing quote of a quoted run, even mid-word, so every contiguous run of pieces, joined
+    // without the quotes (p1, p1p2, ..., p2, p2p3, ..., the whole word), is a token it could produce, and each is judged
+    // without modelling where strbrk cuts. A run loses any run of leading "no" and "-" prefixes (ignoring case); what is
+    // left must be "glob", optionally followed by ':' or '=' and a value. The run changes the option when a prefix was
+    // stripped (noglob, -glob) or the separator is there with an empty value (glob:, glob=, the run glob: of
+    // glob:"":x). A non-empty value with no prefix (glob:ignorecase, "glob:ignorecase") leaves globbing on. Accepted
+    // over-refusals: nonoglob, --glob, no-glob, "no"glob and glob:"x" leave globbing on but count as changed.
     private static bool ChangesGlobOption(string? msys) =>
         msys is not null && msys.Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries).Any(WordChangesGlobOption);
 
     private static bool WordChangesGlobOption(string word)
     {
-        var rest = word.Replace("\"", "").AsSpan();
+        var pieces = word.Split('"');
+        for (var first = 0; first < pieces.Length; first++)
+        for (var last = first; last < pieces.Length; last++)
+            if (RunChangesGlobOption(string.Concat(pieces[first..(last + 1)])))
+                return true;
+        return false;
+    }
+
+    private static bool RunChangesGlobOption(string run)
+    {
+        var rest = run.AsSpan();
         var prefixed = false;
         while (true)
         {

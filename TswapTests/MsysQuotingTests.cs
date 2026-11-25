@@ -169,6 +169,17 @@ public class MsysQuotingTests
         { "glob:no", false },
         { "glob:false", false },
         { "winsymlinks:nativestrict", false },
+        // Amendment 16 (MiMo round 2 I1): MSYS2's strbrk also ends a token at a closing quote mid-word, so every
+        // contiguous run of quote-split pieces is judged. Globbing off through such a cut: refused.
+        { "glob:\"\":x", true },
+        { "glob:\"\"x", true },
+        { "glob=\"\":x", true },
+        { "\"glob:\"\":x", true },
+        { "noglob\"\"x", true },
+        // Accepted over-refusal: its run glob: has an empty value.
+        { "glob:\"x\"", true },
+        // No run changes the option: allowed.
+        { "\"glob:ignorecase\"", false },
     };
 
     [Theory]
