@@ -126,7 +126,7 @@ Spike round 3 (`MsysSpike2Tests.Spike3_…` on the `t55-spike` branch; msys runt
     - **Accepted over-refusals:** `nonoglob`, `--glob`, `no-glob` and `"no"glob` leave globbing on but are refused. That is
       fail closed and needs no fix.
     - **Unit rows:** every spelling above, each with its measured outcome (the over-refusals as refused), plus
-      `a b`-free values under `noglob` (null).
+      a value with no `\` or `"` under `noglob` (null).
 15. **Minors.**
     - Drop `tilde` from the break-it-once remark in `EndToEndTests.cs` and from Task 5's list (GLM M1, MiMo M1). It arrives
       intact (`GLOB_NOCHECK` returns the pattern untouched), as spike round 2 showed.
