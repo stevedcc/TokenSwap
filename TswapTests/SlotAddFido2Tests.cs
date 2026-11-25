@@ -37,10 +37,13 @@ public class SlotAddFido2Tests : IDisposable
 
     private bool _sudoBypass = true;
 
+    /// <summary>Brief T54: the unlocker opens FIDO2 slots too (as CliHost wires it), for the unlock-PIN tests.</summary>
+    private bool _unlockWithFido2;
+
     private CommandContext Context(FakeConsole console, string[] args)
     {
         var env = new CliEnvironment { Prefix = "tswap", ConfigDir = _dir, Verbose = false, CommandArgs = args };
-        var unlocker = new VaultUnlocker(_otp, overrideKey: null);
+        var unlocker = new VaultUnlocker(_otp, overrideKey: null, fido2: _unlockWithFido2 ? new Fido2Service(_fido2) : null);
         return new CommandContext(console, env, VaultStores.Open(_dir), _otp, unlocker, TestKey: null, SudoBypass: _sudoBypass)
         {
             Fido2 = new Fido2Service(_fido2),
@@ -850,5 +853,108 @@ public class SlotAddFido2Tests : IDisposable
         Assert.False(File.Exists(vaultPasswordPath));
         Assert.Equal(keyringBefore, KeyringCodec.Encode(Keyring()));
         Assert.DoesNotContain(_fido2.Calls.Skip(callsBefore), c => c.Op == FakeFido2Op.MakeCredential);
+    }
+
+    // ------------------------------------------------------------------ brief T54 Task 7: the PIN in NFC
+
+    private const string PinNfc = "caf\u00e9";
+    private const string PinNfd = "cafe\u0301";
+
+    /// <summary>A new PIN set through <c>slot add --fido2</c> on a key without one; returns the key.</summary>
+    private FakeFido2Keys.Key NewPin(params string[] typed)
+    {
+        OtpVault();
+        var key = _fido2.AddKey(SerialA, Fido2TestSlots.Aaguid, pin: null);
+        _terminal = new FakeTerminal(["yes", .. typed]);
+
+        var (exit, _, stderr) = Run("", "slot", "add", "--fido2");
+
+        Assert.True(exit == 0, stderr);
+        return key;
+    }
+
+    [Fact]
+    public void NewPin_Ascii_IsSentAsTyped()
+    {
+        Assert.Equal("1234", NewPin("1234", "1234", "1234", "1234").Pin);
+    }
+
+    [Fact]
+    public void NewPin_TypedNfd_RepeatedNfc_IsSentInNfc()
+    {
+        Assert.Equal(PinNfc, NewPin(PinNfd, PinNfc, PinNfc, PinNfc).Pin);
+    }
+
+    [Fact]
+    public void NewPin_Of93NfdBytes_IsAccepted_As62NfcBytes()
+    {
+        var nfd = string.Concat(Enumerable.Repeat("e\u0301", 31));
+        Assert.Equal(93, System.Text.Encoding.UTF8.GetByteCount(nfd));
+
+        var key = NewPin(nfd, nfd, nfd, nfd);
+
+        Assert.Equal(string.Concat(Enumerable.Repeat("\u00e9", 31)), key.Pin);
+        Assert.Equal(62, System.Text.Encoding.UTF8.GetByteCount(key.Pin!));
+    }
+
+    [Theory]
+    [InlineData(0)] // two runes, four UTF-16 units
+    [InlineData(1)] // not UTF-8
+    [InlineData(2)] // ends in NUL
+    public void NewPin_Refused_IsAskedAgainWithItsText(int row)
+    {
+        var (typed, text) = row switch
+        {
+            0 => ("\U0001F600\U0001F600", TswapCli.Fido2PinPrompt.TooShortText),
+            1 => (FakeTerminal.Raw(0xFF, 0xFE, 0x41, 0x42), TswapCli.Fido2PinPrompt.NotUtf8Text),
+            _ => (FakeTerminal.Raw(0x31, 0x32, 0x33, 0x34, 0x00), TswapCli.Fido2PinPrompt.EndsInNulText),
+        };
+
+        var key = NewPin(typed, "4321", "4321", "4321", "4321");
+
+        Assert.Equal("4321", key.Pin);
+        Assert.Contains(text, _terminal!.Reads[2].Prompt);
+        Assert.Single(_fido2.Calls, c => c.Op == FakeFido2Op.SetPin);
+    }
+
+    /// <summary>A FIDO2 slot added for a key whose PIN is <paramref name="pin"/>, then the OTP key unplugged: only the FIDO2 slot opens the vault.</summary>
+    private void Fido2OnlyVault(string pin)
+    {
+        OtpVault();
+        _fido2.AddKey(SerialA, Fido2TestSlots.Aaguid, pin: pin);
+        _terminal = new FakeTerminal(pin, pin);
+        var (exit, _, stderr) = Run("", "slot", "add", "--fido2");
+        Assert.True(exit == 0, stderr);
+        _otp.PluggedIn = [];
+        _unlockWithFido2 = true;
+        _fido2.DevicePinCalls.Clear();
+    }
+
+    [Fact]
+    public void Unlock_PinTypedNfd_ForAKeyWhosePinIsNfc_OpensWithOnePinCall()
+    {
+        Fido2OnlyVault(PinNfc);
+        _terminal = new FakeTerminal(PinNfd);
+
+        var (exit, stdout, stderr) = Run("", "get", "db-password");
+
+        Assert.True(exit == 0, stderr);
+        Assert.Equal("s3cret", stdout.Trim());
+        Assert.Single(_fido2.DevicePinCalls);
+    }
+
+    [Fact]
+    public void Unlock_PinEndingInNul_IsAskedAgain_NothingSent()
+    {
+        Fido2OnlyVault("1234");
+        _terminal = new FakeTerminal(FakeTerminal.Raw(0x31, 0x32, 0x33, 0x34, 0x00), "1234");
+
+        var (exit, stdout, stderr) = Run("", "get", "db-password");
+
+        Assert.True(exit == 0, stderr);
+        Assert.Equal("s3cret", stdout.Trim());
+        Assert.Single(_fido2.DevicePinCalls);
+        Assert.Equal(2, _terminal.Reads.Count);
+        Assert.Contains(TswapCli.Fido2PinPrompt.EndsInNulText, _terminal.Reads[1].Prompt);
     }
 }

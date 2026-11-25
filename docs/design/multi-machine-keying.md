@@ -580,7 +580,8 @@ An optional second factor on any machine or YubiKey slot (spec:
 `docs/superpowers/specs/2026-11-02-vault-password-agent-design.md`; user docs: the link above). One password per vault; slots with and without it can be mixed.
 
 **Stretching.** The password (UTF-8 after NFC normalisation, so one password stretches alike on
-macOS, Linux and Windows) goes through Argon2id with m = 65536 KiB, t = 3, p = 1 and a 32-byte random
+macOS, Linux and Windows, except for a character newer than one machine's Unicode library, which
+that machine may normalise differently: a documented limit, with no second try) goes through Argon2id with m = 65536 KiB, t = 3, p = 1 and a 32-byte random
 salt per vault, giving the 32-byte **stretched password**. Every backend, the agent and the broker
 use only those 32 bytes.
 

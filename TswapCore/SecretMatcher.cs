@@ -206,7 +206,7 @@ public sealed class SecretMatcher(FingerprintIndex index, IReadOnlySet<string> b
             {
                 unreplaced.AddRange(encoded.Select(t => new UnreplacedLine(i + 1, t)));
                 // Brief T50b: the plain occurrences on a line T22 keeps whole are left too, none silently.
-                foreach (var span in taken.Values.Concat(rejected).Where(static s => s.Kind == VariantKind.Plain))
+                foreach (var span in taken.Values.Concat(rejected).Where(static s => s.Kind.BaseKind() == VariantKind.Plain))
                 {
                     if (!InsideLeft(offset + span.Start, offset + span.End))
                         skipped.Add(new SkippedValue(i + 1, i + 1, span.Token, SkippedReason.InBlockScalar));
@@ -367,16 +367,20 @@ public sealed class SecretMatcher(FingerprintIndex index, IReadOnlySet<string> b
     private static string BaseName(string token) =>
         token.EndsWith(SecretsDb.PreviousSuffix, StringComparison.Ordinal) ? token[..^SecretsDb.PreviousSuffix.Length] : token;
 
-    /// <summary>Brief T22: the distinct tokens of the encoded (not plain) spans in <paramref name="spans"/>, ordinally.</summary>
+    /// <summary>
+    /// Brief T22: the distinct tokens of the encoded (not plain) spans in <paramref name="spans"/>, ordinally. Brief T54:
+    /// by base kind, so the NFC and NFD plain spellings are plain and their stripped and encoded kinds encoded.
+    /// </summary>
     private static List<string> EncodedTokens(IEnumerable<Span> spans) =>
-        [.. spans.Where(static s => s.Kind != VariantKind.Plain).Select(static s => s.Token).Distinct().Order(StringComparer.Ordinal)];
+        [.. spans.Where(static s => s.Kind.BaseKind() != VariantKind.Plain).Select(static s => s.Token).Distinct().Order(StringComparer.Ordinal)];
 
     /// <summary>
     /// Brief T20 (#315): the token (<c>name</c> or <c>name:previous</c>) of the stored value whose
     /// <b>plain</b> variant is the whole of <paramref name="candidate"/>, or the whole of it minus its
     /// single trailing LF (a value ingested without one); null when none is. Any retained version
     /// counts, burned ones too; never a base64, base64url or whitespace-stripped variant. The longest
-    /// match wins, then a live value over a burned one, then the token ordinally.
+    /// match wins, then a live value over a burned one, then the token ordinally. Brief T54 (owner decision 2):
+    /// the value's NFC or NFD spelling counts as plain too; <c>apply</c> then fills in the stored spelling.
     /// </summary>
     private string? WholeValueToken(string candidate)
     {
@@ -384,7 +388,7 @@ public sealed class SecretMatcher(FingerprintIndex index, IReadOnlySet<string> b
         (int Length, bool Burned, string Token)? best = null;
         foreach (var hit in index.Scan(candidate))
         {
-            if (hit.Kind != VariantKind.Plain || hit.Start != 0 || (hit.Length != candidate.Length && hit.Length != shorter))
+            if (hit.Kind.BaseKind() != VariantKind.Plain || hit.Start != 0 || (hit.Length != candidate.Length && hit.Length != shorter))
                 continue;
             var found = (hit.Length, Burned: !hit.IsPrevious && burned.Contains(hit.Name),
                 Token: hit.IsPrevious ? hit.Name + SecretsDb.PreviousSuffix : hit.Name);
@@ -487,7 +491,7 @@ public sealed class SecretMatcher(FingerprintIndex index, IReadOnlySet<string> b
         {
             var patterns = ToCommentProcessor.AnchoredPatterns(entry.Text);
             var replacement = ToCommentProcessor.Replacement(entry.Token);
-            var envForm = entry.Kind == VariantKind.Plain && !Apply.HasControlCharacter(entry.Text);
+            var envForm = entry.Kind.BaseKind() == VariantKind.Plain && !Apply.HasControlCharacter(entry.Text);
             List<(int At, int Alternative)> attempts = [];
             foreach (var (start, _) in spans)
             {

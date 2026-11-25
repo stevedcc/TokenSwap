@@ -44,8 +44,11 @@ public class FingerprintScannerTests
     /// <summary>A random secret: single-line, with spaces, multi-line (LF or CRLF), or PEM-like.</summary>
     private static string RandomValue(Random rng)
     {
-        switch (rng.Next(6))
+        switch (rng.Next(8))
         {
+            // Brief T54: values holding \u00e9, in either spelling (with a space in one of them).
+            case 6: return RandomString(rng, rng.Next(2, 12), Word) + (rng.Next(2) == 0 ? "\u00e9" : "e\u0301") + RandomString(rng, rng.Next(2, 12), Word);
+            case 7: return RandomString(rng, rng.Next(2, 8), Word) + " caf\u00e9 " + RandomString(rng, rng.Next(2, 8), Word + Punctuation);
             case 0: return RandomString(rng, rng.Next(8, 40), Word);
             case 1: return RandomString(rng, rng.Next(8, 40), Word + Punctuation);
             case 2: return RandomString(rng, rng.Next(3, 10), Word) + " " + RandomString(rng, rng.Next(3, 10), Word + Punctuation);
@@ -68,6 +71,12 @@ public class FingerprintScannerTests
     {
         foreach (var (_, text) in SecretVariants.For(value))
             yield return text;
+        // Brief T54: the NFC and NFD spellings of a value holding \u00e9.
+        if (value.Normalize(NormalizationForm.FormC).Contains('\u00e9'))
+        {
+            yield return value.Normalize(NormalizationForm.FormC);
+            yield return value.Normalize(NormalizationForm.FormD);
+        }
         if (value.Contains('\n'))
             yield return Onlcr(value);
         if (value.Replace("\r\n", "\n") is var lfOnly && lfOnly != value)
@@ -430,13 +439,26 @@ public class FingerprintScannerTests
         Assert.Equal("hello ".Length, scanner.PendingFrom("hello "));
     }
 
+    /// <summary>Brief T54 Task 3: a value stored in NFC is found in its NFD spelling, with the NFD text's raw span.</summary>
+    [Fact]
+    public void Scan_NfdSpellingOfAnNfcValue_FoundWithItsRawSpan()
+    {
+        using var keys = NewKeys();
+        const string nfd = "cafe\u0301-secret-value";
+        var scanner = FingerprintScanner.Build([("s", false, Set("caf\u00e9-secret-value", keys))], keys);
+
+        var hit = Assert.Single(Scan(scanner, "nfd " + nfd + " end"));
+
+        Assert.Equal(new FingerprintHit("s", false, VariantKind.NfdPlain, 4, nfd.Length), hit);
+    }
+
     /// <summary>An entry of a kind this build doesn't know may still be folded: its raw span gets a slack of L.</summary>
     [Fact]
     public void MaxRawLength_UnknownKind_AllowsFoldSlack()
     {
         using var keys = NewKeys();
         var plain = Set("future-kind-value", keys).Entries[0];
-        var unknown = new FingerprintSet(SecretVariants.CurrentSetVersion, [plain with { Kind = (VariantKind)9 }]);
+        var unknown = new FingerprintSet(SecretVariants.CurrentSetVersion, [plain with { Kind = (VariantKind)200 }]);
 
         Assert.Equal(2 * plain.Length, FingerprintScanner.Build([("x", false, unknown)], keys).MaxRawLength);
     }

@@ -145,17 +145,7 @@ public static partial class FieldRules
     }
 
     /// <summary>The first surrogate without its partner, anywhere in the value, or null.</summary>
-    private static int? FindLoneSurrogate(string value)
-    {
-        for (var i = 0; i < value.Length; i++)
-        {
-            if (char.IsHighSurrogate(value[i]) && i + 1 < value.Length && char.IsLowSurrogate(value[i + 1]))
-                i++;
-            else if (char.IsSurrogate(value[i]))
-                return value[i];
-        }
-        return null;
-    }
+    private static int? FindLoneSurrogate(string value) => UnicodeText.FindLoneSurrogate(value);
 
     private static string? KindOf(UnicodeCategory category) => category switch
     {

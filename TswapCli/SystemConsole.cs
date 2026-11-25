@@ -79,8 +79,10 @@ public sealed class SystemConsole : IConsole
                 }
                 if (key.Key == ConsoleKey.Backspace)
                 {
-                    if (line.Length > 0)
-                        line.Remove(line.Length - 1, 1);
+                    // Brief T54: a whole character, so a surrogate pair goes at once.
+                    var units = LastCharacterUnits(line);
+                    if (units > 0)
+                        line.Remove(line.Length - units, units);
                 }
                 else if (!char.IsControl(key.KeyChar))
                     line.Append(key.KeyChar);
@@ -91,6 +93,12 @@ public sealed class SystemConsole : IConsole
             _input.TreatControlCAsInput = prevTreatCtrlC;
         }
     }
+
+    /// <summary>Brief T54: the UTF-16 units of the last character of <paramref name="text"/>: 2 for a surrogate pair, else 1 (0 when empty).</summary>
+    private static int LastCharacterUnits(StringBuilder text) =>
+        text.Length == 0 ? 0
+        : text.Length >= 2 && char.IsLowSurrogate(text[^1]) && char.IsHighSurrogate(text[^2]) ? 2
+        : 1;
 
     public string ReadPassword(TextWriter? echo = null)
     {
@@ -126,8 +134,12 @@ public sealed class SystemConsole : IConsole
                 }
                 if (key.Key == ConsoleKey.Backspace && password.Length > 0)
                 {
-                    password.Remove(password.Length - 1, 1);
-                    echo.Write("\b \b");
+                    // Brief T54: a whole character, so a surrogate pair goes at once (no lone half left, which
+                    // normalising throws on); one '*' was written per key char, so one "\b \b" per unit.
+                    var units = LastCharacterUnits(password);
+                    password.Remove(password.Length - units, units);
+                    for (var i = 0; i < units; i++)
+                        echo.Write("\b \b");
                 }
                 else if (!char.IsControl(key.KeyChar))
                 {

@@ -169,6 +169,36 @@ public sealed class WriteCommandDecryptionTests : IDisposable
         AssertModified("a");
     }
 
+    /// <summary>
+    /// Brief T54 Task 2: <c>add</c> of the same value decides from the base entries alone: over a version 2 set, over
+    /// one whose NFD entry another library computed, and over an ASCII value's version 1 set, nothing is decrypted
+    /// and nothing written.
+    /// </summary>
+    [Theory]
+    [InlineData("caf\u00e9-value", false, false)]
+    [InlineData("caf\u00e9-value", true, false)]
+    [InlineData("ascii-value", false, true)]
+    public void Add_SameValue_DecidedByTheBaseEntries_DecryptsNothing(string value, bool otherLibrary, bool versionOne)
+    {
+        _m.Ok(value, "ingest", "n");
+        Plant("n", s =>
+        {
+            var set = s.Fingerprints!;
+            if (otherLibrary)
+                set = set with { Entries = [.. set.Entries.Select(e => e.Kind == TswapCore.Fingerprints.VariantKind.NfdPlain ? e with { Hmac = new byte[16] } : e)] };
+            if (versionOne)
+                set = new TswapCore.Fingerprints.FingerprintSet(1, set.Entries);
+            return s with { Fingerprints = set };
+        });
+        var before = Snapshot();
+        Watch();
+
+        _m.Ok($"{value}\n{value}\n", "add", "n");
+
+        Assert.Empty(_values);
+        Assert.Equal(before, Snapshot());
+    }
+
     [Fact]
     public void Add_UnreadableTarget_RefusesNamingTheFile_WritesNothing()
     {

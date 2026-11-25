@@ -762,12 +762,14 @@ formats: [commands.md](commands.md#fields-plain-data-next-to-a-secret).
   - **Merges and imports are not checked.** `vault merge`, a sync tool's copies and `import` carry fields
     from your own machines and exports as they are; a peer or an export you don't trust can do worse than
     put a value in a field.
-  - **Unicode forms.** A field is stored in NFC form and checked both in that form and as given, but a
-    stored secret value is fingerprinted as it was stored. A secret stored in decomposed (NFD) form is not
-    found in a field given in its composed (NFC) form (a field given in NFD is checked in both forms, so
-    the opposite case is caught). Fingerprinting both forms of
-    every value would change the record format; secrets are almost always ASCII, where both forms are the
-    same.
+  - **Unicode forms.** Since 0.3.3 a stored value is recognised in its stored, NFC and NFD spellings, and
+    in the base64 and base64url of each, by `redact`, `tocomment`, `run`, the broker and this check (a
+    field is also stored in NFC and checked both in that form and as given). Left out: a mixed spelling
+    that is neither normal form (part composed, part not), and compatibility forms (full-width letters,
+    ligatures), which are other text. Records fingerprinted by an older tswap get the other spellings with
+    `sudo tswap vault reindex`. A machine without a Unicode library (.NET's invariant mode: no ICU, as in a
+    musl image without `icu-libs`) recognises only the stored spelling and stretches the vault password as
+    typed; a record it writes gets the other spellings at the next `vault reindex` on a machine with one.
   - **Deleted secrets' values are not checked**, so a value `field adopt` moved into a field can be set
     again.
   - **The warning the other way round is narrower.** `add`, `ingest`, `ingest --rotate` and `rotate` warn

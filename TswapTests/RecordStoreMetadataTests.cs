@@ -121,6 +121,20 @@ public sealed class RecordStoreMetadataTests : IDisposable
         Assert.True(metadata.IsFullyFingerprinted); // an older set still matches; only a missing one is "not fingerprinted"
     }
 
+    /// <summary>Brief T54 Task 2: a version 1 set of an ASCII value is current (it has no other spelling); a non-ASCII one is older.</summary>
+    [Theory]
+    [InlineData("ascii-value", 0)]
+    [InlineData("caf\u00e9-value", 1)]
+    public void LoadMetadata_CountsVersionOneSets_OnlyForNonAsciiValues(string value, int older)
+    {
+        WriteMarker(_m);
+        var record = NewRecord("o", S(1000), value);
+        record = record with { Fingerprints = new TswapCore.Fingerprints.FingerprintSet(1, [.. record.Fingerprints!.Entries.Where(e => (int)e.Kind < 4)]) };
+        System.IO.File.WriteAllBytes(FileOf("o"), SecretRecordCodec.Encode(record, _key, 3));
+
+        Assert.Equal(older, Store(_m).LoadMetadata(_key, TextWriter.Null).OlderVariantSet);
+    }
+
     [Fact]
     public void LoadMetadata_V2ConflictCopyOfAV3Record_IsNotFingerprinted_WithoutDecryptingIt()
     {

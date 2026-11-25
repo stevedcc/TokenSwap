@@ -138,7 +138,6 @@ public sealed class FingerprintScanner
             // As FingerprintIndex: two sets under one key are short only if both are (the masking side).
             if (isShort is not null)
                 isShort[(name, isPrevious)] = TokenBoundary.IsShort(set) && isShort.GetValueOrDefault((name, isPrevious), true);
-            var stripped = set.Entries.FirstOrDefault(e => e.Kind == VariantKind.WhitespaceStripped && e.Length > 0);
             foreach (var entry in set.Entries)
             {
                 if (entry.Length <= 0) continue;
@@ -147,7 +146,13 @@ public sealed class FingerprintScanner
                     candidates[key] = list = [];
                 list.Add(new Candidate(name, isPrevious, entry.Kind, entry.Hmac));
 
-                switch (entry.Kind)
+                // Brief T54: a form kind is classed as its base kind, and a plain entry pairs with the
+                // whitespace-stripped entry of its own spelling (Plain with WhitespaceStripped, NfcPlain with
+                // NfcWhitespaceStripped, NfdPlain with NfdWhitespaceStripped), whose length differs by that
+                // spelling's whitespace only. Kinds above 11 come back unchanged and reach default.
+                var baseKind = entry.Kind.BaseKind();
+                var stripped = baseKind == VariantKind.Plain ? StrippedOf(set, entry.Kind) : null;
+                switch (baseKind)
                 {
                     case VariantKind.Plain when stripped is null:
                         AddRun(runLengths, entry.Length, Classes.WhitespaceFree | Classes.WhitespaceOnly);
@@ -182,6 +187,9 @@ public sealed class FingerprintScanner
 
         static void AddRun(Dictionary<int, Classes> runs, int length, Classes c) =>
             runs[length] = runs.GetValueOrDefault(length) | c;
+
+        static FingerprintEntry? StrippedOf(FingerprintSet set, VariantKind plainKind) =>
+            set.Entries.FirstOrDefault(e => e.Kind == plainKind + 1 && e.Length > 0);
     }
 
     /// <summary>

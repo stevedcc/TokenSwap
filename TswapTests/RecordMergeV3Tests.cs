@@ -491,10 +491,136 @@ public class RecordMergeV3Tests
         Assert.True(RecordMerge.MergeAll([written, onA, onB]).SameState(merged));
     }
 
-    private static (RecordMetadata, IReadOnlyDictionary<Stamp, byte[]>) MetaOf(SecretRecord r) =>
+    private static (RecordMetadata, IReadOnlyDictionary<Stamp, byte[]>) MetaOf(SecretRecord r) => MetaOf(r, [1, 2, 3]);
+
+    private static (RecordMetadata, IReadOnlyDictionary<Stamp, byte[]>) MetaOf(SecretRecord r, byte[] section) =>
         (new RecordMetadata(r.RecordId, r.Write, r.Type, r.Version, r.Name, r.CreatedMs, r.Burns, r.Fingerprints,
             r.Previous?.Version, r.Previous?.Fingerprints, r.Extensions),
-         new Dictionary<Stamp, byte[]> { [r.Version] = [1, 2, 3] });
+         new Dictionary<Stamp, byte[]> { [r.Version] = section });
+
+    // ------------------------------------------------------------------ brief T54 Task 2: base entries decide
+
+    private const string NonAscii = "caf\u00e9-db-pass";
+
+    private static FingerprintSet WithEntry(FingerprintSet set, VariantKind kind, Func<FingerprintEntry, FingerprintEntry> change) =>
+        set with { Entries = [.. set.Entries.Select(e => e.Kind == kind ? change(e) : e)] };
+
+    /// <summary>The entry as another machine's library might have computed it: same kind and length, another HMAC.</summary>
+    private static FingerprintEntry OtherHmac(FingerprintEntry entry) => entry with { Hmac = new byte[FingerprintEntry.HmacLength] };
+
+    /// <summary>The set an older tswap (variant set 1) computes for the same value: the base entries only.</summary>
+    private static FingerprintSet VersionOne(FingerprintSet set) => new(1, [.. set.Entries.Where(e => e.Kind.BaseKind() == e.Kind)]);
+
+    [Fact]
+    public void MergeAll_CopiesWhoseFormEntriesDiffer_MergeToTheSortedUnion_OnBothPaths()
+    {
+        var mine = Rec(S(1000), NonAscii);
+        var otherSet = WithEntry(mine.Fingerprints!, VariantKind.NfdPlain, OtherHmac);
+        var other = mine with { Write = S(1500), Fingerprints = otherSet };
+        var real = mine.Fingerprints!.Entries;
+        var fake = otherSet.Entries.Single(e => e.Kind == VariantKind.NfdPlain);
+        Assert.NotEqual(real.Single(e => e.Kind == VariantKind.NfdPlain), fake);
+        // The zero HMAC sorts before the real one of the same kind and length.
+        List<FingerprintEntry> expected =
+        [
+            .. real.Where(e => e.Kind.BaseKind() == e.Kind),
+            .. real.Where(e => e.Kind.BaseKind() != e.Kind).SelectMany(e => e.Kind == VariantKind.NfdPlain ? new[] { fake, e } : [e]),
+        ];
+
+        var merged = MergeEveryOrder([mine, other])!;
+
+        Assert.Equal(new FingerprintSet(SecretVariants.CurrentSetVersion, expected), merged.Fingerprints);
+        Assert.Equal(merged.Fingerprints, RecordMerge.MergeAllMetadata([MetaOf(mine), MetaOf(other)]).Metadata.Fingerprints);
+        Assert.Equal(merged.Fingerprints, RecordMerge.MergeAllMetadata([MetaOf(other), MetaOf(mine)]).Metadata.Fingerprints);
+    }
+
+    [Fact]
+    public void MergeAll_CopiesWhosePlainEntriesDiffer_StillConflict_OnBothPaths()
+    {
+        var mine = Rec(S(1000), NonAscii);
+        var lying = mine with { Write = S(1500), Fingerprints = WithEntry(mine.Fingerprints!, VariantKind.Plain, OtherHmac) };
+
+        Assert.Null(MergeEveryOrder([mine, lying]));
+        Assert.Throws<RecordConflictException>(() => RecordMerge.MergeAllMetadata([MetaOf(mine), MetaOf(lying)]));
+        Assert.Throws<RecordConflictException>(() => RecordMerge.MergeAllMetadata([MetaOf(lying), MetaOf(mine)]));
+    }
+
+    /// <summary>
+    /// An older tswap's copy (variant set 1) and this build's (2) of one value, with different value sections: the
+    /// base entries prove the sections hold one value, so both paths merge and pick the same (version 2) set.
+    /// </summary>
+    [Fact]
+    public void MergeAll_VersionOneAndVersionTwoCopies_WithDifferentSections_Merge_AndPickTheSameSet()
+    {
+        var v2 = Rec(S(1000), NonAscii) with { Sealed = Sections((S(1000), [1, 2, 3])) };
+        var v1 = v2 with { Write = S(1200), Fingerprints = VersionOne(v2.Fingerprints!), Sealed = Sections((S(1000), [4, 5, 6])) };
+
+        var full = MergeEveryOrder([v1, v2])!;
+        var meta = RecordMerge.MergeAllMetadata([MetaOf(v1, [4, 5, 6]), MetaOf(v2, [1, 2, 3])]).Metadata;
+        var metaReversed = RecordMerge.MergeAllMetadata([MetaOf(v2, [1, 2, 3]), MetaOf(v1, [4, 5, 6])]).Metadata;
+
+        Assert.Equal(v2.Fingerprints, full.Fingerprints);
+        Assert.Equal(v2.Fingerprints, meta.Fingerprints);
+        Assert.Equal(v2.Fingerprints, metaReversed.Fingerprints);
+    }
+
+    [Fact]
+    public void MergeAllMetadata_VersionOneAndVersionTwoCopies_WithDifferentPlainEntries_Conflict()
+    {
+        var v2 = Rec(S(1000), NonAscii);
+        var v1 = v2 with { Write = S(1200), Fingerprints = WithEntry(VersionOne(v2.Fingerprints!), VariantKind.Plain, OtherHmac) };
+
+        Assert.Throws<RecordConflictException>(() => RecordMerge.MergeAllMetadata([MetaOf(v1, [4, 5, 6]), MetaOf(v2, [1, 2, 3])]));
+        Assert.Throws<RecordConflictException>(() => RecordMerge.MergeAllMetadata([MetaOf(v2, [1, 2, 3]), MetaOf(v1, [4, 5, 6])]));
+    }
+
+    [Fact]
+    public void Validate_AFormEntryThatDiffersFromTheRecomputation_IsAccepted_ABaseEntryIsNot()
+    {
+        using var keys = FingerprintKeys.Derive(VaultKey);
+        var good = Rec(S(1000), NonAscii);
+        var otherLibrary = good with { Fingerprints = WithEntry(good.Fingerprints!, VariantKind.NfdPlain, OtherHmac) };
+        var lyingBase64 = good with { Fingerprints = WithEntry(good.Fingerprints!, VariantKind.Base64, OtherHmac) };
+        var ascii = Rec(S(1000), "ascii-value");
+        var lyingAsciiVersionOne = ascii with { Fingerprints = WithEntry(ascii.Fingerprints! with { VariantSetVersion = 1 }, VariantKind.Plain, OtherHmac) };
+
+        RecordMerge.ValidateFingerprints(otherLibrary, keys);
+        Assert.Throws<RecordConflictException>(() => RecordMerge.ValidateFingerprints(lyingBase64, keys));
+        // A version 1 set that proves its value ASCII is current, so it is checked too.
+        Assert.Throws<RecordConflictException>(() => RecordMerge.ValidateFingerprints(lyingAsciiVersionOne, keys));
+    }
+
+    /// <summary>
+    /// T54 fix round 1 (MiMo M1, owner decision, controller ruling (b)): a set of every version this build knows (1 to
+    /// CurrentSetVersion) has its base entries checked, so a version 1 set of a non-ASCII value that lies about its
+    /// value is refused; a true one passes. Versions it doesn't know stay "taken as is" (T16-S1).
+    /// </summary>
+    [Fact]
+    public void Validate_AVersionOneSetOfANonAsciiValue_HasItsBaseEntriesChecked()
+    {
+        using var keys = FingerprintKeys.Derive(VaultKey);
+        var good = Rec(S(1000), NonAscii);
+        var versionOne = good with { Fingerprints = VersionOne(good.Fingerprints!) };
+        var lying = good with { Fingerprints = WithEntry(VersionOne(good.Fingerprints!), VariantKind.Plain, OtherHmac) };
+
+        RecordMerge.ValidateFingerprints(versionOne, keys);
+        Assert.Throws<RecordConflictException>(() => RecordMerge.ValidateFingerprints(lying, keys));
+    }
+
+    [Fact]
+    public void Union_IsOrderIndependent_IdempotentAndRefusesOtherBaseEntriesOrVersions()
+    {
+        var set = Fp(NonAscii);
+        var other = WithEntry(set, VariantKind.NfdPlain, OtherHmac);
+
+        Assert.Equal(set, FingerprintSet.Union(set, set));
+        Assert.Equal(FingerprintSet.Union(set, other), FingerprintSet.Union(other, set));
+        Assert.True(set.SameBaseEntries(other));
+        Assert.True(set.SameBaseEntries(VersionOne(set)));
+        Assert.False(set.SameBaseEntries(WithEntry(set, VariantKind.Base64Url, OtherHmac)));
+        Assert.Throws<ArgumentException>(() => FingerprintSet.Union(set, WithEntry(set, VariantKind.Plain, OtherHmac)));
+        Assert.Throws<ArgumentException>(() => FingerprintSet.Union(set, VersionOne(set)));
+    }
 
     /// <summary>Review I1: a Fields extension that can't be decoded is a conflict (that record unreadable), on both paths.</summary>
     [Theory]

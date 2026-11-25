@@ -648,7 +648,7 @@ public class SecretRecordCodecV3Tests
     public void UnknownVariantKind_IsRefusedInAKnownSetVersion_KeptInANewerOne()
     {
         var id = IdOf("db-pass");
-        FingerprintSet Set(byte setVersion) => new(setVersion, [new FingerprintEntry((VariantKind)7, 5, 42, new byte[16])]);
+        FingerprintSet Set(byte setVersion) => new(setVersion, [new FingerprintEntry((VariantKind)200, 5, 42, new byte[16])]);
         byte[] File(byte setVersion)
         {
             var plain = Layout.MetadataPlain(RecordType.Value, Version, "db-pass", [(Version, 0, Set(setVersion))]);

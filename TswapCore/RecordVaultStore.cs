@@ -924,16 +924,17 @@ public sealed class RecordVaultStore : IFileVaultStore
 
     /// <summary>
     /// <c>add</c>'s question, without the stored value where possible: the value is the same when the
-    /// current version's set is of this build's variant-set version and equals the new value's
-    /// (sound for a record whose set describes its value: UTF-8 decoding of a .NET string's bytes is
-    /// injective, and the plain variant's 128-bit HMAC decides). A set of another variant-set version,
-    /// or none, can't answer it: that one current value is decrypted and compared (owner decision 6);
+    /// current version's set is current (<see cref="SecretVariants.IsCurrent"/>) and its base entries
+    /// equal the new value's (sound for a record whose set describes its value: UTF-8 decoding of a .NET
+    /// string's bytes is injective, and the plain variant's 128-bit HMAC decides; brief T54: form entries
+    /// another machine's Unicode library computed differently don't count). Any other set, or
+    /// none, can't answer it: that one current value is decrypted and compared (owner decision 6);
     /// when it can't be decrypted, the comparison can't be made and the write refuses (decision 8).
     /// </summary>
     private static bool SameValue(string name, SecretEntry entry, byte[] value, FingerprintKeys keys)
     {
-        if (entry.Metadata.Fingerprints is { } stored && stored.VariantSetVersion == SecretVariants.CurrentSetVersion)
-            return Fingerprinter.Compute(value, keys).Equals(stored);
+        if (entry.Metadata.Fingerprints is { } stored && SecretVariants.IsCurrent(stored))
+            return Fingerprinter.Compute(value, keys).SameBaseEntries(stored);
         byte[]? current;
         try
         {
@@ -1064,10 +1065,12 @@ public sealed class RecordVaultStore : IFileVaultStore
         {
             throw new UnreadableRecordException(name, fileName, ex is CryptographicException ? "a value section fails authentication" : ex.Message);
         }
-        if (fingerprints is { } stored && stored.VariantSetVersion == SecretVariants.CurrentSetVersion)
+        // T54 fix round 1 (M1): every set of a version this build knows has its base entries checked; a version it
+        // doesn't know is taken as is (T16-S1).
+        if (fingerprints is { } stored && SecretVariants.IsKnownVersion(stored))
         {
             using var fingerprintKeys = FingerprintKeys.Derive(vaultKey);
-            if (!Fingerprinter.Compute(value, fingerprintKeys).Equals(stored))
+            if (!Fingerprinter.Compute(value, fingerprintKeys).SameBaseEntries(stored))
             {
                 CryptographicOperations.ZeroMemory(value);
                 throw new UnreadableRecordException(name, fileName, "its fingerprints don't match its value");
@@ -1414,7 +1417,7 @@ public sealed class RecordVaultStore : IFileVaultStore
                 continue; // no main file and no usable copy: nothing to rewrite
             if (state.Type == RecordType.Tombstone)
                 tombstones++;
-            if (IsCurrent(record))
+            if (IsCurrent(record, vaultKey))
             {
                 alreadyCurrent++;
                 continue;
@@ -1428,7 +1431,7 @@ public sealed class RecordVaultStore : IFileVaultStore
     }
 
     /// <summary>Ruling 9: a record <see cref="Reindex"/> leaves as it is.</summary>
-    private static bool IsCurrent(LoadedRecord record)
+    private static bool IsCurrent(LoadedRecord record, byte[] vaultKey)
     {
         if (record.FoldedCopies is { Count: > 0 } || record.MainBytes is null || record.MainState is not { } main || record.State is not { } state)
             return false;
@@ -1438,9 +1441,14 @@ public sealed class RecordVaultStore : IFileVaultStore
             return false;
         if (state.Type == RecordType.Tombstone)
             return true;
-        return CurrentSet(state.Fingerprints) && (state.Previous is null || CurrentSet(state.Previous.Fingerprints));
+        using var keys = FingerprintKeys.Derive(vaultKey);
+        return CurrentSet(state.Fingerprints, state.Value) && (state.Previous is null || CurrentSet(state.Previous.Fingerprints, state.Previous.Value));
 
-        static bool CurrentSet(FingerprintSet? set) => set is not null && set.VariantSetVersion >= SecretVariants.CurrentSetVersion;
+        // T54 fix round 1 (GLM Minor 1): with the value known, a set missing form kinds this machine computes (written
+        // where normalising is a no-op) is not current either.
+        bool CurrentSet(FingerprintSet? set, byte[] value) =>
+            set is not null && (set.VariantSetVersion >= SecretVariants.CurrentSetVersion || SecretVariants.IsCurrent(set))
+            && !SecretVariants.LacksFormsOf(set, value, keys);
     }
 
     private TswapException NewerFormatMarker() => new(
@@ -1780,7 +1788,7 @@ public sealed class RecordVaultStore : IFileVaultStore
                 var retained = merged.Metadata.RetainedVersions().ToList();
                 if (retained.Any(v => v.Fingerprints is null))
                     notFingerprinted++;
-                if (retained.Any(v => v.Fingerprints is { } set && set.VariantSetVersion < SecretVariants.CurrentSetVersion))
+                if (retained.Any(v => v.Fingerprints is { } set && set.VariantSetVersion < SecretVariants.CurrentSetVersion && !SecretVariants.IsCurrent(set)))
                     olderVariantSet++;
             }
         }
@@ -2049,8 +2057,12 @@ public sealed class RecordVaultStore : IFileVaultStore
     {
         if (record.Type == RecordType.Tombstone)
             return record with { Fingerprints = null, Previous = null, Sealed = null };
+        // T54 fix round 1 (GLM Minor 1): with the value known, a set missing form kinds this machine computes is
+        // recomputed too, by any write that writes the record from its plaintext.
         FingerprintSet For(byte[] value, FingerprintSet? stored) =>
-            stored is not null && !(recomputeOlderSets && stored.VariantSetVersion < SecretVariants.CurrentSetVersion)
+            stored is not null
+            && !(recomputeOlderSets && stored.VariantSetVersion < SecretVariants.CurrentSetVersion && !SecretVariants.IsCurrent(stored))
+            && !SecretVariants.LacksFormsOf(stored, value, keys)
                 ? stored
                 : Fingerprinter.Compute(value, keys);
         var previous = record.Previous is { } p ? p with { Fingerprints = For(p.Value, p.Fingerprints) } : null;

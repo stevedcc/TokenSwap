@@ -56,9 +56,54 @@ public sealed class BrokerRedactor
     /// percent-encoded (upper and lower hex, and form encoding); JSON-escaped (default, relaxed and
     /// minimal escaping, each also with <c>\/</c>); the value's base64 wrapped at 76 (LF and CRLF)
     /// and 64 columns, hex with spaces between bytes, and hex wrapped at 60 (T9 fix round 1).
-    /// <c>tswap run</c>'s redaction covers the raw value, which is included.
+    /// <c>tswap run</c>'s redaction covers the raw value, which is included. Brief T54: every one of these
+    /// forms of the value's NFC and NFD spellings too (<see cref="FormsOf"/>), when its bytes are UTF-8.
     /// </summary>
     public static BrokerRedactor ForSecret(ReadOnlySpan<byte> secret, string? basicUser)
+    {
+        var forms = FormsOf(secret, basicUser);
+
+        // Brief T54: the same list for the NFC and the NFD spelling of the value, when its bytes are valid
+        // UTF-8 (strict decode) and that spelling's UTF-8 differs from them. Bytes that are not UTF-8 get
+        // today's forms only.
+        string text;
+        try
+        {
+            text = StrictUtf8.GetString(secret);
+        }
+        catch (DecoderFallbackException)
+        {
+            return new BrokerRedactor([.. forms.OrderByDescending(f => f.Length)]);
+        }
+        foreach (var normalised in new[] { text.Normalize(NormalizationForm.FormC), text.Normalize(NormalizationForm.FormD) })
+        {
+            var bytes = Encoding.UTF8.GetBytes(normalised);
+            try
+            {
+                if (bytes.AsSpan().SequenceEqual(secret))
+                    continue;
+                foreach (var form in FormsOf(bytes, basicUser))
+                {
+                    if (!forms.Any(f => f.AsSpan().SequenceEqual(form)))
+                        forms.Add(form);
+                }
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(bytes);
+            }
+        }
+
+        return new BrokerRedactor([.. forms.OrderByDescending(f => f.Length)]);
+    }
+
+    private static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
+
+    /// <summary>
+    /// The forms <see cref="ForSecret"/> lists for one spelling of the value, in the order they are first
+    /// produced (no duplicates; not yet sorted longest first).
+    /// </summary>
+    internal static List<byte[]> FormsOf(ReadOnlySpan<byte> secret, string? basicUser)
     {
         List<byte[]> forms = [];
         void Add(byte[] form)
@@ -156,7 +201,7 @@ public sealed class BrokerRedactor
             AddText(json.Replace("/", "\\/"));
         }
 
-        return new BrokerRedactor([.. forms.OrderByDescending(f => f.Length)]);
+        return forms;
     }
 
     private static string LowerHexEscapes(string s) =>

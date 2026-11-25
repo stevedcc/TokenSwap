@@ -39,6 +39,38 @@ public static class ExportCrypto
         TimeCost: Argon2idTimeCost,
         Parallelism: Argon2idParallelism);
 
+    /// <summary>
+    /// Brief T54: the passphrase a new export derives its key from, in NFC, so it imports whichever way an accented
+    /// letter is typed (as the vault password is stretched). A lone surrogate can't be normalised and is refused.
+    /// </summary>
+    public static string NormalisePassphrase(string passphrase)
+    {
+        ArgumentNullException.ThrowIfNull(passphrase);
+        if (UnicodeText.FindLoneSurrogate(passphrase) is not null)
+            throw new TswapException("The passphrase holds half of a character (a lone UTF-16 surrogate); type it again.");
+        return passphrase.Normalize(NormalizationForm.FormC);
+    }
+
+    /// <summary>
+    /// Brief T54: the passphrases <c>import</c> tries, in order: NFC of <paramref name="typed"/> (every export since
+    /// T54, and an older one made in NFC), <paramref name="typed"/> as it is (an older export made in a mixed
+    /// spelling, typed alike), then its NFD (an older export made in NFD, typed in NFC); ordinal duplicates removed.
+    /// A lone surrogate can't be normalised: then only <paramref name="typed"/>.
+    /// </summary>
+    public static IReadOnlyList<string> PassphraseCandidates(string typed)
+    {
+        ArgumentNullException.ThrowIfNull(typed);
+        if (UnicodeText.FindLoneSurrogate(typed) is not null)
+            return [typed];
+        List<string> candidates = [];
+        foreach (var candidate in new[] { typed.Normalize(NormalizationForm.FormC), typed, typed.Normalize(NormalizationForm.FormD) })
+        {
+            if (!candidates.Contains(candidate, StringComparer.Ordinal))
+                candidates.Add(candidate);
+        }
+        return candidates;
+    }
+
     /// <summary>Derives a 32-byte key from a passphrase and salt using Argon2id with the given parameters.</summary>
     public static byte[] DeriveArgon2id(string passphrase, byte[] salt, KdfParams kdf)
     {

@@ -123,4 +123,37 @@ public class BrokerRedactorTests
         redactor.Clear();
         Assert.All(forms, f => Assert.All(f, b => Assert.Equal(0, b)));
     }
+    // ── brief T54 Task 3: the other Unicode spellings ─────────────────────────────────────────────
+
+    [UnixFact("the broker is Unix only")]
+    public void Forms_HoldTheNfdSpellingsForms_AndEveryFormOfBothSpellings()
+    {
+        var nfd = Secret.Normalize(NormalizationForm.FormD);
+        Assert.NotEqual(Secret, nfd);
+        var nfdBytes = Encoding.UTF8.GetBytes(nfd);
+        var forms = BrokerRedactor.ForSecret(Encoding.UTF8.GetBytes(Secret), "x-access-token").Forms
+            .Select(f => Encoding.Latin1.GetString(f)).ToHashSet();
+
+        Assert.Contains(Encoding.Latin1.GetString(nfdBytes), forms);                      // UTF-8
+        Assert.Contains(Convert.ToBase64String(nfdBytes), forms);                         // base64
+        Assert.Contains(Convert.ToHexString(nfdBytes), forms);                            // upper hex
+        Assert.Contains(Uri.EscapeDataString(nfd), forms);                                // percent
+        foreach (var spelling in new[] { Secret, nfd })
+            foreach (var form in BrokerRedactor.FormsOf(Encoding.UTF8.GetBytes(spelling), "x-access-token"))
+                Assert.Contains(Encoding.Latin1.GetString(form), forms);
+    }
+
+    /// <summary>Bytes that are not UTF-8: the normalisation adds nothing, and today's forms (the lossy decode's too) all stay.</summary>
+    [UnixFact("the broker is Unix only")]
+    public void Forms_OfBytesThatAreNotUtf8_AreTodaysForms()
+    {
+        byte[] bytes = [0xFF, 0x41, 0x42, 0x43, 0x44, 0x45];
+
+        var expected = BrokerRedactor.FormsOf(bytes, null).OrderByDescending(f => f.Length).ToList();
+        var actual = BrokerRedactor.ForSecret(bytes, null).Forms;
+
+        Assert.Equal(expected.Count, actual.Count);
+        for (var i = 0; i < expected.Count; i++)
+            Assert.Equal(expected[i], actual[i]);
+    }
 }

@@ -2,7 +2,6 @@ using TswapCli;
 using TswapCore;
 using TswapCore.Vault;
 using Xunit;
-using Xunit.Abstractions;
 using static TswapTests.EvilValues;
 
 namespace TswapTests;
@@ -26,11 +25,8 @@ public sealed class EvilValuesTests : IDisposable
     private readonly string _filesRoot;
     private readonly byte[] _testKey =
         Convert.FromHexString("0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF");
-    private readonly ITestOutputHelper _output;
-
-    public EvilValuesTests(ITestOutputHelper output)
+    public EvilValuesTests()
     {
-        _output = output;
         _tempDir = Path.Combine(Path.GetTempPath(), "tswap-evil-test-" + Guid.NewGuid().ToString("N")[..8]);
         _configDir = Path.Combine(_tempDir, "config");
         _work = Path.Combine(_tempDir, "work");
@@ -529,12 +525,12 @@ public sealed class EvilValuesTests : IDisposable
         Assert.True(GetValue(caseName, configDir: fresh) == stored, $"{caseName}: get after import doesn't return the stored value");
     }
 
-    // ── Task 2: NFD, an owner decision (#392); nothing asserted about the NFD form's masking ────────────────────
+    // ── Task 2: NFD (#392); brief T54 (#400) masks it ──────────────────────────────────────────────────────────
 
     private static string NfdLine(string output) => output.Split('\n')[1];
 
     [Fact]
-    public void Nfd_InRunOutput_RecordedForTheOwner()
+    public void Nfd_InRunOutput_Masked()
     {
         var nfc = EvilValues.Get("nfc-e-acute").Value;
         var nfd = nfc.Normalize(System.Text.NormalizationForm.FormD);
@@ -548,11 +544,11 @@ public sealed class EvilValuesTests : IDisposable
         var output = pty.Output.ToString();
         // The stored (NFC) form is masked. F3: Assert.StartsWith's own comparison (current culture), without printing the output.
         Assert.True(output.StartsWith($"nfc {Label} end\n", StringComparison.CurrentCulture), "nfc-e-acute: run's output doesn't start with the masked NFC line");
-        _output.WriteLine($"T46 owner decision (NFC/NFD), run: the NFD form was {(NfdLine(output) == $"nfd {Label} end" ? "masked" : "not masked")}");
+        Assert.True(NfdLine(output) == $"nfd {Label} end", "nfc-e-acute: run didn't mask the NFD line");
     }
 
     [Fact]
-    public void Nfd_InRedactInput_RecordedForTheOwner()
+    public void Nfd_InRedactInput_Masked()
     {
         var nfc = EvilValues.Get("nfc-e-acute").Value;
         var nfd = nfc.Normalize(System.Text.NormalizationForm.FormD);
@@ -565,6 +561,6 @@ public sealed class EvilValuesTests : IDisposable
         Assert.True(exit == 0, err);
         // The stored (NFC) form is masked. F3: Assert.StartsWith's own comparison (current culture), without printing the output.
         Assert.True(stdout.StartsWith($"nfc {Label} end\n", StringComparison.CurrentCulture), "nfc-e-acute: redact's output doesn't start with the masked NFC line");
-        _output.WriteLine($"T46 owner decision (NFC/NFD), redact: the NFD form was {(NfdLine(stdout) == $"nfd {Label} end" ? "masked" : "not masked")}");
+        Assert.True(NfdLine(stdout) == $"nfd {Label} end", "nfc-e-acute: redact didn't mask the NFD line");
     }
 }

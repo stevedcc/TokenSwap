@@ -155,11 +155,9 @@ public static class RecordMerge
             }
             foreach (var group in sets.GroupBy(f => f.VariantSetVersion))
             {
-                var first = group.First();
-                if (group.Any(f => !f.Equals(first)))
-                    throw new RecordConflictException($"two copies hold different fingerprints of the version {stamp}");
-                if (best is null || first.VariantSetVersion > best.VariantSetVersion)
-                    best = first;
+                var joined = JoinGroup(group, stamp);
+                if (best is null || joined.VariantSetVersion > best.VariantSetVersion)
+                    best = joined;
             }
             if (section is not null)
                 sealedSections[stamp] = section;
@@ -238,11 +236,9 @@ public static class RecordMerge
             FingerprintSet? best = null;
             foreach (var group in holders.Where(h => h.Set is not null).Select(h => h.Set!).GroupBy(f => f.VariantSetVersion))
             {
-                var first = group.First();
-                if (group.Any(f => !f.Equals(first)))
-                    throw new RecordConflictException($"two copies hold different fingerprints of the version {stamp}");
-                if (best is null || first.VariantSetVersion > best.VariantSetVersion)
-                    best = first;
+                var joined = JoinGroup(group, stamp);
+                if (best is null || joined.VariantSetVersion > best.VariantSetVersion)
+                    best = joined;
             }
             for (var i = 0; i < holders.Count; i++)
             {
@@ -251,9 +247,11 @@ public static class RecordMerge
                     var (a, b) = (holders[i], holders[j]);
                     if (a.Section.AsSpan().SequenceEqual(b.Section))
                         continue;
-                    // Different ciphertexts: equal only if fingerprints prove it (sets at one variant-set
-                    // version were checked equal above).
-                    if (a.Set is null || b.Set is null || a.Set.VariantSetVersion != b.Set.VariantSetVersion)
+                    // Different ciphertexts: equal only if fingerprints prove it. Brief T54: the base entries
+                    // (the value's own spelling) don't depend on the variant-set version, and the plain entry's
+                    // 128-bit HMAC decides the value, so an older tswap's set (version 1) and this build's (2)
+                    // prove it too.
+                    if (a.Set is null || b.Set is null || !a.Set.SameBaseEntries(b.Set))
                         throw new RecordConflictException(
                             $"two copies hold different value sections of the version {stamp} and no fingerprints show them equal");
                 }
@@ -373,12 +371,33 @@ public static class RecordMerge
     }
 
     /// <summary>
+    /// Brief T54: the one set of a group of copies' sets of one variant-set version. Their base entries must agree
+    /// (else the copies hold different fingerprints: a conflict); their form entries are joined
+    /// (<see cref="FingerprintSet.Union"/>, order-independent), so the full load and the metadata path pick the same set.
+    /// </summary>
+    private static FingerprintSet JoinGroup(IEnumerable<FingerprintSet> group, Stamp stamp)
+    {
+        FingerprintSet? joined = null;
+        foreach (var set in group)
+        {
+            if (joined is not null && !joined.SameBaseEntries(set))
+                throw new RecordConflictException($"two copies hold different fingerprints of the version {stamp}");
+            joined = joined is null ? set : FingerprintSet.Union(joined, set);
+        }
+        return joined!;
+    }
+
+    /// <summary>
     /// Brief T16-S1 ruling 11, validation per input: recomputes the fingerprint sets of
     /// <paramref name="record"/>'s retained values from their plaintext, for the variant-set version
     /// this build computes (<see cref="SecretVariants.CurrentSetVersion"/>), and refuses a set that
     /// doesn't match. Full loads call it on every decoded copy before merging, so a stored set can't
-    /// claim fingerprints of a different value (which would hide it from redaction). A set of another
-    /// variant-set version can't be recomputed here and is taken as it is.
+    /// claim fingerprints of a different value (which would hide it from redaction). A set of a
+    /// variant-set version this build doesn't know can't be recomputed here and is taken as it is. Brief T54: every set of a version
+    /// this build knows (<see cref="SecretVariants.IsKnownVersion"/>: 1 to the current one; fix round 1, M1) is
+    /// checked, and only its base entries must match (<see cref="FingerprintSet.SameBaseEntries"/>): form entries
+    /// that another machine's Unicode library computed differently are accepted as written, since they
+    /// can only add masking.
     /// </summary>
     /// <exception cref="RecordConflictException">A stored set doesn't match its value.</exception>
     public static void ValidateFingerprints(SecretRecord record, FingerprintKeys keys)
@@ -390,9 +409,9 @@ public static class RecordMerge
 
         static void Validate(byte[] value, FingerprintSet? stored, FingerprintKeys keys)
         {
-            if (stored is null || stored.VariantSetVersion != SecretVariants.CurrentSetVersion)
+            if (stored is null || !SecretVariants.IsKnownVersion(stored))
                 return;
-            if (!Fingerprinter.Compute(value, keys).Equals(stored))
+            if (!Fingerprinter.Compute(value, keys).SameBaseEntries(stored))
                 throw new RecordConflictException("a copy's fingerprints don't match its value");
         }
     }
