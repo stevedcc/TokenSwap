@@ -152,7 +152,8 @@ Spike round 3 (`MsysSpike2Tests.Spike3_…` on the `t55-spike` branch; msys runt
     - **Why every run:** every token `strbrk` can produce is such a run. The rule never has to model where `strbrk` cuts.
     - **Unchanged rows:** every row of amendment 14 keeps its outcome, `"no"glob` included (still over-refused).
     - **New rows, refused with `a\b`:** `glob:"":x`, `glob:""x`, `glob="":x`, `"glob:"":x`, `noglob""x`.
-    - **New rows, allowed:** `glob:"x"` and `"glob:ignorecase"`. Neither has a run that changes the option.
+    - **New row, allowed:** `"glob:ignorecase"`, because none of its runs changes the option.
+    - **New row, refused (accepted over-refusal):** `glob:"x"`, because its run `glob:` has an empty value.
     - Correct `ChangesGlobOption`'s comment to state this rule.
 
 ## What is wrong (evidence)
