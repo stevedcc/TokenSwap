@@ -115,14 +115,14 @@ public static class MsysTarget
     /// The refusal of an MSYS2 child's <paramref name="arguments"/> (argv without the program) that
     /// <see cref="QuoteArguments"/> can't pass exactly, or null. <paramref name="childVariable"/> reads the child's
     /// environment (names ignoring case). In order, the first that finds anything: R1, <c>MSYS</c> changes the glob
-    /// option (a word <c>noglob</c> or starting with <c>glob:</c>, ignoring case) and an argument holds <c>\</c> or
-    /// <c>"</c>; R2, the locale (the first non-empty of <c>LC_ALL</c>, <c>LC_CTYPE</c>, <c>LANG</c>) is set and is not
-    /// <c>C</c>, <c>POSIX</c> or a UTF-8 charset, and an argument holds a character above U+007F; R3, an argument holds a
-    /// character from U+F000 to U+F0FF (older runtimes turn them into ASCII); R4, an argument is longer than
-    /// <see cref="MaxArgumentBytes"/> bytes in UTF-8 (MSYS2 cuts a longer quoted word without an error). The text names
-    /// the tokens whose substituted text holds what the rule found, for R4 the tokens in a too-long argument
-    /// (<paramref name="tokens"/>, whose <c>ArgIndex</c> counts the program as 0, so a token in the program is never
-    /// named), in argv order and each once, and never a value, a variable's value or the character.
+    /// option (MSYS2's spellings, amendment 14: <c>noglob</c>, <c>-glob</c>, <c>glob:</c>, <c>glob=</c>, ...) and an
+    /// argument holds <c>\</c> or <c>"</c>; R2, the locale (the first non-empty of <c>LC_ALL</c>, <c>LC_CTYPE</c>,
+    /// <c>LANG</c>) is set and is not <c>C</c>, <c>POSIX</c> or a UTF-8 charset, and an argument holds a character above
+    /// U+007F; R3, an argument holds a character from U+F000 to U+F0FF (older runtimes turn them into ASCII); R4, an
+    /// argument is longer than <see cref="MaxArgumentBytes"/> bytes in UTF-8 (MSYS2 cuts a longer quoted word without an
+    /// error). The text names the tokens whose substituted text holds what the rule found, for R4 the tokens in a
+    /// too-long argument (<paramref name="tokens"/>, whose <c>ArgIndex</c> counts the program as 0, so a token in the
+    /// program is never named), in argv order and each once, and never a value, a variable's value or the character.
     /// </summary>
     public static string? Refusal(IReadOnlyList<string> arguments, IReadOnlyList<Validation.SubstitutedToken> tokens,
         Func<string, string?> childVariable)
@@ -167,10 +167,38 @@ public static class MsysTarget
         return null;
     }
 
-    // Brief T55 amendment 3: MSYS's options are words; 'noglob' or 'glob:...' changes the glob option ('glob' is the default).
+    // Brief T55 amendment 14 (spike round 3, msys runtime 3.6.10): whether MSYS turns globbing off, fail closed. Each word
+    // (split at spaces and tabs) loses its double quotes, then any run of leading "no" and "-" prefixes (ignoring case);
+    // what is left must be "glob", optionally followed by ':' or '=' and a value. The word changes the option when a
+    // prefix was stripped (noglob, -glob) or the separator is there with an empty value (glob:, glob=, glob:""). A
+    // non-empty value with no prefix (glob:ignorecase, glob:off) leaves globbing on. Accepted over-refusals: nonoglob,
+    // --glob, no-glob and "no"glob leave globbing on but count as changed.
     private static bool ChangesGlobOption(string? msys) =>
-        msys is not null && msys.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Any(word =>
-            word.Equals("noglob", StringComparison.OrdinalIgnoreCase) || word.StartsWith("glob:", StringComparison.OrdinalIgnoreCase));
+        msys is not null && msys.Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries).Any(WordChangesGlobOption);
+
+    private static bool WordChangesGlobOption(string word)
+    {
+        var rest = word.Replace("\"", "").AsSpan();
+        var prefixed = false;
+        while (true)
+        {
+            if (rest.StartsWith("no", StringComparison.OrdinalIgnoreCase))
+                rest = rest[2..];
+            else if (rest.StartsWith('-'))
+                rest = rest[1..];
+            else
+                break;
+            prefixed = true;
+        }
+        if (!rest.StartsWith("glob", StringComparison.OrdinalIgnoreCase))
+            return false;
+        rest = rest[4..];
+        if (rest.IsEmpty)
+            return prefixed;
+        if (rest[0] is not (':' or '='))
+            return false;
+        return prefixed || rest.Length == 1;
+    }
 
     // The runtime's locale: the first non-empty of LC_ALL, LC_CTYPE, LANG; unset, C and POSIX convert as UTF-8. A
     // locale without a charset part is not UTF-8 (spike round 2: de_DE converts as ISO-8859-1).

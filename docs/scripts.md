@@ -53,9 +53,9 @@ change it ([#402](https://github.com/stevedcc/TokenSwap/issues/402)). Tested by
 `EndToEndTests.Run_GitBashScript_EvilValues_ArriveExactly_Windows`. A bare `bash` can still start WSL's `bash.exe` in
 System32, which `run` leaves alone, so name Git Bash by its path: `tswap run "C:\Program Files\Git\bin\bash.exe"
 ./deploy.sh {{db-pw}}`. `run` refuses, before the script starts, when `MSYS` changes the glob option (`noglob`,
-`glob:...`) and an argument holds a backslash or double quote, when the locale (`LC_ALL`, `LC_CTYPE` or `LANG`) isn't
-UTF-8 and an argument holds a non-ASCII character, and for a character from U+F000 to U+F0FF (which older MSYS2
-runtimes turn into ASCII). The environment stays the way that works in every case, also through a program that starts
+`-glob`, or an empty `glob:` or `glob=`) and an argument holds a backslash or double quote, when the locale (`LC_ALL`,
+`LC_CTYPE` or `LANG`) isn't UTF-8 and an argument holds a non-ASCII character, and for a character from U+F000 to
+U+F0FF (which older MSYS2 runtimes turn into ASCII). The environment stays the way that works in every case, also through a program that starts
 Git Bash in turn: `tswap run --env PW={{db-pw}} -- "C:\Program Files\Git\bin\bash.exe" ./deploy.sh`, read as
 `"$PW"`, tested by `EndToEndTests.Run_GitBashScript_EnvValue_EvilValues_ArriveExactly_Windows` with every test value that
 fits on a Windows command line. MSYS2's path conversion doesn't apply when tswap starts Git Bash; it applies when the

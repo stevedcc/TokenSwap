@@ -115,7 +115,8 @@ public class MsysQuotingTests
     [InlineData("MSYS", "noglob", "a\\b", true)]
     [InlineData("MSYS", "noglob", "abc", false)]
     [InlineData("MSYS", "winsymlinks:nativestrict", "a\\b", false)]
-    [InlineData("msys", "GLOB:ignorecase", "a\"b", true)]
+    // Brief T55 amendment 14 (spike round 3): a non-empty value with no prefix leaves globbing on; no longer refused.
+    [InlineData("msys", "GLOB:ignorecase", "a\"b", false)]
     [InlineData("MSYS", "glob", "a\\b", false)]
     [InlineData("MSYS", "winsymlinks:native  NoGlob", "a\\b", true)]
     public void Refusal_R1_TheGlobOptionChanged_AndABackslashOrQuote(string name, string value, string argument, bool refused)
@@ -126,6 +127,65 @@ public class MsysQuotingTests
             Assert.StartsWith(R1Start, text);
         else
             Assert.Null(text);
+    }
+
+    /// <summary>
+    /// Brief T55 amendment 14: every MSYS spelling spike round 3 measured with <c>a\b</c> and <c>a"b</c>, and whether
+    /// R1 refuses it: globbing off (both arrived altered) refuses; globbing on (both arrived exactly) does not, except
+    /// the accepted over-refusals (<c>nonoglob</c>, <c>--glob</c>, <c>no-glob</c>, <c>"no"glob</c>: fail closed). Null
+    /// is <c>MSYS</c> unset.
+    /// </summary>
+    public static TheoryData<string?, bool> MsysSpellings => new()
+    {
+        // Globbing off (measured): refused.
+        { "noglob", true },
+        { "-glob", true },
+        { "glob=", true },
+        { "glob:", true },
+        { "noglob:", true },
+        { "noglob=", true },
+        { "\"noglob\"", true },
+        { "\"glob:\"", true },
+        { "NOGLOB", true },
+        { "Glob:", true },
+        { "glob:\"\"", true },
+        { "  noglob", true },
+        { "noglob  ", true },
+        { "winsymlinks:nativestrict noglob", true },
+        { "winsymlinks:nativestrict\tnoglob", true }, // the rule splits at tabs too
+        // Globbing on (measured), refused anyway: the accepted over-refusals.
+        { "nonoglob", true },
+        { "--glob", true },
+        { "no-glob", true },
+        { "\"no\"glob", true },
+        // Globbing on (measured): allowed.
+        { null, false },
+        { "glob", false },
+        { "glob:normal", false },
+        { "glob=normal", false },
+        { "glob:ignorecase", false },
+        { "glob=ignorecase", false },
+        { "glob:off", false },
+        { "glob:no", false },
+        { "glob:false", false },
+        { "winsymlinks:nativestrict", false },
+    };
+
+    [Theory]
+    [MemberData(nameof(MsysSpellings))]
+    public void Refusal_R1_FollowsMsys2sSpellingsOfTheGlobOption(string? msys, bool refused)
+    {
+        Dictionary<string, string> variables = msys is null ? [] : new() { ["MSYS"] = msys };
+
+        foreach (var argument in new[] { "a\\b", "a\"b" })
+        {
+            var text = Refuse([argument], variables);
+            if (refused)
+                Assert.StartsWith(R1Start, text);
+            else
+                Assert.Null(text);
+        }
+        Assert.Null(Refuse(["abc*def"], variables));
     }
 
     public static TheoryData<Dictionary<string, string>, string, bool> LocaleRows => new()
