@@ -127,3 +127,66 @@ without them fails the locked restore). No other change to the file. Validate it
 Central package management (`Directory.Packages.props`), NuGet package signature verification (`signatureValidationMode`,
 trusted signers), a `nuget.config`, any package or SDK version change, Croft, and the throwaway CI run (the
 controller pushes a branch with one changed hash and dispatches ci.yml on it after this brief).
+
+## Amendments after brief review round 1 (GLM, MiMo; controller rulings)
+
+These bind and win over the text above where they differ.
+
+1. **Spike item 4, corrected.** NU1403 comes from every *full* restore, which compares each lock file `contentHash`
+   with the package's recorded SHA-512, warm cache or not. What checks nothing is a **no-op** restore (an up-to-date
+   `obj/project.nuget.cache`); that was the spike's silent case. CI checks because a fresh checkout has no `obj/`.
+   A package already extracted into the packages folder is trusted through its stored hash, so a restored packages
+   folder or `obj/` (a cache) would defeat the check. Word the props comment and the docs this way.
+2. **Generate on Linux x64.** The three lock files are generated on Linux x64 with SDK 11.0.100, after the
+   `global.json` change. (Checked by the controller: the lock files record no apphost or runtime packs, only the
+   `runtime.<rid>.Microsoft.DotNet.ILCompiler` package in each RID section, so no host difference is known; Linux x64
+   is still the one host CI and Renovate use, and item 3 makes CI hold the files to it.)
+3. **New ci.yml job `lock-files`** (ubuntu-24.04; checkout and `setup-dotnet` exactly as `build-test-publish` does,
+   pinned the same way): `dotnet restore TokenSwap.slnx --force-evaluate`, then
+   `git diff --exit-code -- '*packages.lock.json'`, with a comment: a lock file that a fresh resolve on the CI host
+   would write differently (edited by hand to another real version, regenerated on another host, stale after an SDK
+   bump) fails here even where locked mode would accept it. This is the only place a workflow may use
+   `--force-evaluate` (test 6 below). Evidence: the job's commands run locally, passing on the committed files and
+   failing after one transitive version is edited (say which).
+4. **Test 2, wider:** besides the two properties, no other `Directory.Build.props` or `Directory.Build.targets` is in
+   the file list, and no `*.csproj` mentions `RestoreLockedMode`, `RestorePackagesWithLockFile`,
+   `RestoreForceEvaluate`, `RuntimeIdentifiers` or `NuGetLockFilePath`. The condition is compared after removing
+   whitespace and treating `'` and `"` alike, case-insensitively (MSBuild's own reading).
+5. **Test 3, parsing:** the RIDs are the `rid:` values of the `build` matrix plus every `--runtime` followed by a
+   RID-shaped token (`[a-z0-9]+(-[a-z0-9]+)+`); `--runtime ${{ matrix.rid }}` is not a RID and is skipped. Also
+   `RuntimeIdentifiers` must be in ordinal order (NuGet compares the lists in order), and the test says so.
+6. **Test 5:** `sdk.version` matches `^11\.0\.1\d\d$`; parse `global.json` allowing comments and trailing commas.
+   The failure message says the pattern encodes the 11.0.1xx band, as Renovate's patch automerge rule does, and
+   that a band move updates both.
+7. **Test 6, closed.** Forbidden anywhere under `.github/` (workflows and any future composite action), each one
+   data row with a sample that must hit and, where a near miss exists, one that must not:
+   - any `actions/cache` (neither workflow caches anything; a cache of the packages folder or `obj/` defeats the
+     hash check, amendment 1), and `cache:` on a `setup-dotnet` step;
+   - the tokens `RestoreForceEvaluate`, `--locked-mode` (redundant here, and its presence means someone is
+     managing lock mode by hand), `NuGetLockFilePath`, `--lock-file-path`, `NUGET_PACKAGES`,
+     `NUGET_FALLBACK_PACKAGES`, `.nuget/packages`, `http-cache`, `v3-cache`;
+   - `--force-evaluate` outside the `lock-files` job (amendment 3);
+   - `RestoreLockedMode` set to anything but `true`; `CI` set to anything but `true`, matched as a whole word
+     (`CI_REQUIRE_BWRAP: '1'` must not hit; `CI: false` and `-p:CI=false` must).
+   Test it against the real files first: it must pass on them as they will be after this brief.
+8. **Break-it-once, added:** delete the `RestoreLockedMode` line (test 2 fails); add `--force-evaluate` to
+   `build-test-publish`'s Build step, then separately `cache: true` to a `setup-dotnet` step (test 6 fails each time).
+9. **Spelling guard.** `SpellingTests` reads the lock files: `xunit.analyzers` (a NuGet package id) in
+   `TswapTests/packages.lock.json` matches its US-form rule. Add allowlist lines to
+   `TswapTests/Docs/us-spellings-allowed.txt` in its existing format, reason `external name: a NuGet package id`, for
+   exactly the hits `SpellingTests` reports. That file is test data; this is the one change to it allowed.
+10. **Evidence, changed:** for linux-arm64 use `dotnet restore TswapCli/TswapCli.csproj -r linux-arm64` (locked) in
+    place of the publish. The host simulation (`-p:NETCoreSdkPortableRuntimeIdentifier`) changes only which RID
+    section restore needs, not what the SDK bundles; the PR's own CI (four ci.yml legs, three release.yml legs) is
+    the real per-host check, and the report says so. Delete every temporary `NUGET_PACKAGES` folder afterwards. The
+    cost line reports what the measurement shows (ILCompiler and NativeAOT runtime packs, apphost packs), not a guess.
+11. **Docs (Task 3), added:**
+    - A host whose RID is not listed (the macOS Intel build in `docs/install.md`, or Alpine's `linux-musl-x64`)
+      rewrites the lock files on every restore: discard those changes; regenerate and commit lock files only on Linux
+      x64, or take Renovate's PR. Add one sentence to install.md's macOS Intel section too.
+    - NU1004 also comes after an SDK change without regenerated lock files (the ILCompiler version moved).
+    - The exact-SDK note says how to get an exact patch (`dotnet-install.sh --version 11.0.100`, or
+      `dotnet-install.ps1 -Version 11.0.100`), since distribution and Homebrew packages follow the newest patch.
+    - The copied `dotnet` message is made generic: no clone path, no local SDK list.
+12. **Renovate validator:** if `npx` can't reach the npm registry, stop and report; don't skip it.
+13. `docs/design/refactoring-plan.md:140` stays as it is (history).
