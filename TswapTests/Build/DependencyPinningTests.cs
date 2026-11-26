@@ -7,16 +7,19 @@ using Xunit;
 namespace TswapTests.Build;
 
 /// <summary>
-/// Brief T57 (#420): every NuGet package is pinned by version and content hash. Each project has a
+/// Brief T57 (#420): the direct and transitive NuGet packages are pinned by version and content hash (the SDK's runtime
+/// and apphost packs by the exact SDK version only). Each project has a
 /// <c>packages.lock.json</c>; <c>Directory.Build.props</c> turns the lock files on, locks every restore on CI
 /// (<c>CI=true</c>) and lists the runtime identifiers release.yml ships, so the lock files hold a section for each;
 /// <c>global.json</c> names the exact SDK (its ILCompiler packages are in the lock files); and no workflow caches the
 /// packages folder, points restore at another one, or unlocks restore, since a pre-extracted package is trusted through
 /// its stored hash and a cache would defeat the check. File reads only: the file list is
 /// <see cref="MarkdownLinks.AllTracked"/> (its <c>git ls-files</c> is the only process these tests start), no network.
-/// The workflow scan is plain text, so some spellings remain a residual risk: shell quoting
-/// (<c>Restore''LockedMode</c>), quoted YAML keys (<c>"HOME": x</c>), and PowerShell forms it has no row for (it has
-/// rows for <c>Remove-Item env:CI</c>, its aliases and <c>SetEnvironmentVariable('CI', …)</c>).
+/// The workflow scan is plain text and reads only <c>.github/</c>, so these remain a residual risk: shell quoting
+/// (<c>Restore''LockedMode</c>), shell or PowerShell forms it has no row for (it has rows for <c>unset</c>, <c>env -u</c>,
+/// <c>env -i</c>, <c>export -n</c>, <c>printf -v</c>, <c>Remove-Item env:CI</c> and its aliases,
+/// <c>SetEnvironmentVariable('CI', …)</c>), scripts outside <c>.github/</c> that a workflow calls, and a nuget.config
+/// fetched or written at run time by other means than the forms it has rows for.
 /// </summary>
 public partial class DependencyPinningTests
 {
@@ -244,8 +247,12 @@ public partial class DependencyPinningTests
     // ---- 6 ----
 
     /// <summary>One forbidden form under <c>.github/</c>: a name, a finder over a whole file, a sample it must hit and one it must not.</summary>
-    public sealed record ForbiddenForm(string Name, string Why, Func<string, IEnumerable<int>> Find, string Hit, string? Miss)
+    public sealed record ForbiddenForm(string Name, string Why, Func<string, IEnumerable<int>> Find, string Hit, string? Miss,
+        Func<string, bool>? AppliesTo = null)
     {
+        /// <summary>Whether the form is forbidden in the file at <paramref name="repoRelativePath"/> (all files unless limited).</summary>
+        public bool AppliesIn(string repoRelativePath) => AppliesTo?.Invoke(repoRelativePath) ?? true;
+
         public override string ToString() => Name;
     }
 
@@ -256,7 +263,7 @@ public partial class DependencyPinningTests
     /// <summary>An assignment of <paramref name="name"/> (a YAML key, <c>NAME=</c>, <c>-p:NAME=</c>, <c>/p:NAME=</c>) to anything but <c>true</c>.</summary>
     private static IEnumerable<int> AssignedOtherThanTrue(string text, string name)
     {
-        var assignment = new Regex($@"(?<![\w.-]){Regex.Escape(name)}\s*(?:=|:(?!:))\s*(?<v>'[^']*'|""[^""]*""|[^\s;,}}#]*)", RegexOptions.IgnoreCase);
+        var assignment = new Regex($@"(?<![\w.-]){Regex.Escape(name)}['""]?\s*(?:=|:(?!:))\s*(?<v>'[^']*'|""[^""]*""|[^\s;,}}#]*)", RegexOptions.IgnoreCase);
         var lines = text.Split('\n');
         for (var i = 0; i < lines.Length; i++)
         {
@@ -268,15 +275,22 @@ public partial class DependencyPinningTests
         }
     }
 
-    /// <summary>Any assignment of <paramref name="name"/> (a YAML key or <c>NAME=</c> in a command), whatever the value.</summary>
+    /// <summary>Any assignment of <paramref name="name"/> (a YAML key, quoted or not, or <c>NAME=</c> in a command), whatever the value.</summary>
     private static IEnumerable<int> Assigned(string text, string name) =>
-        LinesMatching(text, new Regex($@"(?<![\w.$-]){Regex.Escape(name)}\s*(?:=|:(?!:))", RegexOptions.IgnoreCase));
+        LinesMatching(text, new Regex($@"(?<![\w.$-]){Regex.Escape(name)}['""]?\s*(?:=|:(?!:))", RegexOptions.IgnoreCase));
 
     [GeneratedRegex(@"(?<![\w-])(?:unset\b[^;|&\n]*?(?<![\w-])CI|env\b[^;|&\n]*?(?:-u\s*|--unset[=\s]\s*)CI)(?![\w-])", RegexOptions.IgnoreCase)]
     private static partial Regex CiRemoval();
 
     [GeneratedRegex(@"(?<![\w-])(?:(?:Remove-Item|ri|rm|del|erase|rmdir|rd)\b[^;|&\n]*?(?<![\w-])['""]?env:\\?CI|SetEnvironmentVariable\s*\(\s*(?:name\s*:\s*)?['""]CI['""])(?![\w-])", RegexOptions.IgnoreCase)]
     private static partial Regex CiRemovalPowerShell();
+
+    /// <summary><c>env</c> as a command whose options (before the command it runs) include <c>-i</c>, <c>--ignore-environment</c> or <c>-</c>.</summary>
+    [GeneratedRegex(@"(?:^|[\s;|&(])env(?:\s+(?:-[a-z-]+(?:=\S*)?|-u\s*\S+|[A-Za-z_]\w*=\S*))*?\s+(?:-[a-z]*i[a-z]*|--ignore-environment|-)(?=\s|$)", RegexOptions.IgnoreCase)]
+    private static partial Regex EnvIgnoreEnvironment();
+
+    [GeneratedRegex(@"(?<![\w-])(?:export\s+-[a-z]*n[a-z]*\b[^;|&\n]*?(?<![\w-])CI|printf\s+-v\s*['""]?CI)(?![\w-])", RegexOptions.IgnoreCase)]
+    private static partial Regex CiUnexportedOrOverwritten();
 
     /// <summary>PowerShell lines that remove <c>CI</c>: <c>Remove-Item env:CI</c> (or an alias), <c>[Environment]::SetEnvironmentVariable('CI', …)</c>.</summary>
     private static IEnumerable<int> RemovesCiPowerShell(string text) => LinesMatching(text, CiRemovalPowerShell());
@@ -358,6 +372,8 @@ public partial class DependencyPinningTests
         return lines.Where((_, i) => jobs[i] == job);
     }
 
+    private const string CiWorkflowPath = ".github/workflows/ci.yml";
+
     private static IEnumerable<int> ForceEvaluateOutsideLockFilesJob(string text)
     {
         var jobs = JobOfEachLine(text);
@@ -396,10 +412,32 @@ public partial class DependencyPinningTests
         new("globalPackagesFolder", PackagesFolderWhy, t => Token(t, "globalPackagesFolder"), "run: dotnet nuget config set globalPackagesFolder ./pkgs", "run: echo globalPackagesFolders"),
         new("--configfile", "a NuGet config file can move the packages folder or add fallback folders",
             t => Token(t, "--configfile"), "run: dotnet restore --configfile ./ci.nuget.config", "run: tool --configfiles"),
-        new("--force-evaluate outside lock-files", "only the lock-files job re-resolves (and then diffs the lock files); anywhere else it rewrites them instead of checking",
+        new("--force-evaluate outside lock-files", "only ci.yml's lock-files job re-resolves (and then diffs the lock files); anywhere else it rewrites them instead of checking",
             ForceEvaluateOutsideLockFilesJob,
             "jobs:\n  build-test-publish:\n    steps:\n      - run: dotnet build TokenSwap.slnx --force-evaluate\n",
-            "jobs:\n  lock-files:\n    steps:\n      - run: dotnet restore TokenSwap.slnx --force-evaluate\n  build:\n    steps:\n      - run: tool --force-evaluated\n"),
+            "jobs:\n  lock-files:\n    steps:\n      - run: dotnet restore TokenSwap.slnx --force-evaluate\n  build:\n    steps:\n      - run: tool --force-evaluated\n",
+            AppliesTo: path => path == CiWorkflowPath),
+        new("--force-evaluate outside ci.yml", "only ci.yml's lock-files job re-resolves (and then diffs the lock files); a lock-files job in another file gets no allowance",
+            t => Token(t, "--force-evaluate"),
+            "jobs:\n  lock-files:\n    steps:\n      - run: dotnet restore TokenSwap.slnx --force-evaluate\n",
+            "jobs:\n  lock-files:\n    steps:\n      - run: tool --force-evaluated\n",
+            AppliesTo: path => path != CiWorkflowPath),
+        new("ImportDirectoryBuildProps assigned", "turning Directory.Build.props off unlocks restore and drops the runtime list, while NuGet still reads the lock files",
+            t => Assigned(t, "ImportDirectoryBuildProps"), "run: dotnet build -p:ImportDirectoryBuildProps=false\n          ImportDirectoryBuildProps: false",
+            "run: echo MyImportDirectoryBuildProps=false; ImportDirectoryBuildPropsX=1"),
+        new("DirectoryBuildPropsPath assigned", "pointing at another props file unlocks restore and drops the runtime list, while NuGet still reads the lock files",
+            t => Assigned(t, "DirectoryBuildPropsPath"), "run: dotnet build -p:DirectoryBuildPropsPath=other.props\n          \"DirectoryBuildPropsPath\": other.props",
+            "run: echo MyDirectoryBuildPropsPath=x; DirectoryBuildPropsPathX=1"),
+        new("env -i", "an empty environment drops CI, so the restore is not locked",
+            t => LinesMatching(t, EnvIgnoreEnvironment()),
+            "run: env -i dotnet restore",
+            "run: environment -i x; penv -i x; env -u FOO dotnet test; env --ignore-environments x\nrun: Get-ChildItem \"${env:ProgramFiles(x86)}\\x\" -ErrorAction SilentlyContinue\nrun: env FOO=1 dotnet test -i"),
+        new("export -n CI / printf -v CI", "unexporting or overwriting CI turns the locked restore off",
+            t => LinesMatching(t, CiUnexportedOrOverwritten()),
+            "run: export -n CI; dotnet restore\nrun: printf -v CI '%s' false",
+            "run: export -n CI_REQUIRE_BWRAP; export CI=true; printf -v CI_X '%s' 1; xexport -n CI"),
+        new("fallbackPackageFolders", PackagesFolderWhy, t => Token(t, "fallbackPackageFolders"),
+            "run: printf '<fallbackPackageFolders>' > nuget.config", "run: echo myfallbackPackageFolders fallbackPackageFoldersX"),
         new("RestoreLockedMode not true", "every CI restore is locked (Directory.Build.props)",
             t => AssignedOtherThanTrue(t, "RestoreLockedMode"), "run: dotnet build -p:RestoreLockedMode=false", "run: dotnet build -p:RestoreLockedMode='true' -p:MyRestoreLockedMode=false"),
         new("RestorePackagesWithLockFile not true", "every restore writes and reads the lock files (Directory.Build.props)",
@@ -419,6 +457,8 @@ public partial class DependencyPinningTests
             "run: Remove-Item env:CI_REQUIRE_SE; xdel env:CI; Remove-Item ./CI\nrun: [Environment]::SetEnvironmentVariable('CI_X', $null)"),
         new("HOME assigned", HomeWhy, t => Assigned(t, "HOME"), "        env:\n          HOME: /opt/prefilled\nrun: HOME=/tmp dotnet restore",
             "run: echo \"$HOME/.config\"; TSWAP_HOME=/x; echo ${HOME}; cfg.HOME=x; tool --set-HOME=x\n          XDG_CONFIG_HOME_X: 1"),
+        new("HOME assigned (quoted YAML key)", HomeWhy, t => Assigned(t, "HOME"), "        env:\n          \"HOME\": /opt/prefilled",
+            "        env:\n          \"TSWAP_HOME\": x\n          'HOME_X': y"),
         new("USERPROFILE assigned", HomeWhy, t => Assigned(t, "USERPROFILE"), "        env:\n          USERPROFILE: D:\\prefilled",
             "run: echo \"$env:USERPROFILE\"; MY_USERPROFILE=x"),
         new("APPDATA assigned", HomeWhy, t => Assigned(t, "APPDATA"), "run: APPDATA=/tmp/appdata dotnet restore",
@@ -435,6 +475,10 @@ public partial class DependencyPinningTests
             "run: echo $XDG_CACHE_HOME; MY_XDG_CACHE_HOME=x; XDG_CACHE_HOME_X=1"),
         new("CI not true (YAML key)", "Directory.Build.props locks restore when CI is true; GitHub sets CI=true for every step",
             t => AssignedOtherThanTrue(t, "CI"), "        env:\n          CI: false\n", "          CI_REQUIRE_BWRAP: '1'\nname: CI\n          CI: True\n"),
+        new("CI not true (quoted YAML key)", "Directory.Build.props locks restore when CI is true; GitHub sets CI=true for every step",
+            t => AssignedOtherThanTrue(t, "CI"), "          \"CI\": false\n", "          \"CI\": true\nname: \"CI\"\n          'CI_X': false\n"),
+        new("CI not true (single-quoted YAML key)", "Directory.Build.props locks restore when CI is true; GitHub sets CI=true for every step",
+            t => AssignedOtherThanTrue(t, "CI"), "          'CI': false\n", "          'CI': 'true'\n"),
         new("CI not true (-p:)", "Directory.Build.props locks restore when CI is true; GitHub sets CI=true for every step",
             t => AssignedOtherThanTrue(t, "CI"), "run: dotnet build -p:CI=false", "  # release.yml's bump-version job dispatches CI on its PR's branch\n  # ci.yml builds and packs\nrun: dotnet build /p:CI=true"),
         new("CI not true (command)", "Directory.Build.props locks restore when CI is true; GitHub sets CI=true for every step",
@@ -454,6 +498,55 @@ public partial class DependencyPinningTests
         if (form.Miss is not null)
             Assert.True(!form.Find(form.Miss).Any(), $"The '{form.Name}' scan hits its near miss:\n{form.Miss}");
     }
+
+    [Fact]
+    public void ForceEvaluateAllowance_IsOnlyCiYmlsLockFilesJob()
+    {
+        const string lockFilesJob = "jobs:\n  lock-files:\n    steps:\n      - run: dotnet restore TokenSwap.slnx --force-evaluate\n";
+        int Hits(string path) => ForbiddenForms.Where(f => f.AppliesIn(path)).Sum(f => f.Find(lockFilesJob).Count());
+        Assert.True(Hits(CiWorkflowPath) == 0, "ci.yml's lock-files job may re-resolve with --force-evaluate.");
+        Assert.True(Hits(ReleaseWorkflowPath) > 0, "A lock-files job in release.yml must get no --force-evaluate allowance.");
+        Assert.True(Hits(".github/actions/x/action.yml") > 0, "A lock-files key in a composite action must get no --force-evaluate allowance.");
+    }
+
+    /// <summary>
+    /// The lock-files job (amendment 3) is the only check that a lock file is what a fresh resolve writes: a lock file
+    /// edited consistently to another real version, with its real content hash, passes every locked restore.
+    /// </summary>
+    [Fact]
+    public void LockFilesJob_ReResolvesAndComparesOnLinuxX64()
+    {
+        var lines = JobLines(Read(CiWorkflowPath), "lock-files").Select(l => l.Trim()).ToList();
+        Assert.True(lines.Count > 0, $"{CiWorkflowPath} has no lock-files job (two spaces under jobs:); it re-resolves and diffs the lock files (brief T57).");
+        int IndexOf(string what, Func<string, bool> match)
+        {
+            var i = lines.FindIndex(l => match(l));
+            Assert.True(i >= 0, $"{CiWorkflowPath}'s lock-files job is missing {what}. It must run on ubuntu-24.04 (the host the lock files are "
+                + "generated on), set up the SDK from global.json, then run `dotnet restore TokenSwap.slnx --force-evaluate`, "
+                + "`git diff --exit-code -- '*packages.lock.json'` and fail on an untracked lock file, in that order.");
+            return i;
+        }
+        IndexOf("runs-on: ubuntu-24.04", l => l == "runs-on: ubuntu-24.04");
+        var setup = IndexOf("an actions/setup-dotnet step", l => l.Contains("uses: actions/setup-dotnet@", StringComparison.Ordinal));
+        var globalJson = IndexOf("global-json-file: global.json", l => l == "global-json-file: global.json");
+        var restore = IndexOf("`dotnet restore TokenSwap.slnx --force-evaluate`", l => l.EndsWith("dotnet restore TokenSwap.slnx --force-evaluate", StringComparison.Ordinal));
+        var diff = IndexOf("`git diff --exit-code -- '*packages.lock.json'`", l => l == "git diff --exit-code -- '*packages.lock.json'");
+        var untracked = IndexOf("a check for untracked lock files (`git ls-files --others --exclude-standard -- '*packages.lock.json'`)",
+            l => l.Contains("git ls-files --others --exclude-standard -- '*packages.lock.json'", StringComparison.Ordinal));
+        Assert.True(setup < globalJson && globalJson < restore && restore < diff && diff < untracked,
+            $"{CiWorkflowPath}'s lock-files job: the SDK set-up from global.json, the re-resolve, the diff and the untracked check must come in that order.");
+    }
+
+    /// <summary>Each way of starting a command from an empty environment the <c>env -i</c> row knows, one line each.</summary>
+    [Theory]
+    [InlineData("env -i dotnet restore")]
+    [InlineData("env --ignore-environment PATH=$PATH dotnet build")]
+    [InlineData("env - dotnet test")]
+    [InlineData("env -u FOO -i dotnet restore")]
+    [InlineData("env FOO=1 -i dotnet restore")]
+    [InlineData("x; env -iv dotnet restore")]
+    public void EnvIgnoreEnvironment_FindsEachForm(string line) =>
+        Assert.True(EnvIgnoreEnvironment().IsMatch("run: " + line), $"The env -i scan misses: {line}");
 
     /// <summary>Each PowerShell way of removing <c>CI</c> the scan knows, one line each (the row's sample shows one).</summary>
     [Theory]
@@ -482,6 +575,7 @@ public partial class DependencyPinningTests
         var hits = (from file in githubFiles
                     let text = Read(file)
                     from form in ForbiddenForms
+                    where form.AppliesIn(file)
                     from line in form.Find(text)
                     select $"{file}:{line}: {form.Name} ({form.Why})").ToList();
         Assert.True(hits.Count == 0,

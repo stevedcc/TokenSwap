@@ -1,15 +1,18 @@
 <Project>
 
   <!--
-    Brief T57 (#420): every NuGet package, direct and transitive, is pinned by version and content hash.
+    Brief T57 (#420): the direct and transitive NuGet packages are pinned by version and content hash; the SDK's
+    runtime, NativeAOT runtime and apphost packs are not in the lock files and are pinned by the exact SDK version only.
     - RestorePackagesWithLockFile: each project keeps a packages.lock.json. A full restore compares each package's
       contentHash there with the SHA-512 recorded for the package (NU1403 on a mismatch, NU1004 when the
       dependencies or runtimes changed); a no-op restore (an up-to-date obj/) checks nothing, and a package already
       in the packages folder is trusted through its stored hash. CI checks because each run starts from a fresh
       checkout and an empty packages folder: never cache obj/ or the packages folder in a workflow.
     - RestoreLockedMode under CI=true (GitHub Actions sets it for every step): every restore on CI, including the
-      implicit ones of build, test and a publish for one runtime, fails instead of updating a lock file. Local restores
-      may update them; commit only changes you meant (AGENTS.md, "Building and Running").
+      implicit ones of build, test and a publish for one runtime, fails instead of updating a lock file. A forced
+      re-evaluation (RestoreForceEvaluate, the force-evaluate option of dotnet restore) ignores the lock file and locked
+      mode (warning NU1512) and rewrites it, so workflows use it only in ci.yml's lock-files job, which then diffs the
+      lock files. Local restores may update them; commit only changes you meant (AGENTS.md, "Building and Running").
     - RuntimeIdentifiers: TswapCli is NativeAOT for the host's runtime, so its lock file has a section per runtime
       with the ILCompiler packages. The list is what release.yml publishes (the CI hosts are among them), on all
       three projects because a publish for one runtime sets it for the referenced projects too. Ordinal order, so

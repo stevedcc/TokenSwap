@@ -30,7 +30,7 @@ tswap installscript > installTswap.sh && bash installTswap.sh
 tswap <command>
 ```
 
-**Lock files** (brief T57, #420): each project's `packages.lock.json` pins every package, direct and transitive, by
+**Lock files** (brief T57, #420): each project's `packages.lock.json` pins its direct and transitive packages by
 version and content hash (`Directory.Build.props`). The SDK's runtime, NativeAOT runtime and apphost packs are not in
 the lock files (NuGet's format has no slot for downloaded packs): they are pinned by the exact SDK version only. CI
 restores locked (GitHub sets `CI=true`), so a lock file that doesn't match fails: NU1004 when the dependencies or
