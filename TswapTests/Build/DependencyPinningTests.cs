@@ -19,7 +19,8 @@ namespace TswapTests.Build;
 /// (<c>Restore''LockedMode</c>), shell or PowerShell forms it has no row for (it has rows for <c>unset</c>, <c>env -u</c>,
 /// <c>env -i</c>, <c>export -n</c>, <c>printf -v</c>, <c>Remove-Item env:CI</c> and its aliases,
 /// <c>SetEnvironmentVariable('CI', …)</c>), scripts outside <c>.github/</c> that a workflow calls, and a nuget.config
-/// fetched or written at run time by other means than the forms it has rows for.
+/// fetched or written at run time by other means than the forms it has rows for, and an MSBuild props or targets file
+/// written at run time.
 /// </summary>
 public partial class DependencyPinningTests
 {
@@ -286,10 +287,10 @@ public partial class DependencyPinningTests
     private static partial Regex CiRemovalPowerShell();
 
     /// <summary><c>env</c> as a command whose options (before the command it runs) include <c>-i</c>, <c>--ignore-environment</c> or <c>-</c>.</summary>
-    [GeneratedRegex(@"(?:^|[\s;|&(])env(?:\s+(?:-[a-z-]+(?:=\S*)?|-u\s*\S+|[A-Za-z_]\w*=\S*))*?\s+(?:-[a-z]*i[a-z]*|--ignore-environment|-)(?=\s|$)", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"(?<![\w{.$:-])env(?:\s+(?:-C\s*\S+|--chdir(?:=|\s+)\S+|-u\s*\S+|--unset(?:=|\s+)\S+|-[a-z-]+(?:=\S*)?|[A-Za-z_]\w*=\S*))*?\s+(?:-[a-z]*i[a-z]*|--ignore-environment|-)(?=\s|$|`)", RegexOptions.IgnoreCase)]
     private static partial Regex EnvIgnoreEnvironment();
 
-    [GeneratedRegex(@"(?<![\w-])(?:export\s+-[a-z]*n[a-z]*\b[^;|&\n]*?(?<![\w-])CI|printf\s+-v\s*['""]?CI)(?![\w-])", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"(?<![\w-])(?:(?:export\s+-[a-z]*n[a-z]*|(?:export|declare|typeset)\s+\+[a-z]*x[a-z]*)(?=\s)[^;|&\n]*?(?<![\w-])CI|printf\s+-v\s*['""]?CI)(?![\w-])", RegexOptions.IgnoreCase)]
     private static partial Regex CiUnexportedOrOverwritten();
 
     /// <summary>PowerShell lines that remove <c>CI</c>: <c>Remove-Item env:CI</c> (or an alias), <c>[Environment]::SetEnvironmentVariable('CI', …)</c>.</summary>
@@ -435,7 +436,7 @@ public partial class DependencyPinningTests
         new("export -n CI / printf -v CI", "unexporting or overwriting CI turns the locked restore off",
             t => LinesMatching(t, CiUnexportedOrOverwritten()),
             "run: export -n CI; dotnet restore\nrun: printf -v CI '%s' false",
-            "run: export -n CI_REQUIRE_BWRAP; export CI=true; printf -v CI_X '%s' 1; xexport -n CI"),
+            "run: export -n CI_REQUIRE_BWRAP; export CI=true; printf -v CI_X '%s' 1; xexport -n CI; export +x CI_X; declare +x FOO"),
         new("fallbackPackageFolders", PackagesFolderWhy, t => Token(t, "fallbackPackageFolders"),
             "run: printf '<fallbackPackageFolders>' > nuget.config", "run: echo myfallbackPackageFolders fallbackPackageFoldersX"),
         new("RestoreLockedMode not true", "every CI restore is locked (Directory.Build.props)",
@@ -507,6 +508,9 @@ public partial class DependencyPinningTests
         Assert.True(Hits(CiWorkflowPath) == 0, "ci.yml's lock-files job may re-resolve with --force-evaluate.");
         Assert.True(Hits(ReleaseWorkflowPath) > 0, "A lock-files job in release.yml must get no --force-evaluate allowance.");
         Assert.True(Hits(".github/actions/x/action.yml") > 0, "A lock-files key in a composite action must get no --force-evaluate allowance.");
+        const string otherJob = "jobs:\n  build-test-publish:\n    steps:\n      - run: dotnet build TokenSwap.slnx --force-evaluate\n";
+        var otherJobHits = ForbiddenForms.Where(f => f.AppliesIn(CiWorkflowPath)).Sum(f => f.Find(otherJob).Count());
+        Assert.True(otherJobHits > 0, "In ci.yml, --force-evaluate in a job other than lock-files must hit.");
     }
 
     /// <summary>
@@ -520,21 +524,41 @@ public partial class DependencyPinningTests
         Assert.True(lines.Count > 0, $"{CiWorkflowPath} has no lock-files job (two spaces under jobs:); it re-resolves and diffs the lock files (brief T57).");
         int IndexOf(string what, Func<string, bool> match)
         {
-            var i = lines.FindIndex(l => match(l));
+            var i = lines.FindIndex(l => !l.StartsWith('#') && match(l));
             Assert.True(i >= 0, $"{CiWorkflowPath}'s lock-files job is missing {what}. It must run on ubuntu-24.04 (the host the lock files are "
                 + "generated on), set up the SDK from global.json, then run `dotnet restore TokenSwap.slnx --force-evaluate`, "
                 + "`git diff --exit-code -- '*packages.lock.json'` and fail on an untracked lock file, in that order.");
             return i;
         }
         IndexOf("runs-on: ubuntu-24.04", l => l == "runs-on: ubuntu-24.04");
-        var setup = IndexOf("an actions/setup-dotnet step", l => l.Contains("uses: actions/setup-dotnet@", StringComparison.Ordinal));
+        // checkout and setup-dotnet pinned exactly as build-test-publish pins them (read from ci.yml, not hard-coded).
+        string BuildUses(string action)
+        {
+            var uses = JobLines(Read(CiWorkflowPath), "build-test-publish").Select(l => l.Trim())
+                .Where(l => !l.StartsWith('#')).Select(l => l.StartsWith("- ", StringComparison.Ordinal) ? l[2..].Trim() : l)
+                .Where(l => l.StartsWith($"uses: {action}@", StringComparison.Ordinal)).Distinct().ToList();
+            Assert.True(uses.Count == 1, $"{CiWorkflowPath}'s build-test-publish job should use {action} exactly one way; found: {string.Join(", ", uses)}.");
+            return uses[0];
+        }
+        string Step(string l) => l.StartsWith("- ", StringComparison.Ordinal) ? l[2..].Trim() : l;
+        var checkoutUses = BuildUses("actions/checkout");
+        var setupUses = BuildUses("actions/setup-dotnet");
+        var checkout = IndexOf($"`{checkoutUses}` (as build-test-publish pins it)", l => Step(l) == checkoutUses);
+        var setup = IndexOf($"`{setupUses}` (as build-test-publish pins it)", l => Step(l) == setupUses);
+        Assert.True(lines.Count(l => Step(l).StartsWith("uses: actions/checkout@", StringComparison.Ordinal)) == 1
+                    && lines.Count(l => Step(l).StartsWith("uses: actions/setup-dotnet@", StringComparison.Ordinal)) == 1,
+            $"{CiWorkflowPath}'s lock-files job uses checkout and setup-dotnet once each, pinned as build-test-publish pins them.");
         var globalJson = IndexOf("global-json-file: global.json", l => l == "global-json-file: global.json");
-        var restore = IndexOf("`dotnet restore TokenSwap.slnx --force-evaluate`", l => l.EndsWith("dotnet restore TokenSwap.slnx --force-evaluate", StringComparison.Ordinal));
+        var restore = IndexOf("`dotnet restore TokenSwap.slnx --force-evaluate`", l => l == "dotnet restore TokenSwap.slnx --force-evaluate");
         var diff = IndexOf("`git diff --exit-code -- '*packages.lock.json'`", l => l == "git diff --exit-code -- '*packages.lock.json'");
         var untracked = IndexOf("a check for untracked lock files (`git ls-files --others --exclude-standard -- '*packages.lock.json'`)",
-            l => l.Contains("git ls-files --others --exclude-standard -- '*packages.lock.json'", StringComparison.Ordinal));
-        Assert.True(setup < globalJson && globalJson < restore && restore < diff && diff < untracked,
-            $"{CiWorkflowPath}'s lock-files job: the SDK set-up from global.json, the re-resolve, the diff and the untracked check must come in that order.");
+            l => l == "untracked=$(git ls-files --others --exclude-standard -- '*packages.lock.json')");
+        var untrackedFails = IndexOf("the untracked check's `if [ -n \"$untracked\" ]; then` and `exit 1`",
+            l => l == "if [ -n \"$untracked\" ]; then");
+        var exit = IndexOf("`exit 1` after the untracked check", l => l == "exit 1");
+        Assert.True(checkout < setup && setup < globalJson && globalJson < restore && restore < diff && diff < untracked
+                    && untracked < untrackedFails && untrackedFails < exit,
+            $"{CiWorkflowPath}'s lock-files job: checkout, the SDK set-up from global.json, the re-resolve, the diff and the untracked check (and its exit 1) must come in that order.");
     }
 
     /// <summary>Each way of starting a command from an empty environment the <c>env -i</c> row knows, one line each.</summary>
@@ -545,8 +569,22 @@ public partial class DependencyPinningTests
     [InlineData("env -u FOO -i dotnet restore")]
     [InlineData("env FOO=1 -i dotnet restore")]
     [InlineData("x; env -iv dotnet restore")]
+    [InlineData("/usr/bin/env -i dotnet build")]
+    [InlineData("echo `env -i x`")]
+    [InlineData("env -C /tmp -i x")]
+    [InlineData("env --chdir /tmp -i x")]
     public void EnvIgnoreEnvironment_FindsEachForm(string line) =>
         Assert.True(EnvIgnoreEnvironment().IsMatch("run: " + line), $"The env -i scan misses: {line}");
+
+    /// <summary>Each way of unexporting or overwriting <c>CI</c> the scan knows, one line each.</summary>
+    [Theory]
+    [InlineData("export -n CI")]
+    [InlineData("export +x CI")]
+    [InlineData("declare +x CI")]
+    [InlineData("typeset +x CI")]
+    [InlineData("printf -v CI '%s' false")]
+    public void CiUnexportedOrOverwritten_FindsEachForm(string line) =>
+        Assert.True(CiUnexportedOrOverwritten().IsMatch("run: " + line), $"The unexport scan misses: {line}");
 
     /// <summary>Each PowerShell way of removing <c>CI</c> the scan knows, one line each (the row's sample shows one).</summary>
     [Theory]
