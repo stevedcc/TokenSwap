@@ -42,9 +42,9 @@ commit a lock file change you didn't intend: look at the diff. A new `net11.0/<r
 a host that isn't listed (an Intel Mac, Alpine's `linux-musl-x64`), which rewrites the lock files on every restore:
 discard those changes, and regenerate only on Linux x64 or take Renovate's PR. A new shipped runtime goes into
 `RuntimeIdentifiers` in `Directory.Build.props` and into release.yml together (`DependencyPinningTests` holds them
-equal); `dotnet restore -r <rid>` replaces that list and fails a locked restore, while `dotnet publish --runtime
-<rid>` doesn't. NU1403 on a package nobody changed is a swapped package: stop and report it, never regenerate the lock
-file to make it pass.
+equal); `dotnet restore -r <rid>` replaces that list and fails a locked restore, while
+`dotnet publish --runtime <rid>` doesn't. NU1403 on a package nobody changed is a swapped package: stop and report it,
+never regenerate the lock file to make it pass.
 
 Tests live in `TswapTests/`. On Linux/macOS use
 `./runtests.sh` (`--unit` for in-process tests, ~5 s; `--e2e` for the end-to-end smoke

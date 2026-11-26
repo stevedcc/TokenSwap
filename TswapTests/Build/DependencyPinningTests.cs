@@ -275,7 +275,7 @@ public partial class DependencyPinningTests
     [GeneratedRegex(@"(?<![\w-])(?:unset\b[^;|&\n]*?(?<![\w-])CI|env\b[^;|&\n]*?(?:-u\s*|--unset[=\s]\s*)CI)(?![\w-])", RegexOptions.IgnoreCase)]
     private static partial Regex CiRemoval();
 
-    [GeneratedRegex(@"(?<![\w-])(?:(?:Remove-Item|ri|rm|del|erase|rmdir|rd)\s+(?:-Path\s+|-LiteralPath\s+)?['""]?env:\\?CI|SetEnvironmentVariable\s*\(\s*['""]CI['""])(?![\w-])", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"(?<![\w-])(?:(?:Remove-Item|ri|rm|del|erase|rmdir|rd)\b[^;|&\n]*?(?<![\w-])['""]?env:\\?CI|SetEnvironmentVariable\s*\(\s*(?:name\s*:\s*)?['""]CI['""])(?![\w-])", RegexOptions.IgnoreCase)]
     private static partial Regex CiRemovalPowerShell();
 
     /// <summary>PowerShell lines that remove <c>CI</c>: <c>Remove-Item env:CI</c> (or an alias), <c>[Environment]::SetEnvironmentVariable('CI', …)</c>.</summary>
@@ -415,7 +415,7 @@ public partial class DependencyPinningTests
             "run: env -u CI_REQUIRE_BWRAP dotnet test\nrun: env --unset=CI_REQUIRE_SE dotnet test\nrun: penv -u CI"),
         new("PowerShell removes CI", "removing CI turns the locked restore off (Directory.Build.props locks it when CI is true)",
             RemovesCiPowerShell,
-            "run: Remove-Item env:CI\nrun: del Env:\\CI\nrun: [Environment]::SetEnvironmentVariable('CI', $null)",
+            "run: Remove-Item -Force env:CI",
             "run: Remove-Item env:CI_REQUIRE_SE; xdel env:CI; Remove-Item ./CI\nrun: [Environment]::SetEnvironmentVariable('CI_X', $null)"),
         new("HOME assigned", HomeWhy, t => Assigned(t, "HOME"), "        env:\n          HOME: /opt/prefilled\nrun: HOME=/tmp dotnet restore",
             "run: echo \"$HOME/.config\"; TSWAP_HOME=/x; echo ${HOME}; cfg.HOME=x; tool --set-HOME=x\n          XDG_CONFIG_HOME_X: 1"),
@@ -439,6 +439,8 @@ public partial class DependencyPinningTests
             t => AssignedOtherThanTrue(t, "CI"), "run: dotnet build -p:CI=false", "  # release.yml's bump-version job dispatches CI on its PR's branch\n  # ci.yml builds and packs\nrun: dotnet build /p:CI=true"),
         new("CI not true (command)", "Directory.Build.props locks restore when CI is true; GitHub sets CI=true for every step",
             t => AssignedOtherThanTrue(t, "CI"), "run: CI= dotnet restore TokenSwap.slnx", "run: CI=true dotnet restore TokenSwap.slnx"),
+        new("CI not true (PowerShell)", "Directory.Build.props locks restore when CI is true; GitHub sets CI=true for every step",
+            t => AssignedOtherThanTrue(t, "CI"), "run: $env:CI = $null", "run: $env:CI = 'true'; $env:CI_REQUIRE_SE = $null"),
     ];
 
     public static TheoryData<string> ForbiddenFormRows() => new(ForbiddenForms.Select(f => f.Name));
@@ -452,6 +454,25 @@ public partial class DependencyPinningTests
         if (form.Miss is not null)
             Assert.True(!form.Find(form.Miss).Any(), $"The '{form.Name}' scan hits its near miss:\n{form.Miss}");
     }
+
+    /// <summary>Each PowerShell way of removing <c>CI</c> the scan knows, one line each (the row's sample shows one).</summary>
+    [Theory]
+    [InlineData("Remove-Item env:CI")]
+    [InlineData("Remove-Item -Force env:CI")]
+    [InlineData("Remove-Item -Path:env:CI")]
+    [InlineData("Remove-Item -p env:CI")]
+    [InlineData("Remove-Item -Path 'env:CI'")]
+    [InlineData("Remove-Item -LiteralPath env:CI")]
+    [InlineData("ri env:CI")]
+    [InlineData("rm env:CI")]
+    [InlineData("del Env:\\CI")]
+    [InlineData("erase env:CI")]
+    [InlineData("rmdir env:CI")]
+    [InlineData("rd env:CI")]
+    [InlineData("[Environment]::SetEnvironmentVariable('CI', $null)")]
+    [InlineData("[Environment]::SetEnvironmentVariable(name: 'CI', $null)")]
+    public void PowerShellCiRemoval_FindsEachForm(string line) =>
+        Assert.True(RemovesCiPowerShell("run: " + line).Any(), $"The PowerShell CI-removal scan misses: {line}");
 
     [Fact]
     public void Workflows_NeverCacheOrUnlockNuGet()
