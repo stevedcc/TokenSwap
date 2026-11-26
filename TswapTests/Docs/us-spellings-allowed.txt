@@ -58,5 +58,3 @@ contrib/packaging/package-pkg.sh	die "spctl -a -t install did not say accepted w
 AGENTS.md	<a id="code-organization-tswapcli"></a>	released anchor
 
 # Brief T57 (#420): the NuGet lock files
-TswapTests/packages.lock.json	"xunit.analyzers": "1.18.0",	external name: a NuGet package id
-TswapTests/packages.lock.json	"xunit.analyzers": {	external name: a NuGet package id
