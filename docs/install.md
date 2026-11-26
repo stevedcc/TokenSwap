@@ -18,8 +18,22 @@ You need one hardware backend:
   the TPM: see [portable.md](portable.md#linux-tpm).
 - **Secure Enclave:** a Mac (Apple Silicon tested).
 
-You need the .NET SDK that `global.json` names (.NET 11) at build time only. The compiled binary
-needs no .NET runtime. On x64 (Linux, Windows, Intel Macs) it needs an x86-64-v2 CPU (SSE4.2 and
+You need exactly the .NET SDK version that `global.json` names (.NET 11; `rollForward: disable`, since the lock files
+pin the SDK's own ILCompiler packages) at build time only. Distribution and Homebrew packages follow the newest
+patch, so install the exact one with Microsoft's install script: `./dotnet-install.sh --version <version>` (Windows:
+`./dotnet-install.ps1 -Version <version>`), the version being `sdk.version` in `global.json`. Without it, any
+`dotnet` command in the repository stops with a message that includes these lines:
+
+```text
+A compatible .NET SDK was not found.
+
+Requested SDK version: <version>
+global.json file: <clone>/global.json
+
+Install the [<version>] .NET SDK or update [<clone>/global.json] to match an installed SDK.
+```
+
+The compiled binary needs no .NET runtime. On x64 (Linux, Windows, Intel Macs) it needs an x86-64-v2 CPU (SSE4.2 and
 POPCNT: Intel Nehalem or AMD Bulldozer and later). .NET 11 raised this floor from x86-64-v1; on an
 older CPU the binary stops at start with "The current CPU is missing one or more of the following
 instruction sets". Arm64 (Linux, Apple Silicon) is unchanged.
@@ -221,7 +235,8 @@ xattr -dr com.apple.quarantine <folder>
 ## Building from source
 
 The compiled binary is a native executable with ~20ms startup. No .NET runtime is needed at run
-time. You need the .NET SDK that `global.json` names (.NET 11) to build it ([Prerequisites](#prerequisites)).
+time. You need exactly the .NET SDK version that `global.json` names (.NET 11) to build it
+([Prerequisites](#prerequisites)).
 
 ### Linux (x64)
 
@@ -248,6 +263,9 @@ retired and NativeAOT cannot cross-compile. Build locally:
 dotnet publish TswapCli/TswapCli.csproj -c Release -r osx-x64
 sudo cp TswapCli/bin/Release/net11.0/osx-x64/publish/{tswap,libtswapse.dylib} /usr/local/bin/
 ```
+
+osx-x64 is not a shipped runtime, so this restore adds a `net11.0/osx-x64` section to `TswapCli/packages.lock.json`:
+discard that change (`git checkout -- '*packages.lock.json'`) and never commit it (AGENTS.md, "Building and Running").
 
 ### Windows (x64)
 

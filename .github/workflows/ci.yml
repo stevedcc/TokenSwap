@@ -266,3 +266,27 @@ jobs:
             fi
             echo "loaded libtswapse.dylib on $(sw_vers -productVersion): no Secure Enclave here, the dylib said so"
           fi
+
+  lock-files:
+    # Brief T57 (#420): the committed lock files must be exactly what a fresh resolve on this host writes. A lock file
+    # that a fresh resolve would write differently (edited by hand to another real version, regenerated on another
+    # host, stale after an SDK bump) fails here even where the locked restore of the other jobs would accept it. This
+    # is the only job that may re-resolve with --force-evaluate (DependencyPinningTests); it then diffs the lock files and
+    # fails on a lock file no commit has. The re-resolve ignores locked mode, so its NU1512 warnings are expected here.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Re-resolve and compare the lock files
+        run: |
+          dotnet restore TokenSwap.slnx --force-evaluate
+          git diff --exit-code -- '*packages.lock.json'
+          untracked=$(git ls-files --others --exclude-standard -- '*packages.lock.json')
+          if [ -n "$untracked" ]; then
+            echo "::error::lock files that no commit has: $untracked" >&2
+            exit 1
+          fi

@@ -1,0 +1,97 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net11.0": {
+      "BouncyCastle.Cryptography": {
+        "type": "Direct",
+        "requested": "[2.7.0, 2.7.0]",
+        "resolved": "2.7.0",
+        "contentHash": "U+12df8UEWHgBi04YVf/Lgi2dy3SItlIYvHjjEVa/BngCQIzDCDRBk50DDByCfDvSbe5pRNFr3b7UrVK2kMcLw=="
+      },
+      "Konscious.Security.Cryptography.Argon2": {
+        "type": "Direct",
+        "requested": "[1.3.1, 1.3.1]",
+        "resolved": "1.3.1",
+        "contentHash": "T+OAGwzYYXftahpOxO7J4xA5K6urxwGnWQf3M+Jpi+76Azv/0T3M5SuN+h7/QvXuiqNw3ZEZ5QqVLI5ygDAylw==",
+        "dependencies": {
+          "Konscious.Security.Cryptography.Blake2": "1.1.1"
+        }
+      },
+      "Yubico.YubiKey": {
+        "type": "Direct",
+        "requested": "[1.18.1, 1.18.1]",
+        "resolved": "1.18.1",
+        "contentHash": "zaBUQOOMg9zYU80uN6HECmWodLvQnJ49/5gtW1OUWvIc5IPDGevQKlL51MQsInlkcQbM7lBia+MU1r6oukQEzw==",
+        "dependencies": {
+          "CommunityToolkit.Diagnostics": "8.4.2",
+          "Microsoft.Bcl.AsyncInterfaces": "10.0.14",
+          "Yubico.Core": "1.18.1"
+        }
+      },
+      "CommunityToolkit.Diagnostics": {
+        "type": "Transitive",
+        "resolved": "8.4.2",
+        "contentHash": "WC0fk3A49gk6kWjhSZ8CDgPkv+wPHGhMFxUrKRlLtzUYXRFOdTDQ4RsEkZnI9ApO7eJh6nqT2MFmwFptpMs7aw=="
+      },
+      "Konscious.Security.Cryptography.Blake2": {
+        "type": "Transitive",
+        "resolved": "1.1.1",
+        "contentHash": "odwOyzj/J/lHJZNwFWJGU/LRecBShupAJ2S8TQqZfhUe9niHzu/voBYK5wuVKsvSpzbfupKQYZguVyIk1sgOkQ=="
+      },
+      "Microsoft.Bcl.AsyncInterfaces": {
+        "type": "Transitive",
+        "resolved": "10.0.14",
+        "contentHash": "HCu9NbiXDh9++j4eRNRHCOiKPw/7I5UEJlFIRaDM3v0+ttZaH8p8rjxSWfNgP2cGv5JAa4EZnmc/nlcUOTFlpA=="
+      },
+      "Microsoft.Bcl.HashCode": {
+        "type": "Transitive",
+        "resolved": "6.0.0",
+        "contentHash": "GI4jcoi6eC9ZhNOQylIBaWOQjyGaR8T6N3tC1u8p3EXfndLCVNNWa+Zp+ocjvvS3kNBN09Zma2HXL0ezO0dRfw=="
+      },
+      "Yubico.Core": {
+        "type": "Transitive",
+        "resolved": "1.18.1",
+        "contentHash": "RGbcmI+QVHcd81r7hlxXfc0X8DWJBNXEkCbweqCizJ8bJ/izlvgCX0TOZFzOUQKLVT8+31vuoEaIIUoFyOI9fg==",
+        "dependencies": {
+          "CommunityToolkit.Diagnostics": "8.4.2",
+          "Microsoft.Bcl.AsyncInterfaces": "10.0.14",
+          "Microsoft.Bcl.HashCode": "6.0.0",
+          "Yubico.NativeShims": "1.18.1"
+        }
+      },
+      "Yubico.NativeShims": {
+        "type": "Transitive",
+        "resolved": "1.18.1",
+        "contentHash": "wY0h9CadqsHY39M5dg8Lx+kRl4tkiO4e+NQS7lLAt4DeT3dcR0y+8KoSRNoUOpazFGrxQPqxr/aFM7OQTvhnHA=="
+      }
+    },
+    "net11.0/linux-arm64": {
+      "Yubico.NativeShims": {
+        "type": "Transitive",
+        "resolved": "1.18.1",
+        "contentHash": "wY0h9CadqsHY39M5dg8Lx+kRl4tkiO4e+NQS7lLAt4DeT3dcR0y+8KoSRNoUOpazFGrxQPqxr/aFM7OQTvhnHA=="
+      }
+    },
+    "net11.0/linux-x64": {
+      "Yubico.NativeShims": {
+        "type": "Transitive",
+        "resolved": "1.18.1",
+        "contentHash": "wY0h9CadqsHY39M5dg8Lx+kRl4tkiO4e+NQS7lLAt4DeT3dcR0y+8KoSRNoUOpazFGrxQPqxr/aFM7OQTvhnHA=="
+      }
+    },
+    "net11.0/osx-arm64": {
+      "Yubico.NativeShims": {
+        "type": "Transitive",
+        "resolved": "1.18.1",
+        "contentHash": "wY0h9CadqsHY39M5dg8Lx+kRl4tkiO4e+NQS7lLAt4DeT3dcR0y+8KoSRNoUOpazFGrxQPqxr/aFM7OQTvhnHA=="
+      }
+    },
+    "net11.0/win-x64": {
+      "Yubico.NativeShims": {
+        "type": "Transitive",
+        "resolved": "1.18.1",
+        "contentHash": "wY0h9CadqsHY39M5dg8Lx+kRl4tkiO4e+NQS7lLAt4DeT3dcR0y+8KoSRNoUOpazFGrxQPqxr/aFM7OQTvhnHA=="
+      }
+    }
+  }
+}
