@@ -30,6 +30,20 @@ tswap installscript > installTswap.sh && bash installTswap.sh
 tswap <command>
 ```
 
+**Lock files** (brief T57, #420): each project's `packages.lock.json` pins every package, direct and transitive, by
+version and content hash (`Directory.Build.props`). CI restores locked (GitHub sets `CI=true`), so a lock file that
+doesn't match fails: NU1004 when the dependencies or runtimes changed (also after an SDK change without regenerated
+lock files: the SDK's ILCompiler version moved), NU1403 when a package's content changed. ci.yml's `lock-files` job
+also fails when a fresh resolve would write a lock file differently. After a deliberate dependency change run
+`dotnet restore TokenSwap.slnx` (`--force-evaluate` if nothing else changed) on Linux x64 with the SDK `global.json`
+names, and commit the lock files with the project file. Never commit a lock file change you didn't intend: look at
+the diff. A new `net11.0/<rid>` section means the restore ran on a host that isn't listed (an Intel Mac, Alpine's
+`linux-musl-x64`), which rewrites the lock files on every restore: discard those changes, and regenerate only on Linux
+x64 or take Renovate's PR. A new shipped runtime goes into `RuntimeIdentifiers` in `Directory.Build.props` and into
+release.yml together (`DependencyPinningTests` holds them equal); `dotnet restore -r <rid>` replaces that list and
+fails a locked restore, while `dotnet publish --runtime <rid>` doesn't. NU1403 on a package nobody changed is a
+swapped package: stop and report it, never regenerate the lock file to make it pass.
+
 Tests live in `TswapTests/`. On Linux/macOS use
 `./runtests.sh` (`--unit` for in-process tests, ~5 s; `--e2e` for the end-to-end smoke
 tests that spawn the built binary; no flag runs both). `--perf` runs `Category=Perf`, the wall-clock
@@ -348,5 +362,10 @@ When working in this repository and tswap is initialised (YubiKey present), foll
 - YubiKeys with slot 2 configured for HMAC-SHA1 challenge-response: the commands are in
   [docs/setup.md, "Preparing a YubiKey"](docs/setup.md#preparing-a-yubikey). Prefer the touch-required
   setting; a key without touch (less secure: no button press) is for CI/automation only.
-- The .NET SDK that `global.json` names (.NET 11; build time only)
+- Exactly the .NET SDK version that `global.json` names (.NET 11, `rollForward: disable`, since the lock files pin the
+  SDK's own ILCompiler packages; build time only). Distribution and Homebrew packages follow the newest patch: install
+  the exact one with `dotnet-install.sh --version <version>` (Windows: `dotnet-install.ps1 -Version <version>`), the
+  version being `sdk.version` in `global.json`. Without it, `dotnet` in the repository prints `A compatible .NET SDK
+  was not found.`, `Requested SDK version: <version>` and `Install the [<version>] .NET SDK or update
+  [<clone>/global.json] to match an installed SDK.`
 - For sudo commands: copy the compiled binary to `/usr/local/bin`
