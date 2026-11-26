@@ -29,6 +29,10 @@
   // tswap releases are manual tags, so Croft's automergeStrategy 'rebase' (kept for its auto-release workflow) isn't
   // needed here.
   packageRules: [
+    // Brief T57 (#420): the NuGet manager updates the packages.lock.json files in the same PR as a bump (and for a
+    // global.json change too), so no lock-file option is needed. lockFileMaintenance stays off on purpose: NuGet picks
+    // the lowest version that satisfies each range, so regenerating an unchanged lock file changes nothing, and
+    // transitive versions move only when a direct package's bump moves them.
     {
       description: 'NuGet: an update always comes as a PR and keeps an exact version exact. NuGet reads a plain 1.2.3 as a minimum; [1.2.3] is exact, which is how tswap pins.',
       matchDatasources: ['nuget'],
@@ -75,7 +79,7 @@
       dependencyDashboardApproval: true,
     },
     {
-      description: 'global.json SDK: a patch inside the pinned feature band 11.0.1xx automerges (after the catch-all rule above, so it wins)',
+      description: 'global.json SDK: a patch inside the pinned feature band 11.0.1xx automerges (after the catch-all rule above, so it wins). The PR carries the regenerated packages.lock.json files (the SDK brings the ILCompiler and ILLink packages they pin), and CI checks them: a PR without them fails the locked restore.',
       matchDatasources: ['dotnet-version'],
       matchNewValue: '/^11\\.0\\.1\\d\\d$/',
       dependencyDashboardApproval: false,
