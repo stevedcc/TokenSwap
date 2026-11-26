@@ -31,7 +31,9 @@ tswap <command>
 ```
 
 **Lock files** (brief T57, #420): each project's `packages.lock.json` pins every package, direct and transitive, by
-version and content hash (`Directory.Build.props`). CI restores locked (GitHub sets `CI=true`), so a lock file that
+version and content hash (`Directory.Build.props`). The SDK's runtime, NativeAOT runtime and apphost packs are not
+in the lock files (NuGet's format has no slot for downloaded packs): they are pinned by the exact SDK version only.
+CI restores locked (GitHub sets `CI=true`), so a lock file that
 doesn't match fails: NU1004 when the dependencies or runtimes changed (also after an SDK change without regenerated
 lock files: the SDK's ILCompiler version moved), NU1403 when a package's content changed. ci.yml's `lock-files` job
 also fails when a fresh resolve would write a lock file differently. After a deliberate dependency change run
