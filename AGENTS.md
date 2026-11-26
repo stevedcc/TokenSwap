@@ -31,20 +31,20 @@ tswap <command>
 ```
 
 **Lock files** (brief T57, #420): each project's `packages.lock.json` pins every package, direct and transitive, by
-version and content hash (`Directory.Build.props`). The SDK's runtime, NativeAOT runtime and apphost packs are not
-in the lock files (NuGet's format has no slot for downloaded packs): they are pinned by the exact SDK version only.
-CI restores locked (GitHub sets `CI=true`), so a lock file that
-doesn't match fails: NU1004 when the dependencies or runtimes changed (also after an SDK change without regenerated
-lock files: the SDK's ILCompiler version moved), NU1403 when a package's content changed. ci.yml's `lock-files` job
-also fails when a fresh resolve would write a lock file differently. After a deliberate dependency change run
-`dotnet restore TokenSwap.slnx` (`--force-evaluate` if nothing else changed) on Linux x64 with the SDK `global.json`
-names, and commit the lock files with the project file. Never commit a lock file change you didn't intend: look at
-the diff. A new `net11.0/<rid>` section means the restore ran on a host that isn't listed (an Intel Mac, Alpine's
-`linux-musl-x64`), which rewrites the lock files on every restore: discard those changes, and regenerate only on Linux
-x64 or take Renovate's PR. A new shipped runtime goes into `RuntimeIdentifiers` in `Directory.Build.props` and into
-release.yml together (`DependencyPinningTests` holds them equal); `dotnet restore -r <rid>` replaces that list and
-fails a locked restore, while `dotnet publish --runtime <rid>` doesn't. NU1403 on a package nobody changed is a
-swapped package: stop and report it, never regenerate the lock file to make it pass.
+version and content hash (`Directory.Build.props`). The SDK's runtime, NativeAOT runtime and apphost packs are not in
+the lock files (NuGet's format has no slot for downloaded packs): they are pinned by the exact SDK version only. CI
+restores locked (GitHub sets `CI=true`), so a lock file that doesn't match fails: NU1004 when the dependencies or
+runtimes changed (also after an SDK change without regenerated lock files: the SDK's ILCompiler version moved), NU1403
+when a package's content changed. ci.yml's `lock-files` job also fails when a fresh resolve would write a lock file
+differently. After a deliberate dependency change run `dotnet restore TokenSwap.slnx` (`--force-evaluate` if nothing
+else changed) on Linux x64 with the SDK `global.json` names, and commit the lock files with the project file. Never
+commit a lock file change you didn't intend: look at the diff. A new `net11.0/<rid>` section means the restore ran on
+a host that isn't listed (an Intel Mac, Alpine's `linux-musl-x64`), which rewrites the lock files on every restore:
+discard those changes, and regenerate only on Linux x64 or take Renovate's PR. A new shipped runtime goes into
+`RuntimeIdentifiers` in `Directory.Build.props` and into release.yml together (`DependencyPinningTests` holds them
+equal); `dotnet restore -r <rid>` replaces that list and fails a locked restore, while `dotnet publish --runtime
+<rid>` doesn't. NU1403 on a package nobody changed is a swapped package: stop and report it, never regenerate the lock
+file to make it pass.
 
 Tests live in `TswapTests/`. On Linux/macOS use
 `./runtests.sh` (`--unit` for in-process tests, ~5 s; `--e2e` for the end-to-end smoke
