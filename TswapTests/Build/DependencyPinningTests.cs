@@ -277,7 +277,8 @@ public partial class DependencyPinningTests
     private static IEnumerable<int> RemovesCi(string text) => LinesMatching(text, CiRemoval());
 
     private const string HomeWhy =
-        "HOME, USERPROFILE and APPDATA decide where the user-level NuGet config and the packages folder are, so moving "
+        "HOME, USERPROFILE, APPDATA, LOCALAPPDATA and DOTNET_CLI_HOME decide where the user-level NuGet config, caches and "
+        + "the packages folder are, so moving "
         + "them can point restore at a pre-extracted folder whose packages it trusts by their stored hash";
 
     private static IEnumerable<int> Token(string text, string token) =>
@@ -404,6 +405,10 @@ public partial class DependencyPinningTests
             "run: echo \"$env:USERPROFILE\"; MY_USERPROFILE=x"),
         new("APPDATA assigned", HomeWhy, t => Assigned(t, "APPDATA"), "run: APPDATA=/tmp/appdata dotnet restore",
             "run: echo $APPDATA; MYAPPDATA=x; APPDATA_DIR=x"),
+        new("LOCALAPPDATA assigned", HomeWhy, t => Assigned(t, "LOCALAPPDATA"), "        env:\n          LOCALAPPDATA: D:\\prefilled",
+            "run: echo $LOCALAPPDATA; MYLOCALAPPDATA=x; LOCALAPPDATA_X=1"),
+        new("DOTNET_CLI_HOME assigned", HomeWhy, t => Assigned(t, "DOTNET_CLI_HOME"), "run: DOTNET_CLI_HOME=/tmp/clihome dotnet restore",
+            "run: echo $DOTNET_CLI_HOME; MY_DOTNET_CLI_HOME=x; DOTNET_CLI_HOME_X=1"),
         new("CI not true (YAML key)", "Directory.Build.props locks restore when CI is true; GitHub sets CI=true for every step",
             t => AssignedOtherThanTrue(t, "CI"), "        env:\n          CI: false\n", "          CI_REQUIRE_BWRAP: '1'\nname: CI\n          CI: True\n"),
         new("CI not true (-p:)", "Directory.Build.props locks restore when CI is true; GitHub sets CI=true for every step",
