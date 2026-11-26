@@ -14,7 +14,9 @@ namespace TswapTests.Build;
 /// packages folder, points restore at another one, or unlocks restore, since a pre-extracted package is trusted through
 /// its stored hash and a cache would defeat the check. File reads only: the file list is
 /// <see cref="MarkdownLinks.AllTracked"/> (its <c>git ls-files</c> is the only process these tests start), no network.
-/// The workflow scan is plain text, so shell-quoting evasions (<c>Restore''LockedMode</c>) remain a residual risk.
+/// The workflow scan is plain text, so some spellings remain a residual risk: shell quoting
+/// (<c>Restore''LockedMode</c>), quoted YAML keys (<c>"HOME": x</c>), and PowerShell forms it has no row for (it has
+/// rows for <c>Remove-Item env:CI</c>, its aliases and <c>SetEnvironmentVariable('CI', …)</c>).
 /// </summary>
 public partial class DependencyPinningTests
 {
@@ -273,13 +275,25 @@ public partial class DependencyPinningTests
     [GeneratedRegex(@"(?<![\w-])(?:unset\b[^;|&\n]*?(?<![\w-])CI|env\b[^;|&\n]*?(?:-u\s*|--unset[=\s]\s*)CI)(?![\w-])", RegexOptions.IgnoreCase)]
     private static partial Regex CiRemoval();
 
+    [GeneratedRegex(@"(?<![\w-])(?:(?:Remove-Item|ri|rm|del|erase|rmdir|rd)\s+(?:-Path\s+|-LiteralPath\s+)?['""]?env:\\?CI|SetEnvironmentVariable\s*\(\s*['""]CI['""])(?![\w-])", RegexOptions.IgnoreCase)]
+    private static partial Regex CiRemovalPowerShell();
+
+    /// <summary>PowerShell lines that remove <c>CI</c>: <c>Remove-Item env:CI</c> (or an alias), <c>[Environment]::SetEnvironmentVariable('CI', …)</c>.</summary>
+    private static IEnumerable<int> RemovesCiPowerShell(string text) => LinesMatching(text, CiRemovalPowerShell());
+
     /// <summary>Lines that remove <c>CI</c> from the environment: <c>unset … CI</c>, <c>env -u CI</c>, <c>env --unset=CI</c>.</summary>
     private static IEnumerable<int> RemovesCi(string text) => LinesMatching(text, CiRemoval());
 
     private const string HomeWhy =
-        "HOME, USERPROFILE, APPDATA, LOCALAPPDATA and DOTNET_CLI_HOME decide where the user-level NuGet config, caches and "
-        + "the packages folder are, so moving "
-        + "them can point restore at a pre-extracted folder whose packages it trusts by their stored hash";
+        "HOME, USERPROFILE, APPDATA and LOCALAPPDATA decide where NuGet's user-level config, caches and packages folder "
+        + "are, so moving them can point restore at a pre-extracted folder whose packages it trusts by their stored hash";
+
+    private const string CliHomeWhy =
+        "DOTNET_CLI_HOME moves the .NET CLI's profile root; forbidden fail closed, since no workflow needs it";
+
+    private const string XdgWhy =
+        "XDG_CONFIG_HOME, XDG_DATA_HOME and XDG_CACHE_HOME move the per-user config, data and cache folders on Linux and "
+        + "macOS, where NuGet keeps its caches; forbidden fail closed, since no workflow needs them";
 
     private static IEnumerable<int> Token(string text, string token) =>
         LinesMatching(text, new Regex($@"(?<![\w-]){Regex.Escape(token)}(?![\w-])", RegexOptions.IgnoreCase));
@@ -395,20 +409,30 @@ public partial class DependencyPinningTests
             t => AssignedOtherThanTrue(t, "RestorePackagesWithLockFile"), "        env:\n          RestorePackagesWithLockFile: false\n",
             "        env:\n          RestorePackagesWithLockFile: 'true'\n"),
         new("unset CI", "removing CI turns the locked restore off (Directory.Build.props locks it when CI is true)",
-            RemovesCi, "run: unset FOO CI; dotnet restore TokenSwap.slnx", "run: unset CI_REQUIRE_BWRAP; echo CI"),
+            RemovesCi, "run: unset FOO CI; dotnet restore TokenSwap.slnx", "run: unset CI_REQUIRE_BWRAP; echo CI\nrun: xunset CI"),
         new("env -u CI", "removing CI turns the locked restore off (Directory.Build.props locks it when CI is true)",
             RemovesCi, "run: env -u CI dotnet restore TokenSwap.slnx\nrun: env --unset=CI dotnet build",
-            "run: env -u CI_REQUIRE_BWRAP dotnet test\nrun: env --unset=CI_REQUIRE_SE dotnet test"),
+            "run: env -u CI_REQUIRE_BWRAP dotnet test\nrun: env --unset=CI_REQUIRE_SE dotnet test\nrun: penv -u CI"),
+        new("PowerShell removes CI", "removing CI turns the locked restore off (Directory.Build.props locks it when CI is true)",
+            RemovesCiPowerShell,
+            "run: Remove-Item env:CI\nrun: del Env:\\CI\nrun: [Environment]::SetEnvironmentVariable('CI', $null)",
+            "run: Remove-Item env:CI_REQUIRE_SE; xdel env:CI; Remove-Item ./CI\nrun: [Environment]::SetEnvironmentVariable('CI_X', $null)"),
         new("HOME assigned", HomeWhy, t => Assigned(t, "HOME"), "        env:\n          HOME: /opt/prefilled\nrun: HOME=/tmp dotnet restore",
-            "run: echo \"$HOME/.config\"; TSWAP_HOME=/x; echo ${HOME}\n          XDG_CONFIG_HOME_X: 1"),
+            "run: echo \"$HOME/.config\"; TSWAP_HOME=/x; echo ${HOME}; cfg.HOME=x; tool --set-HOME=x\n          XDG_CONFIG_HOME_X: 1"),
         new("USERPROFILE assigned", HomeWhy, t => Assigned(t, "USERPROFILE"), "        env:\n          USERPROFILE: D:\\prefilled",
             "run: echo \"$env:USERPROFILE\"; MY_USERPROFILE=x"),
         new("APPDATA assigned", HomeWhy, t => Assigned(t, "APPDATA"), "run: APPDATA=/tmp/appdata dotnet restore",
             "run: echo $APPDATA; MYAPPDATA=x; APPDATA_DIR=x"),
         new("LOCALAPPDATA assigned", HomeWhy, t => Assigned(t, "LOCALAPPDATA"), "        env:\n          LOCALAPPDATA: D:\\prefilled",
             "run: echo $LOCALAPPDATA; MYLOCALAPPDATA=x; LOCALAPPDATA_X=1"),
-        new("DOTNET_CLI_HOME assigned", HomeWhy, t => Assigned(t, "DOTNET_CLI_HOME"), "run: DOTNET_CLI_HOME=/tmp/clihome dotnet restore",
+        new("DOTNET_CLI_HOME assigned", CliHomeWhy, t => Assigned(t, "DOTNET_CLI_HOME"), "run: DOTNET_CLI_HOME=/tmp/clihome dotnet restore",
             "run: echo $DOTNET_CLI_HOME; MY_DOTNET_CLI_HOME=x; DOTNET_CLI_HOME_X=1"),
+        new("XDG_CONFIG_HOME assigned", XdgWhy, t => Assigned(t, "XDG_CONFIG_HOME"), "        env:\n          XDG_CONFIG_HOME: /opt/prefilled",
+            "run: echo $XDG_CONFIG_HOME; MY_XDG_CONFIG_HOME=x; XDG_CONFIG_HOME_X=1"),
+        new("XDG_DATA_HOME assigned", XdgWhy, t => Assigned(t, "XDG_DATA_HOME"), "run: XDG_DATA_HOME=/tmp/data dotnet restore",
+            "run: echo $XDG_DATA_HOME; MY_XDG_DATA_HOME=x; XDG_DATA_HOME_X=1"),
+        new("XDG_CACHE_HOME assigned", XdgWhy, t => Assigned(t, "XDG_CACHE_HOME"), "        env:\n          XDG_CACHE_HOME: /opt/prefilled",
+            "run: echo $XDG_CACHE_HOME; MY_XDG_CACHE_HOME=x; XDG_CACHE_HOME_X=1"),
         new("CI not true (YAML key)", "Directory.Build.props locks restore when CI is true; GitHub sets CI=true for every step",
             t => AssignedOtherThanTrue(t, "CI"), "        env:\n          CI: false\n", "          CI_REQUIRE_BWRAP: '1'\nname: CI\n          CI: True\n"),
         new("CI not true (-p:)", "Directory.Build.props locks restore when CI is true; GitHub sets CI=true for every step",
