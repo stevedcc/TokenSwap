@@ -211,3 +211,14 @@ These bind and win over the text above where they differ.
 17. **Test 3 also reads `-r <rid>`** (same RID-shaped token rule as `--runtime`).
 18. **Required check.** The report asks the owner to add `lock-files` to the ruleset's required checks (ci.yml's
     comment names ruleset 27270067); until then it is advisory, and the report says so.
+
+## Amendment after brief review round 3 (MiMo)
+
+19. **Every file that can set restore properties is checked.** Test 2 also asserts: `Directory.Build.props` sets
+    exactly the three properties `RestorePackagesWithLockFile`, `RestoreLockedMode`, `RuntimeIdentifiers` and nothing
+    else (no other property, item, `Import` or target); and the file list holds no `*.props`, `*.targets` or `*.rsp`
+    other than that one file (MSBuild reads `Directory.Build.rsp` from parent folders on its own, and a project can
+    import any `.props`). Test 6 adds the `--configfile` row. Negative samples: `read -r file` (release.yml) for
+    test 3's `-r` rule, `name: CI` (ci.yml) for the `CI` row. YAML values are read as YAML (`'true'` and `True` count
+    as `true`); a banned token inside a workflow comment still counts (the scan is plain text, so the new job's
+    comment must not name a banned token other than its own `--force-evaluate`).
