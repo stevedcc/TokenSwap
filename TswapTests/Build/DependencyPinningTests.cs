@@ -14,6 +14,7 @@ namespace TswapTests.Build;
 /// packages folder, points restore at another one, or unlocks restore, since a pre-extracted package is trusted through
 /// its stored hash and a cache would defeat the check. File reads only: the file list is
 /// <see cref="MarkdownLinks.AllTracked"/> (its <c>git ls-files</c> is the only process these tests start), no network.
+/// The workflow scan is plain text, so shell-quoting evasions (<c>Restore''LockedMode</c>) remain a residual risk.
 /// </summary>
 public partial class DependencyPinningTests
 {
@@ -265,6 +266,20 @@ public partial class DependencyPinningTests
         }
     }
 
+    /// <summary>Any assignment of <paramref name="name"/> (a YAML key or <c>NAME=</c> in a command), whatever the value.</summary>
+    private static IEnumerable<int> Assigned(string text, string name) =>
+        LinesMatching(text, new Regex($@"(?<![\w.$-]){Regex.Escape(name)}\s*(?:=|:(?!:))", RegexOptions.IgnoreCase));
+
+    [GeneratedRegex(@"(?<![\w-])(?:unset\b[^;|&\n]*?(?<![\w-])CI|env\b[^;|&\n]*?(?:-u\s*|--unset[=\s]\s*)CI)(?![\w-])", RegexOptions.IgnoreCase)]
+    private static partial Regex CiRemoval();
+
+    /// <summary>Lines that remove <c>CI</c> from the environment: <c>unset … CI</c>, <c>env -u CI</c>, <c>env --unset=CI</c>.</summary>
+    private static IEnumerable<int> RemovesCi(string text) => LinesMatching(text, CiRemoval());
+
+    private const string HomeWhy =
+        "HOME, USERPROFILE and APPDATA decide where the user-level NuGet config and the packages folder are, so moving "
+        + "them can point restore at a pre-extracted folder whose packages it trusts by their stored hash";
+
     private static IEnumerable<int> Token(string text, string token) =>
         LinesMatching(text, new Regex($@"(?<![\w-]){Regex.Escape(token)}(?![\w-])", RegexOptions.IgnoreCase));
 
@@ -341,37 +356,54 @@ public partial class DependencyPinningTests
     public static readonly IReadOnlyList<ForbiddenForm> ForbiddenForms =
     [
         new("actions/cache", "neither workflow caches anything; a cached packages folder or obj/ defeats the hash check",
-            t => Token(t, "actions/cache"), "      - uses: actions/cache@v4", "      - uses: actions/checkout@v4"),
+            t => Token(t, "actions/cache"), "      - uses: actions/cache@v4", "      - uses: actions/cachet@v1"),
         new("setup-dotnet cache:", "setup-dotnet's cache restores the packages folder from an earlier run",
             SetupDotnetCache,
             "      - uses: actions/setup-dotnet@v4\n        with:\n          global-json-file: global.json\n          cache: true\n",
             "      - uses: actions/setup-dotnet@v4\n        with:\n          global-json-file: global.json\n      - uses: actions/setup-node@v4\n        with:\n          cache: npm\n"),
         new("RestoreForceEvaluate", "a forced re-resolve rewrites the lock files instead of checking them",
-            t => Token(t, "RestoreForceEvaluate"), "run: dotnet restore -p:RestoreForceEvaluate=true", null),
+            t => Token(t, "RestoreForceEvaluate"), "run: dotnet restore -p:RestoreForceEvaluate=true", "run: dotnet restore -p:NoRestoreForceEvaluate=1"),
         new("--locked-mode", "locked mode comes from Directory.Build.props on CI; a workflow managing it by hand is a smell",
-            t => Token(t, "--locked-mode"), "run: dotnet restore --locked-mode", "run: cargo install --locked --git https://example.invalid/x"),
+            t => Token(t, "--locked-mode"), "run: dotnet restore --locked-mode", "run: tool --locked-modes; cargo install --locked --git https://example.invalid/x"),
         new("NuGetLockFilePath", "the lock file lives beside its project, where the guard tests read it",
-            t => Token(t, "NuGetLockFilePath"), "run: dotnet restore -p:NuGetLockFilePath=other.json", null),
+            t => Token(t, "NuGetLockFilePath"), "run: dotnet restore -p:NuGetLockFilePath=other.json", "run: echo NuGetLockFilePaths"),
         new("--lock-file-path", "the lock file lives beside its project, where the guard tests read it",
-            t => Token(t, "--lock-file-path"), "run: dotnet restore --lock-file-path other.json", null),
-        new("NUGET_PACKAGES", PackagesFolderWhy, t => Token(t, "NUGET_PACKAGES"), "  NUGET_PACKAGES: /tmp/pkgs", "  NUGET_FALLBACK_PACKAGES_X: 1"),
-        new("NUGET_FALLBACK_PACKAGES", PackagesFolderWhy, t => Token(t, "NUGET_FALLBACK_PACKAGES"), "  NUGET_FALLBACK_PACKAGES: /opt/pkgs", null),
-        new(".nuget/packages", PackagesFolderWhy, t => Token(t, ".nuget/packages"), "          path: ~/.nuget/packages", null),
-        new("http-cache", PackagesFolderWhy, t => Token(t, "http-cache"), "run: dotnet nuget locals http-cache --list", null),
-        new("v3-cache", PackagesFolderWhy, t => Token(t, "v3-cache"), "          path: ~/.local/share/NuGet/v3-cache", null),
-        new("--packages", PackagesFolderWhy, t => Token(t, "--packages"), "run: dotnet restore --packages ./pkgs", "run: dotnet restore TokenSwap.slnx"),
-        new("RestorePackagesPath", PackagesFolderWhy, t => Token(t, "RestorePackagesPath"), "run: dotnet build -p:RestorePackagesPath=./pkgs", null),
-        new("RestoreFallbackFolders", PackagesFolderWhy, t => Token(t, "RestoreFallbackFolders"), "run: dotnet build -p:RestoreFallbackFolders=/opt/pkgs", null),
-        new("NUGET_HTTP_CACHE_PATH", PackagesFolderWhy, t => Token(t, "NUGET_HTTP_CACHE_PATH"), "  NUGET_HTTP_CACHE_PATH: /tmp/http", null),
-        new("globalPackagesFolder", PackagesFolderWhy, t => Token(t, "globalPackagesFolder"), "run: dotnet nuget config set globalPackagesFolder ./pkgs", null),
+            t => Token(t, "--lock-file-path"), "run: dotnet restore --lock-file-path other.json", "run: tool --lock-file-paths"),
+        new("NUGET_PACKAGES", PackagesFolderWhy, t => Token(t, "NUGET_PACKAGES"), "  NUGET_PACKAGES: /tmp/pkgs", "  NUGET_PACKAGES_X: 1"),
+        new("NUGET_FALLBACK_PACKAGES", PackagesFolderWhy, t => Token(t, "NUGET_FALLBACK_PACKAGES"), "  NUGET_FALLBACK_PACKAGES: /opt/pkgs", "  NUGET_FALLBACK_PACKAGES_X: 1"),
+        new(".nuget/packages", PackagesFolderWhy, t => Token(t, ".nuget/packages"), "          path: ~/.nuget/packages", "          path: docs/x.nuget/packages-list.txt"),
+        new("http-cache", PackagesFolderWhy, t => Token(t, "http-cache"), "run: dotnet nuget locals http-cache --list", "run: dotnet restore --no-http-cache"),
+        new("v3-cache", PackagesFolderWhy, t => Token(t, "v3-cache"), "          path: ~/.local/share/NuGet/v3-cache", "          path: v3-cached"),
+        new("--packages", PackagesFolderWhy, t => Token(t, "--packages"), "run: dotnet restore --packages ./pkgs", "run: tool --packagesDirectory ./x"),
+        new("RestorePackagesPath", PackagesFolderWhy, t => Token(t, "RestorePackagesPath"), "run: dotnet build -p:RestorePackagesPath=./pkgs", "run: echo MyRestorePackagesPath"),
+        new("RestoreFallbackFolders", PackagesFolderWhy, t => Token(t, "RestoreFallbackFolders"), "run: dotnet build -p:RestoreFallbackFolders=/opt/pkgs", "run: dotnet build -p:RestoreFallbackFoldersExcludes=/opt/pkgs"),
+        new("NUGET_HTTP_CACHE_PATH", PackagesFolderWhy, t => Token(t, "NUGET_HTTP_CACHE_PATH"), "  NUGET_HTTP_CACHE_PATH: /tmp/http", "  NUGET_HTTP_CACHE_PATH_X: 1"),
+        new("globalPackagesFolder", PackagesFolderWhy, t => Token(t, "globalPackagesFolder"), "run: dotnet nuget config set globalPackagesFolder ./pkgs", "run: echo globalPackagesFolders"),
         new("--configfile", "a NuGet config file can move the packages folder or add fallback folders",
-            t => Token(t, "--configfile"), "run: dotnet restore --configfile ./ci.nuget.config", null),
+            t => Token(t, "--configfile"), "run: dotnet restore --configfile ./ci.nuget.config", "run: tool --configfiles"),
         new("--force-evaluate outside lock-files", "only the lock-files job re-resolves (and then diffs the lock files); anywhere else it rewrites them instead of checking",
             ForceEvaluateOutsideLockFilesJob,
             "jobs:\n  build-test-publish:\n    steps:\n      - run: dotnet build TokenSwap.slnx --force-evaluate\n",
-            "jobs:\n  lock-files:\n    steps:\n      - run: dotnet restore TokenSwap.slnx --force-evaluate\n  build:\n    steps:\n      - run: dotnet build TokenSwap.slnx\n"),
+            "jobs:\n  lock-files:\n    steps:\n      - run: dotnet restore TokenSwap.slnx --force-evaluate\n  build:\n    steps:\n      - run: tool --force-evaluated\n"),
         new("RestoreLockedMode not true", "every CI restore is locked (Directory.Build.props)",
-            t => AssignedOtherThanTrue(t, "RestoreLockedMode"), "run: dotnet build -p:RestoreLockedMode=false", "run: dotnet build -p:RestoreLockedMode='true'"),
+            t => AssignedOtherThanTrue(t, "RestoreLockedMode"), "run: dotnet build -p:RestoreLockedMode=false", "run: dotnet build -p:RestoreLockedMode='true' -p:MyRestoreLockedMode=false"),
+        new("RestorePackagesWithLockFile not true", "every restore writes and reads the lock files (Directory.Build.props)",
+            t => AssignedOtherThanTrue(t, "RestorePackagesWithLockFile"), "run: dotnet build -p:RestorePackagesWithLockFile=false",
+            "run: dotnet build -p:RestorePackagesWithLockFile=True -p:MyRestorePackagesWithLockFile=false"),
+        new("RestorePackagesWithLockFile not true (YAML key)", "every restore writes and reads the lock files (Directory.Build.props)",
+            t => AssignedOtherThanTrue(t, "RestorePackagesWithLockFile"), "        env:\n          RestorePackagesWithLockFile: false\n",
+            "        env:\n          RestorePackagesWithLockFile: 'true'\n"),
+        new("unset CI", "removing CI turns the locked restore off (Directory.Build.props locks it when CI is true)",
+            RemovesCi, "run: unset FOO CI; dotnet restore TokenSwap.slnx", "run: unset CI_REQUIRE_BWRAP; echo CI"),
+        new("env -u CI", "removing CI turns the locked restore off (Directory.Build.props locks it when CI is true)",
+            RemovesCi, "run: env -u CI dotnet restore TokenSwap.slnx\nrun: env --unset=CI dotnet build",
+            "run: env -u CI_REQUIRE_BWRAP dotnet test\nrun: env --unset=CI_REQUIRE_SE dotnet test"),
+        new("HOME assigned", HomeWhy, t => Assigned(t, "HOME"), "        env:\n          HOME: /opt/prefilled\nrun: HOME=/tmp dotnet restore",
+            "run: echo \"$HOME/.config\"; TSWAP_HOME=/x; echo ${HOME}\n          XDG_CONFIG_HOME_X: 1"),
+        new("USERPROFILE assigned", HomeWhy, t => Assigned(t, "USERPROFILE"), "        env:\n          USERPROFILE: D:\\prefilled",
+            "run: echo \"$env:USERPROFILE\"; MY_USERPROFILE=x"),
+        new("APPDATA assigned", HomeWhy, t => Assigned(t, "APPDATA"), "run: APPDATA=/tmp/appdata dotnet restore",
+            "run: echo $APPDATA; MYAPPDATA=x; APPDATA_DIR=x"),
         new("CI not true (YAML key)", "Directory.Build.props locks restore when CI is true; GitHub sets CI=true for every step",
             t => AssignedOtherThanTrue(t, "CI"), "        env:\n          CI: false\n", "          CI_REQUIRE_BWRAP: '1'\nname: CI\n          CI: True\n"),
         new("CI not true (-p:)", "Directory.Build.props locks restore when CI is true; GitHub sets CI=true for every step",
