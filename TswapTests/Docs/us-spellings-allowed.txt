@@ -56,5 +56,3 @@ TswapTests/MacPkgScriptTests.cs	Assert.Contains("spctl -a -t install did not say
 contrib/packaging/package-pkg.sh	if ! printf '%s\n' "$spctl_out" | grep -q ': accepted' || ! printf '%s\n' "$spctl_out" | grep -qx 'source=Notarized Developer ID'; then	Apple's tool output, quoted verbatim
 contrib/packaging/package-pkg.sh	die "spctl -a -t install did not say accepted with source=Notarized Developer ID"	Apple's tool output, quoted verbatim
 AGENTS.md	<a id="code-organization-tswapcli"></a>	released anchor
-
-# Brief T57 (#420): the NuGet lock files
