@@ -190,3 +190,24 @@ These bind and win over the text above where they differ.
     - The copied `dotnet` message is made generic: no clone path, no local SDK list.
 12. **Renovate validator:** if `npx` can't reach the npm registry, stop and report; don't skip it.
 13. `docs/design/refactoring-plan.md:140` stays as it is (history).
+
+## Amendments after brief review round 2 (MiMo; GLM's round 2 hit Z.ai's 5-hour limit and runs again on these)
+
+14. **Packages-folder knobs (amendments 4 and 7).** A restore pointed at a pre-extracted folder trusts its stored
+    hashes (amendment 1), so these are forbidden too: in test 6's rows `--packages`, `RestorePackagesPath`,
+    `RestoreFallbackFolders`, `NUGET_HTTP_CACHE_PATH` and `globalPackagesFolder`; in amendment 4's `*.csproj` list
+    `RestorePackagesPath` and `RestoreFallbackFolders`. Also no `nuget.config` (or `NuGet.Config`, any case) may be
+    in the file list (test 2).
+15. **`RuntimeIdentifiers` is `linux-arm64;linux-x64;osx-arm64;win-x64`** (ordinal order; this wins over Task 1 and
+    the spike's order). Amendment 5's reason, corrected: NuGet compares the RID sets order-insensitively; a fixed order
+    keeps the committed lock files and the props file stable against the `lock-files` job's diff and against review
+    churn.
+16. **Test 6's reading rules.** A `CI` hit is the whole word `CI` in an assignment (`CI:` as a YAML key, `CI=` in a
+    command or `-p:CI=`/`/p:CI=`) whose value is not `true`; prose ("dispatches CI on its PR's branch",
+    "ci.yml builds…") and `CI_REQUIRE_*` keys are negative samples, as is `cargo install --locked` for the
+    `--locked-mode` row. `RestoreLockedMode` the same way (assignment, value not `true`). A line belongs to the
+    `lock-files` job when it is between that job's key (`  lock-files:` at two spaces under `jobs:`) and the next key
+    at that indentation; that is the only scoping rule.
+17. **Test 3 also reads `-r <rid>`** (same RID-shaped token rule as `--runtime`).
+18. **Required check.** The report asks the owner to add `lock-files` to the ruleset's required checks (ci.yml's
+    comment names ruleset 27270067); until then it is advisory, and the report says so.
