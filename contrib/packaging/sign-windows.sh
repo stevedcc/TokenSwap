@@ -11,7 +11,8 @@
 # and given to ssign through its environment only (never an argument), without GH_TOKEN. Never add set -x.
 #
 # Environment: SIGNING_REPO (default stevedcc/tswap-signing), SIGNING_ISSUE (1), SIGNING_OWNER (stevedcc), SSIGN (the
-# ssign binary), SIGN_WAIT_SECONDS (600), SIGN_POLL_SECONDS (3), SIGN_MAX_ATTEMPTS (3), GH_TOKEN (the issue's PAT),
+# ssign binary), SIGN_WAIT_SECONDS (600), SIGN_POLL_SECONDS (3), SIGN_MAX_ATTEMPTS (3), SIGN_GET_TRIES (3: tries per
+# read of the issue's comments; only the read is retried, never a post or the delete), GH_TOKEN (the issue's PAT),
 # CERTUM_EMAIL, GITHUB_SERVER_URL, GITHUB_REPOSITORY, GITHUB_RUN_ID.
 set -euo pipefail
 
@@ -21,6 +22,8 @@ SIGNING_OWNER=${SIGNING_OWNER:-stevedcc}
 SIGN_WAIT_SECONDS=${SIGN_WAIT_SECONDS:-600}
 SIGN_POLL_SECONDS=${SIGN_POLL_SECONDS:-3}
 SIGN_MAX_ATTEMPTS=${SIGN_MAX_ATTEMPTS:-3}
+# Unset means 3; set but empty is refused in cmd_sign, like any other value that isn't a whole number of at least 1.
+SIGN_GET_TRIES=${SIGN_GET_TRIES-3}
 
 die() {
   echo "::error::$*" >&2
@@ -60,6 +63,7 @@ post() {
 u_le() {
   local value=0 shift_by=0 byte bytes
   bytes=$(od -An -tu1 -j "$2" -N "$3" "$1" | tr -s ' \n' ' ')
+  # shellcheck disable=SC2086 # intentional word splitting: od prints space-separated byte values
   set -- $bytes
   [ $# -gt 0 ] || return 1
   for byte in "$@"; do
@@ -93,6 +97,8 @@ cmd_request() {
   [ $# -eq 1 ] || die "usage: sign-windows.sh request <exe>"
   local exe=$1 hash id
   [ -f "$exe" ] || die "no file $exe"
+  # #381 item 1: a re-run of a finished job stops here, before it posts a request nobody should answer.
+  refuse_signed "$exe"
   require_env GH_TOKEN GITHUB_SERVER_URL GITHUB_REPOSITORY GITHUB_RUN_ID
   hash=$(sha256 "$exe")
   id=$(post "Signing request: $(run_url) wants to sign tswap.exe, SHA-256 $hash. Reply with the 6-digit code.")
@@ -100,10 +106,30 @@ cmd_request() {
   echo "$id"
 }
 
+# The issue's comments, every page (#381 item 2): a failed read is tried again, up to SIGN_GET_TRIES times, with
+# SIGN_POLL_SECONDS between tries. Only a successful gh's output is printed: a failed run's partial page is discarded.
+# Runs inside $(...), so the warnings go to stderr; gh's own stderr passes through and holds no comment body.
+poll_comments() {
+  local try comments
+  for ((try = 1; ; try++)); do
+    if comments=$(gh api "repos/$SIGNING_REPO/issues/$SIGNING_ISSUE/comments?per_page=100" --paginate); then
+      printf '%s\n' "$comments"
+      return 0
+    fi
+    echo "::warning::reading the signing issue failed (try $try of $SIGN_GET_TRIES)" >&2
+    [ "$try" -lt "$SIGN_GET_TRIES" ] || die "could not read the comments of $SIGNING_REPO#$SIGNING_ISSUE after $SIGN_GET_TRIES tries"
+    sleep "$SIGN_POLL_SECONDS"
+  done
+}
+
 # The oldest counting comment, as "<id> <code>": by the owner, newer than the floor, six digits and nothing else but
 # surrounding whitespace. --paginate prints one array per page, oldest first; the first match in the stream wins (C6).
+# A page jq can't parse fails the run: a parse error, not a transient one, so it is not retried.
 next_code() {
-  gh api "repos/$SIGNING_REPO/issues/$SIGNING_ISSUE/comments?per_page=100" --paginate \
+  local comments
+  # set -e doesn't reach into this $(...) (next_code itself runs in one), so a failed read returns here by hand.
+  comments=$(poll_comments) || return
+  printf '%s\n' "$comments" \
     | jq -rn --arg owner "$SIGNING_OWNER" --argjson floor "$1" '
         first(inputs | .[]
           | select(.user.login == $owner and .id > $floor and ((.body // "") | test("\\A\\s*[0-9]{6}\\s*\\z"))))
@@ -115,6 +141,7 @@ cmd_sign() {
   local exe=$1 floor=$2 deadline attempts=0 status found id code
   [ -f "$exe" ] || die "no file $exe"
   [[ $floor =~ ^[0-9]+$ ]] || die "the request id is not a number"
+  [[ $SIGN_GET_TRIES =~ ^[1-9][0-9]*$ ]] || die "SIGN_GET_TRIES must be an integer of at least 1"
   require_env GH_TOKEN CERTUM_EMAIL SSIGN GITHUB_SERVER_URL GITHUB_REPOSITORY GITHUB_RUN_ID
   refuse_signed "$exe"
   deadline=$(($(date +%s) + SIGN_WAIT_SECONDS))
@@ -139,6 +166,7 @@ cmd_sign() {
       rm -f "${XDG_RUNTIME_DIR:-$HOME/.cache}/ssign/session.json"
       unset code
       if [ "$status" -eq 0 ]; then
+        # The hash of the signed exe: it differs from the request's, which named the unsigned one.
         post "Signed: $(run_url), SHA-256 $(sha256 "$exe")." > /dev/null
         exit 0
       fi
