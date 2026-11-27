@@ -47,7 +47,7 @@ public sealed class ClassicVaultRefusalTests : IDisposable
     /// <summary>Arguments that get each command past its own usage check to the point where it opens the store.</summary>
     private static string[] ArgsFor(string command, string scratch) => command switch
     {
-        "create" or "add" or "get" or "delete" or "burn" or "restore" or "rotate" or "ingest" => [command, "db"],
+        "create" or "add" or "get" or "delete" or "burn" or "restore" or "rotate" or "ingest" or "totp" => [command, "db"],
         "run" => [command, "true", "{{db}}"],
         "check" or "redact" or "tocomment" or "apply" => [command, Path.Combine(scratch, "file.yaml")],
         "import" => [command, Path.Combine(scratch, "export.json")],
