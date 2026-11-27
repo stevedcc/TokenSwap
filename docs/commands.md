@@ -605,7 +605,7 @@ batch file with `setlocal EnableDelayedExpansion` as `!PW!`: [Passing secrets to
 (not tswap's, not the calling shell's), so the value is not in its arguments; it is masked in the output like a
 `{{name}}` in an argument. Give `--env NAME={{name}}` (or `--env=NAME={{name}}`) once per variable, at most 64, before
 the command; an optional `--` ends them, and an `--env` after the command is the command's own argument. The value
-is exactly one `{{name}}` or `{{name:previous}}` token: a literal is refused (it isn't a secret, so set it in your
+is exactly one `{{name}}`, `{{name:previous}}` or `{{name:totp}}` token: a literal is refused (it isn't a secret, so set it in your
 shell, where the command inherits it), and so is a `{{@file}}` (put that in the command). Refused names, compared
 ignoring case: `PATH`, `PATHEXT`, `LC_ALL`, `PWD`, `LD_*`, `DYLD_*`, `ComSpec`, `PSModulePath`, and the names and
 prefixes the broker's command templates refuse because they can make a program run code or load files they name
@@ -620,6 +620,83 @@ gains nothing against the agent itself, which runs as the same user as the comma
 mount `/proc` with `hidepid=invisible,gid=<group>`, which hides one user's processes from the others (also for tools
 that take a secret only as an argument); the broker's vault user needs that group
 ([broker threat model](broker-threat-model.md#limits-of-the-identity-check)).
+
+## TOTP secrets
+
+Since 0.3.3 tswap hands out a TOTP secret's current code, never its seed, wherever it gives a value without sudo
+(#374).
+
+**Recognition.** A value that contains `otpauth:` anywhere (case ignored) is an otpauth record. Recognition is
+generous and the parse strict: an otpauth record that isn't a clean, usable `otpauth://totp/` URI is refused wherever
+a code or a value would be given without sudo, and is never passed on as itself. That includes a value that only
+mentions a URI among other text (a labelled paste, a note): **store the URI alone**. A bare Base32 seed is never
+recognised, since any random value may be Base32.
+
+**Tokens and markers.**
+
+| Form | An otpauth URI | A bare Base32 seed | Any other value |
+|---|---|---|---|
+| `{{name}}`, `# tswap: name`, `--env N={{name}}` | its current code | the stored text, as any value | the value |
+| `{{name:previous}}`, `# tswap: name:previous` | the code of the seed the last rotation replaced | the stored text | the value |
+| `{{name:totp}}`, `# tswap: name:totp` | its current code | its current code (SHA1, 6 digits, 30 s) | refused |
+
+So a bare seed gives a code only through `{{name:totp}}` (and `tswap totp`), and `{{name}}` still hands it out: store
+seeds as URIs. There is one suffix at most: `{{name:previous:totp}}` is not a token, so the previous value of a secret
+stored as a bare seed can't give a code. One command reads the clock once, so `{{x}}`, `{{x:totp}}` and a marker of
+`x` in one `run` get the same code. `sudo tswap apply` fills markers exactly as `run`'s `{{@file}}` does (codes);
+the seed itself only ever comes from `sudo tswap get <name>`. A code filled into a `{{@file}}` copy expires within
+one period: codes belong in arguments or `--env`, at the moment they are used. `check` reports `Ok` for a
+`# tswap: name:totp` marker from metadata, without testing the seed.
+
+**`tswap totp <name>`** (no sudo) prints the code alone on stdout, so `code=$(tswap totp x)` captures exactly the code,
+and on stderr how long it stays valid: `Valid for 17 more seconds (a new code every 30 seconds).`, with the seed's own
+period. It works for a URI and for a bare seed, and refuses what `run` refuses.
+
+**What the parse accepts.** From the [Key Uri Format](https://github.com/google/google-authenticator/wiki/Key-Uri-Format),
+RFC 3986 and RFC 4648 (section 6), on the value trimmed of white space at both ends:
+
+- the URI starts with `otpauth://` and its type is `totp` (both case ignored); `hotp` URIs are refused (counters are
+  not supported), and so are userinfo, a port and a `#` fragment;
+- the label is not used; the query's names `secret`, `algorithm`, `digits` and `period` are read, each at most once,
+  each with a value, and every other name (`issuer`, `image`, vendor additions) is ignored; values are
+  percent-decoded (`%3D` or `%3d`; `+` stays `+`), the result strict UTF-8;
+- `algorithm` is `SHA1` (the default), `SHA256` or `SHA512`, or `SHA-1`, `SHA-256`, `SHA-512`, case ignored, and
+  `digits` is `6` (the default) or `8`: these are the Key Uri Format's own rules;
+- `secret` is Base32: letters `A-Z` in either case, digits `2-7`, `=` padding, a Base32 length.
+
+tswap's own rules, stricter than the Key Uri Format, each with its reason:
+
+| Rule | Why |
+|---|---|
+| Parameter names are lower case (`Secret=` is refused, naming `secret`) | the format names them in lower case; a differently cased name is more likely a typo than a meaning |
+| `period` is a whole number of seconds from 1 to 300 | a longer period is no longer a short-lived code |
+| no space in a URI's `secret` (also as `%20`) | merging words into a key gives silent wrong codes; a bare seed may be written in groups, and its spaces are removed |
+| the `=` padding is either absent or exactly the run RFC 4648 gives that length | one key, one accepted spelling |
+| the last character has no unused bits set (canonical Base32) | one key, one accepted spelling |
+| at least 16 Base32 characters (80 bits) | a shorter seed is too weak; RFC 4226 asks 128 bits, but 80-bit seeds are common |
+
+A refusal names the reason and the secret, never the value, and says how the user sees and fixes it:
+`sudo tswap get x`, then `sudo tswap add x` with a corrected URI.
+
+**`names` and `burned`.** `names` marks a usable TOTP record ` [TOTP]` and an otpauth record it can't use
+` [OTPAUTH: unusable]`, from metadata written with each value (no value decrypted); `names --json` adds
+`"kind": "totp"` or `"kind": "otpauth-unusable"`. A record written before 0.3.3 is marked after one
+`sudo tswap vault reindex`, or its next write; `run`, `totp` and `rotate` are right at once, because they decide from
+the value. `burned` adds a line for an outstanding TOTP seed: it can't be rotated.
+
+**Rotation.** `rotate` (a random value) refuses a TOTP seed, decided from the decrypted value, marked or not: a seed
+comes from the issuer. Store the issuer's new seed with `<source> | tswap ingest --rotate <name>` (no sudo for a
+burned secret); `{{name:previous}}` then gives the old seed's code.
+
+**What `run` masks.** For a token or marker that gave a code, `run` masks the code and these spellings of the secret,
+each also in base64 and base64url: the stored value as stored (the whole URI, or the bare seed text); the URI's
+`secret` parameter as written (before percent-decoding) and percent-decoded; the seed upper case and lower case, each
+without and with its `=` padding (for a bare seed: after removing spaces). No other spelling is masked: the seed
+grouped with spaces, in another mixed case than stored, the key bytes in hex or base64, or the URI encoded
+differently. A 6-digit code is masked only where it stands as a whole word or number; an 8-digit code anywhere.
+
+The broker refuses TOTP records ([BROKER.md](BROKER.md)); [security-model.md](security-model.md#totp-secrets) has the
+limits.
 
 ## Environment variables
 
