@@ -26,6 +26,17 @@
   // main has no branch protection requiring CI, so GitHub's own auto-merge (platformAutomerge) could merge a PR
   // whose CI hasn't finished or failed. Renovate's own automerge merges only when every check on the branch is green.
   platformAutomerge: false,
+  customManagers: [
+    {
+      customType: 'regex',
+      description: 'ssign, the Windows signing tool, is built in release.yml from a commit pinned with cargo install --rev; the # vX.Y.Z comment at the end of that line is its version',
+      managerFilePatterns: ['/^\\.github/workflows/release\\.yml$/'],
+      matchStrings: ['cargo install[^\\n#]*--git https://github\\.com/(?<depName>Le-Syl21/ssign) --rev (?<currentDigest>[0-9a-f]{40})[^\\n#]* # (?<currentValue>v\\d+\\.\\d+\\.\\d+)\\s*\\n'],
+      datasourceTemplate: 'github-tags',
+      versioningTemplate: 'semver',
+      packageNameTemplate: 'Le-Syl21/ssign',
+    },
+  ],
   // tswap releases are manual tags, so Croft's automergeStrategy 'rebase' (kept for its auto-release workflow) isn't
   // needed here.
   packageRules: [
@@ -85,6 +96,14 @@
       dependencyDashboardApproval: false,
       automerge: true,
       automergeType: 'pr',
+    },
+    {
+      description: 'ssign (the Windows signing tool; it handles the signing login): never automerged, no PR until ticked on the Dependency Dashboard, and the 3-day minimumReleaseAge above applies. Each bump: read the ssign diff, then one dry run (Release, Run workflow with `dry_run`, on the Renovate branch before you merge if the windows-signing environment allows that branch, else on main before you tag), which signs with a real code and publishes nothing, before tagging (docs/windows-signing.md).',
+      matchManagers: ['custom.regex'],
+      matchPackageNames: ['Le-Syl21/ssign'],
+      automerge: false,
+      dependencyDashboardApproval: true,
+      addLabels: ['signing-tool'],
     },
     {
       description: 'Security-critical packages: keys, crypto, the PTY, CBOR (FIDO2 messages). Never automerged: CI cannot run the hardware tests, so the owner decides (a Yubico SDK bump wants the B6 suite on the spare key). KEEP THIS RULE LAST: later packageRules win, so nothing after it may set automerge for these packages.',

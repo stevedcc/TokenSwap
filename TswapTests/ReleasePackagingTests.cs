@@ -1048,6 +1048,35 @@ public class ReleasePackagingTests : IDisposable
         Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => AssertPullRequestsStayUnsigned(release));
     }
 
+    /// <summary>
+    /// Break-it-once, kept: sign-windows without its pull-request guard is caught. Only sign-windows can be named:
+    /// verify-windows has no environment, secret or write permission, so the check skips it.
+    /// </summary>
+    [Fact]
+    public void Workflows_PullRequestCheck_CatchesTheSigningJobsOnAPullRequest()
+    {
+        var release = Workflow("release.yml").Replace(
+            "    if: ${{ !cancelled() && github.event_name != 'pull_request' && ", "    if: ${{ !cancelled() && ");
+
+        var problem = Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => AssertPullRequestsStayUnsigned(release));
+        Assert.Contains("sign-windows", problem.Message);
+        Assert.DoesNotContain("verify-windows", problem.Message);
+    }
+
+    /// <summary>A bare <c>if: !</c> line: YAML reads a plain scalar that starts with ! as a tag.</summary>
+    private static bool HasBareBangIf(string workflow) =>
+        System.Text.RegularExpressions.Regex.IsMatch(workflow, @"(?m)^\s+(- )?if:\s*!");
+
+    [Fact]
+    public void Workflows_IfConditions_NeverStartWithABang()
+    {
+        Assert.True(HasBareBangIf("    if: !cancelled()\n"), "the check misses a bare if: !");
+        Assert.True(HasBareBangIf("      - if: !cancelled()\n"), "the check misses a bare - if: !");
+        Assert.False(HasBareBangIf("    if: ${{ !cancelled() }}\n"), "the check flags the ${{ }} form");
+        foreach (var name in new[] { "release.yml", "ci.yml" })
+            Assert.False(HasBareBangIf(Workflow(name)), $"{name} has an if: that starts with !, which YAML reads as a tag");
+    }
+
     /// <summary>Break-it-once, kept: bump-version (contents: write) with its push guard dropped is caught.</summary>
     [Fact]
     public void Workflows_PullRequestCheck_CatchesBumpVersionOnAPullRequest()
@@ -1727,9 +1756,9 @@ public class ReleasePackagingTests : IDisposable
     // ---- Issue #368: Windows signing. ----
 
     private const string SignWindowsCondition =
-        "    if: always() && github.event_name != 'pull_request' && github.repository == 'stevedcc/TokenSwap' && needs.build.result == 'success'\n";
+        "    if: ${{ !cancelled() && github.event_name != 'pull_request' && github.repository == 'stevedcc/TokenSwap' && needs.build.result == 'success' }}\n";
     private const string VerifyWindowsCondition =
-        "    if: always() && github.event_name != 'pull_request' && github.repository == 'stevedcc/TokenSwap' && needs.sign-windows.result == 'success'\n";
+        "    if: ${{ !cancelled() && github.event_name != 'pull_request' && github.repository == 'stevedcc/TokenSwap' && needs.sign-windows.result == 'success' }}\n";
     private const string AttestWaitsForVerifyWindows =
         " && (needs.verify-windows.result == 'success' || (github.repository != 'stevedcc/TokenSwap' && needs.verify-windows.result == 'skipped'))";
 
@@ -1769,10 +1798,122 @@ public class ReleasePackagingTests : IDisposable
 
         Assert.Contains(" --locked ", cargo);
         Assert.Contains(" --git https://github.com/Le-Syl21/ssign ", cargo);
-        Assert.Contains(" --rev 367bf7d3da14d5041d5e47f855ae2397b8028e33 ", cargo);
+        Assert.Matches(@" --rev [0-9a-f]{40} ", cargo);
         var request = job.IndexOf("sign-windows.sh request ", StringComparison.Ordinal);
         Assert.True(request >= 0, "sign-windows never runs sign-windows.sh request");
         Assert.True(job.IndexOf(cargo, StringComparison.Ordinal) < request, "ssign is built after the code is asked for");
+    }
+
+    // ---- Issue #377: Renovate tracks the ssign pin. ----
+
+    /// <summary>The one <c>cargo install</c> line of sign-windows (not a comment).</summary>
+    private static string SsignCargoLine() =>
+        Assert.Single(Job(Workflow("release.yml"), "sign-windows").Split('\n'),
+            line => line.Contains("cargo install", StringComparison.Ordinal) && !line.TrimStart().StartsWith('#'));
+
+    private static string Renovate() => File.ReadAllText(RepoFile("renovate.json5"));
+
+    /// <summary>The ssign manager's text: <c>customManagers</c> up to <c>packageRules</c> in renovate.json5.</summary>
+    private static string SsignManagerText()
+    {
+        var renovate = Renovate();
+        var start = renovate.IndexOf("\n  customManagers: [", StringComparison.Ordinal);
+        var end = renovate.IndexOf("\n  packageRules: [", StringComparison.Ordinal);
+        Assert.True(start >= 0 && end > start, "renovate.json5 has no customManagers before packageRules");
+        return renovate[start..end];
+    }
+
+    /// <summary>The ssign manager's <c>matchStrings</c> entry, as the .NET regex Renovate runs (JSON5's <c>\\</c> is one <c>\</c>).</summary>
+    private static System.Text.RegularExpressions.Regex SsignManagerRegex()
+    {
+        var line = Assert.Single(SsignManagerText().Split('\n'),
+            line => line.Contains("matchStrings:", StringComparison.Ordinal) && line.Contains("Le-Syl21/ssign", StringComparison.Ordinal));
+        var quoted = System.Text.RegularExpressions.Regex.Match(line, @"^\s*matchStrings: \['(.*)'\],\s*$");
+        Assert.True(quoted.Success, $"the ssign matchStrings line is not one single-quoted string: {line}");
+        return new System.Text.RegularExpressions.Regex(quoted.Groups[1].Value.Replace(@"\\", @"\", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void SignWindows_SsignPinNamesItsVersion() =>
+        Assert.Matches(@"--rev [0-9a-f]{40} [^\n#]* # v\d+\.\d+\.\d+$", SsignCargoLine());
+
+    [Fact]
+    public void Renovate_SsignManager_ReadsTheRealPin()
+    {
+        var regex = SsignManagerRegex();
+        var cargo = SsignCargoLine();
+        var rev = System.Text.RegularExpressions.Regex.Match(cargo, @" --rev ([0-9a-f]{40}) ").Groups[1].Value;
+        var version = System.Text.RegularExpressions.Regex.Match(cargo, @" # (v\S+)$").Groups[1].Value;
+
+        var match = Assert.Single(regex.Matches(Workflow("release.yml")));
+        Assert.Equal("Le-Syl21/ssign", match.Groups["depName"].Value);
+        Assert.Equal(40, rev.Length);
+        Assert.Equal(rev, match.Groups["currentDigest"].Value);
+        Assert.NotEqual("", version);
+        Assert.Equal(version, match.Groups["currentValue"].Value);
+
+        // A drift in the line's format is loud: none of these is read.
+        string[] notMatched =
+        [
+            cargo.Replace($" --rev {rev} ", $" --rev {rev[..39]} ", StringComparison.Ordinal),
+            cargo.Replace($" # {version}", "", StringComparison.Ordinal),
+            cargo.Replace($" --rev {rev} ", " --rev main ", StringComparison.Ordinal),
+            "        run: cargo install --locked ripgrep --root \"$RUNNER_TEMP/rg\" # v14.1.1",
+            cargo.Replace("\"$RUNNER_TEMP/ssign\"", "\"$RUNNER_TEMP/ss#ign\"", StringComparison.Ordinal),
+            cargo.Replace($" # {version}", " # v0.1.12-rc.1", StringComparison.Ordinal),
+            cargo.Replace($" # {version}", " # 0.1.12", StringComparison.Ordinal),
+            cargo.Replace($" # {version}", " # v1.2.3.4", StringComparison.Ordinal),
+        ];
+        foreach (var sample in notMatched)
+        {
+            Assert.NotEqual(cargo, sample);
+            Assert.False(regex.IsMatch(sample + "\n"), $"the ssign manager reads a drifted line: {sample}");
+        }
+
+        var manager = SsignManagerText();
+        Assert.Contains("datasourceTemplate: 'github-tags'", manager);
+        Assert.Contains("versioningTemplate: 'semver'", manager);
+    }
+
+    /// <summary>renovate.json5's packageRules, each from its <c>    {</c> line to its <c>    },</c> line.</summary>
+    private static List<string> RenovatePackageRules()
+    {
+        var lines = Renovate().Split('\n');
+        var start = Array.IndexOf(lines, "  packageRules: [");
+        Assert.True(start >= 0, "renovate.json5 has no packageRules");
+        var end = Array.IndexOf(lines, "  ],", start);
+        Assert.True(end > start, "renovate.json5's packageRules is not closed");
+        List<string> rules = [];
+        for (var i = start + 1; i < end; i++)
+        {
+            if (lines[i] != "    {")
+                continue;
+            var close = Array.IndexOf(lines, "    },", i);
+            Assert.True(close > i && close < end, "a packageRules entry is not closed");
+            rules.Add(string.Join('\n', lines[i..(close + 1)]));
+            i = close;
+        }
+        return rules;
+    }
+
+    [Fact]
+    public void Renovate_SsignRule_NeverAutomerges()
+    {
+        var renovate = Renovate();
+        var rules = RenovatePackageRules();
+        var ssign = Assert.Single(rules, rule => rule.Contains("matchPackageNames: ['Le-Syl21/ssign']", StringComparison.Ordinal));
+
+        Assert.Contains("\n      automerge: false,\n", ssign);
+        Assert.Contains("\n      dependencyDashboardApproval: true,\n", ssign);
+        Assert.Contains("\n      matchManagers: ['custom.regex'],\n", ssign);
+        // A key, not the word: the rule's description names minimumReleaseAge.
+        Assert.DoesNotMatch(@"(?m)^\s*minimumReleaseAge\s*:", ssign);
+        Assert.Contains("\n  minimumReleaseAge: '3 days',\n", renovate);
+        // The security-critical rule stays last: later rules win, so nothing after it names packages.
+        var last = rules[^1];
+        Assert.Contains("KEEP THIS RULE LAST", last);
+        Assert.True(rules.IndexOf(ssign) < rules.Count - 1, "the ssign rule comes after the security-critical rule");
+        Assert.DoesNotContain("matchPackageNames", renovate[(renovate.IndexOf(last, StringComparison.Ordinal) + last.Length)..]);
     }
 
     [Fact]
@@ -1849,12 +1990,44 @@ public class ReleasePackagingTests : IDisposable
         Assert.Contains("      EXPECTED_THUMBPRINT: 0117383ED6ABD3650EEA4365C9565D19AD147877\n", job);
         Assert.Contains("      # Certum Open Source Developer Steven Crawford, valid to 2027-11-20: renew with the certificate\n", job);
         Assert.Contains("https://github.com/stevedcc/TokenSwap/issues/368#issuecomment-7043611776", job);
-        Assert.Contains("Get-AuthenticodeSignature", job);
-        Assert.Contains("$sig.Status -ne 'Valid'", job);
-        Assert.Contains("$sig.SignerCertificate.Thumbprint -cne $env:EXPECTED_THUMBPRINT", job);
-        Assert.Contains("TimeStamperCertificate", job);
-        Assert.Contains("verify /pa /v", job);
-        Assert.Contains("--version", job);
+        // #381 item 3: the tools in the steps, not anywhere in the job (its env: comment names signtool's verify too).
+        var stepsAt = job.IndexOf("\n    steps:\n", StringComparison.Ordinal);
+        Assert.True(stepsAt >= 0, "verify-windows has no steps:");
+        var steps = job[stepsAt..];
+        Assert.Contains("Get-AuthenticodeSignature", steps);
+        Assert.Contains("$sig.Status -ne 'Valid'", steps);
+        Assert.Contains("$sig.SignerCertificate.Thumbprint -cne $env:EXPECTED_THUMBPRINT", steps);
+        Assert.Contains("TimeStamperCertificate", steps);
+        Assert.Contains("verify /pa /v", steps);
+        Assert.Contains("(Join-Path $check 'tswap.exe') --version", steps);
+    }
+
+    /// <summary>
+    /// #381 item 4: a cancelled run never starts the signing jobs, so it never waits for the owner's code. GitHub's
+    /// <c>always()</c> is true even when the run is cancelled; <c>!cancelled()</c> is the alternative it recommends.
+    /// </summary>
+    [Fact]
+    public void SignWindows_NeverRunsAfterACancel()
+    {
+        var release = Workflow("release.yml");
+        foreach (var name in new[] { "sign-windows", "verify-windows" })
+        {
+            var condition = Job(release, name).Split('\n').Single(line => line.StartsWith("    if: ", StringComparison.Ordinal));
+            Assert.DoesNotContain("always()", condition);
+            Assert.StartsWith("    if: ${{ !cancelled() && ", condition);
+        }
+    }
+
+    /// <summary>#381 item 5: the hash the Unpack step prints is the hash of the file the request names.</summary>
+    [Fact]
+    public void SignWindows_UnpackPrintsTheHashTheRequestNames()
+    {
+        var steps = Steps(Job(Workflow("release.yml"), "sign-windows"));
+        var unpack = Assert.Single(steps, step => step.StartsWith("      - name: Unpack tswap.exe\n", StringComparison.Ordinal));
+        var request = Assert.Single(steps, step => step.Contains("sign-windows.sh request ", StringComparison.Ordinal));
+
+        Assert.Contains("echo \"tswap.exe SHA-256: $(sha256sum \"$RUNNER_TEMP/win/tswap.exe\" | cut -d ' ' -f 1)\"\n", unpack);
+        Assert.Contains("sign-windows.sh request \"$RUNNER_TEMP/win/tswap.exe\")", request);
     }
 
     /// <summary>C2: verify-windows checks out, works out the expected version as build does, then checks what it downloaded.</summary>
