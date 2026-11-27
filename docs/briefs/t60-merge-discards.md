@@ -1,16 +1,22 @@
 # Brief T60: a merge keeps the value it discards, warns, and lets a person use, restore or drop it (#312)
 
 Issue: https://github.com/stevedcc/TokenSwap/issues/312. Milestone 0.3.3. Design:
-`docs/superpowers/specs/2026-11-27-merge-discards-and-rollback-design.md` on branch `design/records-033` at **2f1ed12**
-(rounds 1-9; Part 1, §1.4a, Tests "T60", "Briefs", owner Decisions). The design's body is authoritative; its amendment
+`docs/superpowers/specs/2026-11-27-merge-discards-and-rollback-design.md` on branch `design/records-033` at **6262c2f**
+(rounds 1-10; Part 1, §1.4a, Tests "T60", "Briefs", owner Decisions). The design's body is authoritative; its amendment
 history only records why. This brief is Part 1 of that design; Part 2 (#197, the floors) is brief T61, which runs after
-this one. A later design amendment (GLM round 3 is pending) is diffed against 2f1ed12.
+this one. A later design amendment is diffed against 6262c2f.
 
 **Design rounds 8-9 (2f1ed12), folded into the body below:** the silence rule (an OR of three) and R12 without its
 "also the previous value" form; silent entries listed but never counted as open; R13 (position); R8 for any input,
 with writes that would update a newer-format lineage refused; no kind byte (R3 moot); earlier-life entries (R14);
 `field adopt` refuses a SECRET holding entries; every write carries `T` and `forgotten`; tied winners as a set (R15);
 `burn` exempt from the entry cap.
+
+**Design round 10 (6262c2f), folded below:** the upgrade step, numbered, in the docs and the release-note lines; the
+caps' lifetime arithmetic in the docs; the `--clear` text and docs say a machine still holding the value as its current
+value loses it too (owner to confirm, design Decisions 4); a bare Base32 seed handed out as text, the v0.3.0
+earlier-life leak, the export warning naming the lineage, `S` alone and format 2, the `names` metadata cost; the v0.3.2
+release check kept.
 
 **Base.** This brief builds on T58 (TOTP, PR #433, branch `brief/t58` at a0836c2): its record extension `0x0101`
 (`ValueKinds`), `CommandValues` and its token grammar. **The base is `origin/main` once T58 has merged** (today main is
@@ -649,7 +655,7 @@ false, `Description` `List values a merge set aside, without the values; --ack q
   `Acknowledge`, `Commit`. Output `✓ Acknowledged 1 value of 'x' that a merge set aside. It is kept until 'sudo tswap conflicts --clear x' or 'sudo tswap restore x --discarded'.`
   (`2 values`); none named: `No open value conflicts for 'x'.`, exit 0, nothing written.
 - `--clear NAME`: `ctx.RequireSudo("conflicts --clear")` first (`CommandContext.cs:454-466`), then `ClearDiscarded`.
-  Output `✓ Dropped 1 value of 'x' that a merge set aside, for good: a copy on another machine that still holds the same value doesn't bring it back. Only an older file put back from before this clear (a sync restore) can, as any rolled-back change can, or a stale copy after 64 later drops on this secret, or a merge done by an older tswap; in those cases tswap warns about it again.`
+  Output `✓ Dropped 1 value of 'x' that a merge set aside, for good: a copy on another machine that still holds the same value doesn't bring it back. Only an older file put back from before this clear (a sync restore) can, as any rolled-back change can, or a stale copy after 64 later drops on this secret, or a merge done by an older tswap; in those cases tswap warns about it again. A machine that still holds this value as its current value (it hasn't merged yet) loses it too, with no warning there: check 'tswap conflicts x --json' on each machine before clearing.`
   (`2 values`); none: `No value conflicts for 'x'.`, exit 0, nothing written.
 - Both work on a tombstone. Usage errors and refusals exit 1. No mode decrypts a value.
 
@@ -668,8 +674,8 @@ holds entries: `'<secret>' has <n> value(s) a merge set aside; see 'tswap confli
 
 **`export`** (owner decision 3): `Secret` gains `[JsonIgnore] public int DiscardedCount { get; init; }` (from
 `SecretInfo`, which gains `int DiscardedCount = 0` set in `From`; `ToSecret`, `:1105-1125`, carries it; no entry decrypted).
-`ExportCommand` after the file is written, on stderr: `Warning: 1 secret has a value a merge set aside (x); this export doesn't include it. Restore or clear it first if it matters.`
-(`2 secrets have values … (a, b); this export doesn't include them.`).
+`ExportCommand` after the file is written, on stderr: `Warning: 1 secret has a value a merge set aside (x); this export doesn't include it, nor the record's lineage of dropped values, so after an import a value dropped earlier can come back from a stale copy. Restore or clear it first if it matters.`
+(`2 secrets have values … (a, b); this export doesn't include them, nor …`).
 
 Regenerate the generated block of `docs/commands.md` in this commit (`TSWAP_REGENERATE_DOCS=1` on
 `CommandReferenceIsCurrent`).
@@ -735,21 +741,29 @@ entry).
   --discarded`, `tswap burn x "<reason>"`, `sudo tswap restore x`); the `--clear` text's sentence; silent entries
   (the three reasons, listed but not counted); earlier-life entries (only `restore --discarded` brings one back; a record
   re-created by v0.3.0, which has no `Fields` extension, can't tell them apart); `field adopt` refusing a secret that
-  holds entries; the newer-format refusal.
+  holds entries; the newer-format refusal; that a machine still holding a cleared value as its current value loses it
+  too, with no warning there, so check `tswap conflicts --json` on each machine before clearing; that a discarded bare
+  Base32 seed is handed out as its text (store TOTP seeds as otpauth URIs); that on a record re-created by v0.3.0
+  `{{x:discarded}}` can hand out a value from the deleted life without sudo.
 - **`docs/multi-machine.md`**: "The merge rules" (`:456`) gains a bullet that a merge keeps a concurrent value it
   discards (a pointer to commands.md) and a "Mixed versions" paragraph like the fields one (`:482-489`): a 0.3.x merge
   can still drop a value and a discarded version's burn; a merge here can miss a value on a record whose lineage an
   older build wrote; a value rotated away on 0.3.x can be reported once (both residuals named); a tombstone without an
   exact lineage reports any copy that still holds the deleted value, a `vault merge` of a backup from before the delete
-  included; a value is kept once a machine running this release writes the record, so a mixed-version folder should run
-  `tswap conflicts` after every machine is upgraded (design round 9, I-1); a folder with 0.1
-  machines writes records with entries or retirements in format 3. The provider row (`:592-596`) gains: a
+  included; a folder with 0.1 machines writes records with entries or retirements in format 3, while a record with only
+  `S` is written in format 2 and drops its lineage (exactness traded for 0.1 readability). Then, **numbered**:
+  "Upgrading a shared folder: 1. Upgrade every machine that shares the folder. 2. Then run `tswap conflicts` and deal
+  with what it lists. Until a machine running this release writes a record, an older tswap's fold of its conflicted
+  copies can drop a set-aside value with no warning anywhere." And the caps' arithmetic: `S` and `T` keep 64 stamps
+  over a record's whole life, so a secret rotated daily passes 64 rotations after about two months, after which a copy
+  more than 64 rotations stale may be kept or dropped depending on merge order. The provider row (`:592-596`) gains: a
   metadata-only write that grew by at least one 256-byte bucket can mean a conflict was kept.
 - **`docs/security-model.md`**, "What each command decrypts" (`:209`): `export`, `vault merge`, `migrate`: no entry;
   `run` with `{{x:discarded}}`: that entry only; `restore --discarded`: that entry only; `vault reindex`: entries without
   a current set; value writes: that record's entries without a set; `conflicts` (every mode), `burn`, field writes: none.
   One paragraph: an entry is sealed under its own version's key and never decrypted by a merge; `names` decrypts it
-  with the metadata, not its value.
+  with the metadata, not its value, so its metadata decrypt cost scales with the discarded values' sizes (up to the
+  64 KiB cap per record).
 - **`TswapCore/Prompt.cs`** (ASCII, `Prompt_IsAsciiOnly`): in "Commands you SHOULD use", after `burned`:
   `` `%CMD% conflicts [name]` - Lists values a merge set aside (no values shown). On a merge warning, tell the user what it says and that `%CMD% conflicts` has the details; never acknowledge, clear or restore one unless the user asks. ``
   The `names` bullet: `[CONFLICT]` marks them.
@@ -758,7 +772,8 @@ entry).
   Substitution" for `{{name:discarded}}`.
 - **Release notes** are the controller's. Lines for the controller: a merge now keeps a concurrent value it would have
   dropped, warns, and `tswap conflicts` lists it; `{{name:discarded}}`; 0.3.x machines still drop such values in their
-  own merges; export leaves them out. And the release check (design "Briefs"): the v0.3.2 binary on a copy of a vault
+  own merges; export leaves them out; **upgrade every machine, then run `tswap conflicts`** (the two numbered steps).
+  And the release check (design "Briefs"): the v0.3.2 binary on a copy of a vault
   this build wrote (`names`, `run`, a rotate, a merge of a conflict copy), recorded in the PR.
 
 ## Out of scope
