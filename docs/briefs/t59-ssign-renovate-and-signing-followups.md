@@ -11,9 +11,30 @@ message), `./runtests.sh --unit` after each task, the full `./runtests.sh` at th
 `sudo`, real YubiKeys or `~/.config/tswap`. Commits end with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`,
 explicit-path commits, no push, merge or rebase; stop and report when the brief can't be built as written. **No
 existing test's assertion changes except the ones named below** (task 1 names one, task 3 the others; the issues or
-the controller sanction each). **Parallel brief T58 (TOTP, #374) owns TswapCore and TswapCli code, the command reference pages under
+the controller sanction each). **Prerequisites: `shellcheck` on PATH, and the npm registry and the GitHub API reachable (`npx`, `gh`); stop and report if either is missing.** **Parallel brief T58 (TOTP, #374) owns TswapCore and TswapCli code, the command reference pages under
 `docs/` and the prompt text: touch none of them.** Both briefs may edit `docs/windows-signing.md`; keep your edit to
 the one new section named in task 4 so the merge is a clean add.
+
+## Amendments (round 4: GLM round 2, MiMo round 3; controller rulings). They bind; the body above is edited to match.
+
+1. **GLM M1:** the pinned comment is British English without quotation marks (the spelling guard flags the US form of
+   cancelled in `.yml`); no allowlist entry.
+2. **GLM M2:** the clause pinning `always()` on `attest`, `build` and `build-macos` is dropped; a one-off scope check is a
+   break-it-once named in the commit message.
+3. **GLM M3:** the failing fake GET prints a truncated JSON page to stdout first; new `Sign_PollBadJson_IsNotRetried`.
+4. **GLM M4:** the `::warning::` line goes to stderr (`>&2`).
+5. **GLM M5:** the fake `sleep` is always installed.
+6. **GLM M6:** `## Notes for maintainers` goes after the Renewals paragraph.
+7. **GLM M7, M8, M9, M10:** docs (c) and (e) reworded; the manager test's claim reworded; `customManagers` goes above the
+   comment block before `packageRules`; the timeout observation sits above `timeout-minutes: 30`.
+8. **GLM M11:** the dry run runs on the Renovate branch before merging where the environment allows it; the phrase in
+   all three places is now: "one dry run (Release, Run workflow with `dry_run`, on the Renovate branch before you merge if the windows-signing environment allows that branch, else on main before you tag), which signs with a real code and publishes nothing".
+9. **GLM M12:** `SIGN_GET_TRIES` must be an integer of at least 1, else a clear error; new theory `Sign_BadGetTries_Refused`.
+10. **MiMo M1:** the pin test uses the manager's language (`[^\n#]*`), plus an inner-`#` must-not-match sample.
+11. **MiMo M2:** prerelease, unprefixed and four-part must-not-match samples; `versioningTemplate: 'semver'` (strict).
+12. **MiMo M3:** `printf '%s\n' "$comments" | jq …`, not a here-string.
+13. **MiMo M4:** `Assert.Contains("sign-windows", …)` and `Assert.DoesNotContain("verify-windows", …)`.
+14. **Prerequisites** stated in the header: `shellcheck`, npm and GitHub API reachability.
 
 ## Amendments (round 1: GLM, MiMo; controller rulings). They bind and win over the text below where they differ.
 
@@ -30,7 +51,7 @@ the one new section named in task 4 so the merge is a clean add.
 8. **M6:** the validator and extraction both run under `--package node@24`, name the Renovate version, quote only the
    ssign lines, stop and report on any environment failure (task 1).
 9. **M7, corrected in round 2 (I-1):** the reason for `!cancelled()` is the documented one: GitHub says `always()` is
-   true even when a job is canceled, so a `sign-windows` that had not started yet starts after the cancel and waits for
+   true even when a job is cancelled, so a `sign-windows` that had not started yet starts after the cancel and waits for
    a code; `!cancelled()` is GitHub's recommended alternative. The earlier claim that GitHub re-evaluates `if` for
    running jobs is dropped: the runner re-tests only a **step's** `if` on job cancellation (`actions/runner`
    `StepsRunner.cs`, "Re-evaluate condition on job cancellation for step", checked), and the sign step has no `if:`
@@ -38,7 +59,7 @@ the one new section named in task 4 so the merge is a clean add.
 10. **M8 and MiMo's timeout finding:** the timeout wording says what was observed, not what GitHub documents
     (Why, task 3.2 comment, task 4(b)).
 11. **M9 and MiMo's wording finding (round 2, M-1, controller ruling):** the bump procedure reads, verbatim in the
-    three places (task 1 comment, task 1 rule description, task 4(f)): "one dry run (Release, Run workflow with `dry_run`), which signs with a real code and publishes nothing".
+    three places (task 1 comment, task 1 rule description, task 4(f)): "one dry run (Release, Run workflow with `dry_run`, on the Renovate branch before you merge if the windows-signing environment allows that branch, else on main before you tag), which signs with a real code and publishes nothing".
 12. **M10 and MiMo's shellcheck nit:** versions differ per CI leg; any finding shellcheck reports today must be fixed in
     the script; no shellcheck in the sandbox means stop and report (task 2).
 13. **MiMo: the manager test selects the `matchStrings` line that contains `Le-Syl21/ssign`**, not "the one" line.
@@ -123,7 +144,7 @@ and 6).
 | 1 re-run posts before refusing | Do (task 2). `request` runs `refuse_signed` before posting. |
 | 2 one failed poll ends the run | Do (task 2): the poll GET retries, the POSTs and the DELETE stay one-shot. |
 | 3 `verify /pa /v` matches a comment | Do (task 3). |
-| 4 timeout and `always()` | Timeout: keep 30, evidence above. `always()`: do, `!cancelled()` on `sign-windows` and `verify-windows` (task 3). With `always()` a cancelled run still reaches `sign-windows` if it hadn't started, and then waits for the owner's code (GitHub: `always()` is true "even when a job is canceled", and `if: ${{ !cancelled() }}` is its recommended alternative). The condition is written `${{ !cancelled() && ... }}` (YAML cannot start a plain scalar with `!`). The explicit `needs.build.result == 'success'` already carries the success check, so nothing is lost. `attest` and the others keep `always()` (they need `verify-windows` to have succeeded, so a cancel before it ends them; out of scope). |
+| 4 timeout and `always()` | Timeout: keep 30, evidence above. `always()`: do, `!cancelled()` on `sign-windows` and `verify-windows` (task 3). With `always()` a cancelled run still reaches `sign-windows` if it hadn't started, and then waits for the owner's code (GitHub's documentation says `always()` is true even when the run is cancelled, and recommends `if: ${{ !cancelled() }}` instead). The condition is written `${{ !cancelled() && ... }}` (YAML cannot start a plain scalar with `!`). The explicit `needs.build.result == 'success'` already carries the success check, so nothing is lost. `attest` and the others keep `always()` (they need `verify-windows` to have succeeded, so a cancel before it ends them; out of scope). |
 | 5 `Signed:` hash | Do as a comment and a docs sentence, no change to the posted text (it is asserted in `SignWindowsScriptTests` in three places; the hash is of the signed exe, as it should be). Pin the "Unpack" echo with a test (task 3). |
 | 6 forks and `release` | Out of scope: `release` already `needs: [build, build-macos, attest]` (asserted at `ReleasePackagingTests` line 988), attest accepts a skipped `verify-windows` on a fork (`AttestWaitsForVerifyWindows`), so every direct need of `release` runs and succeeds on a fork. Nothing to verify without a fork run, which needs the owner's fork and a tag; the existing tests keep the shape that makes it work. |
 | 7 SC2086 | Do (task 2) plus a test that runs shellcheck (the repo runs it nowhere today; see below). |
@@ -138,12 +159,12 @@ and 6).
          # Built before the code is asked for, so compiling doesn't eat its 30 s window. ssign (MIT, Rust) is pinned by
          # commit; the "# vX.Y.Z" at the end of the line below is the version Renovate reads (renovate.json5, the ssign
          # manager), so keep that shape. It talks only to Certum's signing and timestamp servers. Each bump: read the
-         # ssign diff (it handles the signing login), then one dry run (Release, Run workflow with `dry_run`), which signs with a real code and publishes nothing, before tagging.
+         # ssign diff (it handles the signing login), then one dry run (Release, Run workflow with `dry_run`, on the Renovate branch before you merge if the windows-signing environment allows that branch, else on main before you tag), which signs with a real code and publishes nothing, before tagging.
    ```
    (the old "at the commit that signed the v0.3.1-rc.1 exe on 2026-11-20 (v0.1.11)" goes, it is stale at the first
    bump; the rest of the old text stays in substance. The comment must not repeat the `cargo install` command: the
    regex is not anchored to the `run:` line.) Do not move the step (`SignWindows_PinsSsignBySha` pins its place before the request).
-2. `renovate.json5`: add, before `packageRules`,
+2. `renovate.json5`: add, above the comment block that precedes `packageRules` (`// tswap releases are manual tags…`, so that comment stays attached to `packageRules`),
    ```
    customManagers: [
      {
@@ -152,15 +173,16 @@ and 6).
        managerFilePatterns: ['/^\\.github/workflows/release\\.yml$/'],
        matchStrings: ['cargo install[^\\n#]*--git https://github\\.com/(?<depName>Le-Syl21/ssign) --rev (?<currentDigest>[0-9a-f]{40})[^\\n#]* # (?<currentValue>v\\d+\\.\\d+\\.\\d+)\\s*\\n'],
        datasourceTemplate: 'github-tags',
+       versioningTemplate: 'semver',
        packageNameTemplate: 'Le-Syl21/ssign',
      },
    ],
    ```
-   (this is the string the spike ran; keep `matchStrings` on one line, the test reads it) and, in `packageRules`,
+   (`versioningTemplate: 'semver'` is strict: Renovate's default for this manager, `semver-coerced`, would coerce a prerelease or odd tag into a stable version. Spiked again with it: v0.1.10 still proposes v0.1.11 and the same sha, and the validator accepts it. The `matchStrings` string is the one the spike ran; keep `matchStrings` on one line, the test reads it) and, in `packageRules`,
    **before** the security-critical rule (that one stays last):
    ```
    {
-     description: 'ssign (the Windows signing tool; it handles the signing login): never automerged, no PR until ticked on the Dependency Dashboard, and the 3-day minimumReleaseAge above applies. Each bump: read the ssign diff, then one dry run (Release, Run workflow with `dry_run`), which signs with a real code and publishes nothing, before tagging (docs/windows-signing.md).',
+     description: 'ssign (the Windows signing tool; it handles the signing login): never automerged, no PR until ticked on the Dependency Dashboard, and the 3-day minimumReleaseAge above applies. Each bump: read the ssign diff, then one dry run (Release, Run workflow with `dry_run`, on the Renovate branch before you merge if the windows-signing environment allows that branch, else on main before you tag), which signs with a real code and publishes nothing, before tagging (docs/windows-signing.md).',
      matchManagers: ['custom.regex'],
      matchPackageNames: ['Le-Syl21/ssign'],
      automerge: false,
@@ -174,25 +196,26 @@ and 6).
    `Assert.Contains(" --rev 367bf7d3da14d5041d5e47f855ae2397b8028e33 ", cargo);` becomes
    `Assert.Matches(@" --rev [0-9a-f]{40} ", cargo);`. Without it the first Renovate ssign PR (which moves `--rev`) fails
    CI. The ` --locked `, ` --git https://github.com/Le-Syl21/ssign ` and order assertions stay. Say so in the commit
-   message. Which commit is pinned is now the PR review's job, and `Renovate_SsignManager_ReadsTheRealPin` keeps the
-   sha and the comment consistent. Break-it-once: remove `--rev <sha> ` from the line (this test fails).
+   message. Which commit is pinned is now the PR review's job: `Renovate_SsignManager_ReadsTheRealPin` shows the regex reads both
+   fields from the line, and whether the sha is that tag's commit is Renovate's check at lookup (a mismatch gives a
+   digest-only PR, which the new rule holds for approval). Break-it-once: remove `--rev <sha> ` from the line (this test fails).
    New tests, in `ReleasePackagingTests.cs`, next to it:
-   - `SignWindows_SsignPinNamesItsVersion`: the `cargo install` line matches `--rev [0-9a-f]{40} .* # v\d+\.\d+\.\d+$`.
+   - `SignWindows_SsignPinNamesItsVersion`: the `cargo install` line matches `--rev [0-9a-f]{40} [^\n#]* # v\d+\.\d+\.\d+$` (the manager's own language: a `#` inside the command must fail here too).
    - `Renovate_SsignManager_ReadsTheRealPin`: take the `matchStrings:` line that contains `Le-Syl21/ssign` out of
      `renovate.json5` (text, between `customManagers` and `packageRules`; select by content, so a second manager later
      doesn't make it ambiguous), turn the JSON5 single-quoted string into the
      regex (`\\` to `\`), run it as a .NET `Regex` over `release.yml`'s text: exactly one match, `depName`
      `Le-Syl21/ssign`, `currentDigest` equal to the 40 hex of the line's `--rev`, `currentValue` equal to the line's
      `# v…`. Samples that must not match (the line with a 39-hex rev, with the comment removed, with `--rev main`, a
-     `cargo install ripgrep` line): no match, so a format drift is loud. Also assert the manager text contains
-     `datasourceTemplate: 'github-tags'`.
+     `cargo install ripgrep` line, a `#` inside the command before the version comment, and the comments `# v0.1.12-rc.1`, `# 0.1.12` and `# v1.2.3.4`): no match, so a format drift is loud. Also assert the manager text contains
+     `datasourceTemplate: 'github-tags'` and `versioningTemplate: 'semver'`.
    - `Renovate_SsignRule_NeverAutomerges`: the `packageRules` block that contains `matchPackageNames: ['Le-Syl21/ssign']`
      has `automerge: false`, `dependencyDashboardApproval: true`, `matchManagers: ['custom.regex']` and no
      `minimumReleaseAge` **key** (a regex `(?m)^\s*minimumReleaseAge\s*:`; the rule's description names the word, so a
      substring check would fail); the top level still has `minimumReleaseAge: '3 days'`; the security-critical rule is still the
      last rule (its description contains `KEEP THIS RULE LAST`, and no `matchPackageNames` after it).
    Break-it-once: delete ` # v0.1.11` from the line (the first two fail); change `automerge: false` to `true` in the
-   ssign rule (the third); change `github-tags` to `github-releases` (the second).
+   ssign rule (the third); change `github-tags` to `github-releases` or delete `versioningTemplate` (the second).
 4. Evidence in the report, naming the Renovate version it ran (45.1.x at the time of writing):
    `npx --yes --package node@24 --package renovate@latest -- renovate-config-validator renovate.json5` in the
    repository root (Renovate 45 needs Node 24, the sandbox has 22; it prints `Config validated successfully`; npm's
@@ -211,7 +234,10 @@ and 6).
 Tests first in `SignWindowsScriptTests.cs`. The fake `gh` in the constructor gets two opt-in switches, both off by
 default so no existing test changes: a file `get-fails` holding a number N makes the first N GETs print
 `gh: HTTP 502` to stderr and exit 1 (decrementing the file each time); a file `post-fails` makes every POST exit 1 the
-same way. Fakes also count GETs in `calls.log` as today (`Calls()` already lists every call).
+same way. A failing GET prints a **truncated JSON page** (`[{"id": 1, "user": {"login": "ste`) to stdout before its
+error, so an implementation that let a failed `gh`'s partial output reach `jq` would fail the retry tests. The fake
+`sleep` (a new tool in the fakes folder, logging its argument to `calls.log`) is **always installed**, so no test can ever
+really sleep; no existing test reaches it (`SIGN_WAIT_SECONDS=0` exits before any sleep, `request` never sleeps). Fakes also count GETs in `calls.log` as today (`Calls()` already lists every call).
 
 | Test | Setup | Expected |
 |---|---|---|
@@ -221,18 +247,20 @@ same way. Fakes also count GETs in `calls.log` as today (`Calls()` already lists
 | `Sign_PollFailsTwice_RetriesAndSigns` | `get-fails` = 2 | exit 0, signed, three GETs |
 | `Sign_PollFailsEveryTime_FailsClearly` | `get-fails` = 99 | exit 1, `::error::` naming the issue read failure and `3 tries`, exactly 3 GETs, no ssign run, no DELETE, `Posted()` empty |
 | `Sign_PollTriesCap_IsTheVariable` | `SIGN_GET_TRIES`=2, `get-fails`=99 | exit 1, `2 tries` in the error, exactly 2 GETs (hard-coding 3 fails this) |
-| `Sign_PollRetries_SleepBetweenTries` | `SIGN_GET_TRIES`=2, `get-fails`=1, owner's code present | exit 0; the fake `sleep` (a new fake tool logging its argument to `calls.log`, like `gh`) was called with the `SIGN_POLL_SECONDS` value between the two GETs (set it to `7` in this test; the fake returns at once, so no real wait) |
+| `Sign_PollRetries_SleepBetweenTries` | `SIGN_GET_TRIES`=2, `get-fails`=1, owner's code present | exit 0; the fake `sleep` was called with the `SIGN_POLL_SECONDS` value between the two GETs (set it to `7` in this test; the fake returns at once, so no real wait) |
+| `Sign_PollBadJson_IsNotRetried` | `comments.json` holds invalid JSON | exit non-0, exactly one GET, no `sleep` call, no ssign run, no DELETE |
+| `Sign_BadGetTries_Refused` (theory) | `SIGN_GET_TRIES` = `0`, `abc`, `-1`, empty | exit 1, output has `::error::SIGN_GET_TRIES must be an integer of at least 1`, `Calls()` empty |
 | `Request_PostFails_IsNotRetried` | `post-fails` | exit non-0, exactly one POST call |
 | `Script_PassesShellcheck` | runs `shellcheck -S info <script>` | exit 0; the failure message is shellcheck's output. Skipped when `shellcheck` is not on PATH or off Unix (same pattern as `JqMissing`; ubuntu runners have it) |
 
 Design:
 
 - `cmd_request`: after the `[ -f "$exe" ]` check and before `require_env` and the post, call `refuse_signed "$exe"`.
-  `cmd_sign` keeps its own call (its test stands).
+  `cmd_sign` keeps its own call (its test stands). In `cmd_sign`, before `require_env`: `[[ $SIGN_GET_TRIES =~ ^[1-9][0-9]*$ ]] || die "SIGN_GET_TRIES must be an integer of at least 1"`.
 - `next_code` reads the issue through a new `poll_comments` that runs `gh api "repos/$SIGNING_REPO/issues/$SIGNING_ISSUE/comments?per_page=100" --paginate`
-  into a variable (no pipeline into `jq`: `next_code` feeds `jq` from that variable with a here-string) and retries up to `SIGN_GET_TRIES` times (new variable, default 3, in the header's Environment list),
-  `sleep "$SIGN_POLL_SECONDS"` between tries, printing `::warning::reading the signing issue failed (try N of M)` on
-  each failure (gh's own stderr passes through; it holds no comment body). After the last failure:
+  into a variable (a failed `gh`'s partial output is discarded; `next_code` then feeds `jq` with `printf '%s\n' "$comments" | jq …`, a pipe, not a here-string, which bash may back with a temp file) and retries up to `SIGN_GET_TRIES` times (new variable, default 3, in the header's Environment list),
+  `sleep "$SIGN_POLL_SECONDS"` between tries, printing `::warning::reading the signing issue failed (try N of M)` **to stderr (`>&2`)** on
+  each failure (`poll_comments` runs inside `$(…)`; a warning on stdout would be captured into the text fed to `jq`; gh's own stderr passes through and holds no comment body). After the last failure:
   `die "could not read the comments of $SIGNING_REPO#$SIGNING_ISSUE after $SIGN_GET_TRIES tries"`. Only the output of a
   successful `gh` is passed to `jq`; a partial output of a failed run is discarded. A `jq` failure is not retried (it
   is a parse error, not a transient one). Posts and the DELETE stay as they are: a failed POST ends the run (the
@@ -275,23 +303,26 @@ retry as well (`Request_PostFails_IsNotRetried` fails).
    (first `sign-windows`, second `verify-windows`; four spaces of indent). The `${{ }}` form is required: YAML reads a
    plain scalar that starts with `!` as a tag, which would drop `!cancelled()` or make the file invalid. A comment above
    `sign-windows`' `if:` says why: a cancelled run must not keep waiting for the owner's code; with `always()` a
-   `sign-windows` job that had not started yet starts after the cancel and waits for a code (GitHub: `always()` is true
-   "even when a job is canceled"); `!cancelled()` is GitHub's recommended alternative; and that `timeout-minutes: 30` was observed to cover runner time only (the approval wait showed
-   outside the job's length on three runs; GitHub's docs don't say). The explicit `needs.*.result == 'success'`
+   `sign-windows` job that had not started yet starts after the cancel and waits for a code, because GitHub's
+   documentation says `always()` is true even when the run is cancelled; `!cancelled()` is the alternative it
+   recommends. Write that comment in British English and without quotation marks (`SpellingTests` scans `.yml` for the
+   US form of cancelled; no allowlist entry). A second comment, above `timeout-minutes: 30`, says it was observed to
+   cover runner time only (the approval wait showed outside the job's length on three runs; GitHub's docs don't say).
+   The explicit `needs.*.result == 'success'`
    carries the success check. The constants `SignWindowsCondition` and `VerifyWindowsCondition` in
    `ReleasePackagingTests.cs` become the same two lines (`"    if: ${{ !cancelled() && ... }}\n"`): their only edit, named
    here, sanctioned by #381 item 4 and the controller. Add:
    - `SignWindows_NeverRunsAfterACancel`: neither job's `if:` line contains `always()`; both start (after `if: `) with
-     `${{ !cancelled() && `; `attest`, `build` and `build-macos` still contain `always()` (a later edit that "tidies"
-     one direction fails).
+     `${{ !cancelled() && `. (No test pins `always()` on `attest`, `build` or `build-macos`; to check the scope, once,
+     name in the commit message what happened when you put `!cancelled()` on `attest` and ran the suite.)
    - `Workflows_IfConditions_NeverStartWithABang`: in both `release.yml` and `ci.yml`, no line matches
      `(?m)^\s+(- )?if:\s*!` (a bare, YAML-invalid `if: !`). Positive sample: `    if: !cancelled()` is caught by the
      same regex helper; negative sample: `    if: ${{ !cancelled() }}` is not.
    - `Workflows_PullRequestCheck_CatchesTheSigningJobsOnAPullRequest` (M3): like the kept
      `Workflows_PullRequestCheck_CatchesBuildMacosOnAPullRequest`, but with
      `.Replace("    if: ${{ !cancelled() && github.event_name != 'pull_request' && ", "    if: ${{ !cancelled() && ")`
-     on `release.yml`: `AssertPullRequestsStayUnsigned` must throw, naming `sign-windows` in the
-     message (only `sign-windows` can be named: `verify-windows` has no environment, secret or write permission, so
+     on `release.yml`: `AssertPullRequestsStayUnsigned` must throw, with `Assert.Contains("sign-windows", problem.Message)` and
+     `Assert.DoesNotContain("verify-windows", problem.Message)` (only `sign-windows` can be named: `verify-windows` has no environment, secret or write permission, so
      `AssertPullRequestsStayUnsigned` skips it; the test still shows the guard fires for the signing job). (The kept test's Replace, on `always() &&`, now reaches only `build-macos` and `attest`, so it no longer
      proves the guard for the signing jobs.) `SignWindows_Guarded`'s `timeout-minutes: 30` stays.
    Break-it-once: put `always()` back in `sign-windows` (the new tests and `SignWindows_Guarded` fail); write the line as
@@ -309,15 +340,14 @@ retry as well (`Request_PostFails_IsNotRetried` fails).
   appears only in the log as `refused-connection … reason=…` (link
   [the threat model](broker-threat-model.md), where those lines are described). Keep the code-block comment as it is.
   No new anchor, no heading change (`DocLinkTests` guards the old anchors); run `./runtests.sh --unit` after.
-- `docs/windows-signing.md`: **one new section**, `## Notes for maintainers`, inserted between the "One outstanding
-  signing request…" paragraph and "Renewals, 2027-11" (nowhere else; T58 may edit step 3 above it). It says: (a) the
+- `docs/windows-signing.md`: **one new section**, `## Notes for maintainers`, appended **after** the "Renewals, 2027-11" paragraph, at the end of
+  the file (nowhere else; T58 may edit step 3 above it). It says: (a) the
   `Signed:` comment on the issue carries the signed exe's SHA-256, which differs from the request's; (b) `timeout-minutes: 30`:
   on the three real runs the approval wait showed outside the job's length (GitHub's docs don't say where the timer
-  starts); a run took 2 to 8 minutes, longer only while waiting for your code; (c) a cancelled run no longer waits for
-  or consumes a code (`!cancelled()`); (d) a re-run of a finished job stops at `request`
-  with "already signed", posting nothing; (e) the poll retries three times; if every try fails the run ends with an error in the job log and posts nothing: the request comment stays unanswered and a code you already posted stays undeleted: delete that code by hand and re-run (the new run posts a fresh request; remove the old one if you like); (f) **bumping ssign**: Renovate opens the
+  starts); a run took 2 to 8 minutes, longer only while waiting for your code; (c) a cancelled run no longer starts `sign-windows`, so it never begins waiting for or taking a code (`!cancelled()`); (d) a re-run of a finished job stops at `request`
+  with "already signed", posting nothing; (e) the poll tries three times; if every try fails the run ends with an error in the job log and posts nothing: the request comment stays unanswered and a code you already posted stays undeleted: delete that code by hand and re-run (the new run posts a fresh request; remove the old one if you like); (f) **bumping ssign**: Renovate opens the
   PR after you tick it on the Dependency Dashboard, moving the `--rev` and its `# vX.Y.Z` together; read the ssign diff
-  (it handles the signing login), then do one dry run (Release, Run workflow with `dry_run`), which signs with a real code and publishes nothing, before tagging, and write what it showed on #381.
+  (it handles the signing login), then do one dry run (Release, Run workflow with `dry_run`, on the Renovate branch before you merge if the windows-signing environment allows that branch, else on main before you tag), which signs with a real code and publishes nothing, before tagging, and write what it showed on #381.
   British English; the spelling guard (`SpellingTests`) must pass.
 
 ## Out of scope
