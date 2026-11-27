@@ -1769,10 +1769,122 @@ public class ReleasePackagingTests : IDisposable
 
         Assert.Contains(" --locked ", cargo);
         Assert.Contains(" --git https://github.com/Le-Syl21/ssign ", cargo);
-        Assert.Contains(" --rev 367bf7d3da14d5041d5e47f855ae2397b8028e33 ", cargo);
+        Assert.Matches(@" --rev [0-9a-f]{40} ", cargo);
         var request = job.IndexOf("sign-windows.sh request ", StringComparison.Ordinal);
         Assert.True(request >= 0, "sign-windows never runs sign-windows.sh request");
         Assert.True(job.IndexOf(cargo, StringComparison.Ordinal) < request, "ssign is built after the code is asked for");
+    }
+
+    // ---- Issue #377: Renovate tracks the ssign pin. ----
+
+    /// <summary>The one <c>cargo install</c> line of sign-windows (not a comment).</summary>
+    private static string SsignCargoLine() =>
+        Assert.Single(Job(Workflow("release.yml"), "sign-windows").Split('\n'),
+            line => line.Contains("cargo install", StringComparison.Ordinal) && !line.TrimStart().StartsWith('#'));
+
+    private static string Renovate() => File.ReadAllText(RepoFile("renovate.json5"));
+
+    /// <summary>The ssign manager's text: <c>customManagers</c> up to <c>packageRules</c> in renovate.json5.</summary>
+    private static string SsignManagerText()
+    {
+        var renovate = Renovate();
+        var start = renovate.IndexOf("\n  customManagers: [", StringComparison.Ordinal);
+        var end = renovate.IndexOf("\n  packageRules: [", StringComparison.Ordinal);
+        Assert.True(start >= 0 && end > start, "renovate.json5 has no customManagers before packageRules");
+        return renovate[start..end];
+    }
+
+    /// <summary>The ssign manager's <c>matchStrings</c> entry, as the .NET regex Renovate runs (JSON5's <c>\\</c> is one <c>\</c>).</summary>
+    private static System.Text.RegularExpressions.Regex SsignManagerRegex()
+    {
+        var line = Assert.Single(SsignManagerText().Split('\n'),
+            line => line.Contains("matchStrings:", StringComparison.Ordinal) && line.Contains("Le-Syl21/ssign", StringComparison.Ordinal));
+        var quoted = System.Text.RegularExpressions.Regex.Match(line, @"^\s*matchStrings: \['(.*)'\],\s*$");
+        Assert.True(quoted.Success, $"the ssign matchStrings line is not one single-quoted string: {line}");
+        return new System.Text.RegularExpressions.Regex(quoted.Groups[1].Value.Replace(@"\\", @"\", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void SignWindows_SsignPinNamesItsVersion() =>
+        Assert.Matches(@"--rev [0-9a-f]{40} [^\n#]* # v\d+\.\d+\.\d+$", SsignCargoLine());
+
+    [Fact]
+    public void Renovate_SsignManager_ReadsTheRealPin()
+    {
+        var regex = SsignManagerRegex();
+        var cargo = SsignCargoLine();
+        var rev = System.Text.RegularExpressions.Regex.Match(cargo, @" --rev ([0-9a-f]{40}) ").Groups[1].Value;
+        var version = System.Text.RegularExpressions.Regex.Match(cargo, @" # (v\S+)$").Groups[1].Value;
+
+        var match = Assert.Single(regex.Matches(Workflow("release.yml")));
+        Assert.Equal("Le-Syl21/ssign", match.Groups["depName"].Value);
+        Assert.Equal(40, rev.Length);
+        Assert.Equal(rev, match.Groups["currentDigest"].Value);
+        Assert.NotEqual("", version);
+        Assert.Equal(version, match.Groups["currentValue"].Value);
+
+        // A drift in the line's format is loud: none of these is read.
+        string[] notMatched =
+        [
+            cargo.Replace($" --rev {rev} ", $" --rev {rev[..39]} ", StringComparison.Ordinal),
+            cargo.Replace($" # {version}", "", StringComparison.Ordinal),
+            cargo.Replace($" --rev {rev} ", " --rev main ", StringComparison.Ordinal),
+            "        run: cargo install --locked ripgrep --root \"$RUNNER_TEMP/rg\" # v14.1.1",
+            cargo.Replace("\"$RUNNER_TEMP/ssign\"", "\"$RUNNER_TEMP/ss#ign\"", StringComparison.Ordinal),
+            cargo.Replace($" # {version}", " # v0.1.12-rc.1", StringComparison.Ordinal),
+            cargo.Replace($" # {version}", " # 0.1.12", StringComparison.Ordinal),
+            cargo.Replace($" # {version}", " # v1.2.3.4", StringComparison.Ordinal),
+        ];
+        foreach (var sample in notMatched)
+        {
+            Assert.NotEqual(cargo, sample);
+            Assert.False(regex.IsMatch(sample + "\n"), $"the ssign manager reads a drifted line: {sample}");
+        }
+
+        var manager = SsignManagerText();
+        Assert.Contains("datasourceTemplate: 'github-tags'", manager);
+        Assert.Contains("versioningTemplate: 'semver'", manager);
+    }
+
+    /// <summary>renovate.json5's packageRules, each from its <c>    {</c> line to its <c>    },</c> line.</summary>
+    private static List<string> RenovatePackageRules()
+    {
+        var lines = Renovate().Split('\n');
+        var start = Array.IndexOf(lines, "  packageRules: [");
+        Assert.True(start >= 0, "renovate.json5 has no packageRules");
+        var end = Array.IndexOf(lines, "  ],", start);
+        Assert.True(end > start, "renovate.json5's packageRules is not closed");
+        List<string> rules = [];
+        for (var i = start + 1; i < end; i++)
+        {
+            if (lines[i] != "    {")
+                continue;
+            var close = Array.IndexOf(lines, "    },", i);
+            Assert.True(close > i && close < end, "a packageRules entry is not closed");
+            rules.Add(string.Join('\n', lines[i..(close + 1)]));
+            i = close;
+        }
+        return rules;
+    }
+
+    [Fact]
+    public void Renovate_SsignRule_NeverAutomerges()
+    {
+        var renovate = Renovate();
+        var rules = RenovatePackageRules();
+        var ssign = Assert.Single(rules, rule => rule.Contains("matchPackageNames: ['Le-Syl21/ssign']", StringComparison.Ordinal));
+
+        Assert.Contains("\n      automerge: false,\n", ssign);
+        Assert.Contains("\n      dependencyDashboardApproval: true,\n", ssign);
+        Assert.Contains("\n      matchManagers: ['custom.regex'],\n", ssign);
+        // A key, not the word: the rule's description names minimumReleaseAge.
+        Assert.DoesNotMatch(@"(?m)^\s*minimumReleaseAge\s*:", ssign);
+        Assert.Contains("\n  minimumReleaseAge: '3 days',\n", renovate);
+        // The security-critical rule stays last: later rules win, so nothing after it names packages.
+        var last = rules[^1];
+        Assert.Contains("KEEP THIS RULE LAST", last);
+        Assert.True(rules.IndexOf(ssign) < rules.Count - 1, "the ssign rule comes after the security-critical rule");
+        Assert.DoesNotContain("matchPackageNames", renovate[(renovate.IndexOf(last, StringComparison.Ordinal) + last.Length)..]);
     }
 
     [Fact]

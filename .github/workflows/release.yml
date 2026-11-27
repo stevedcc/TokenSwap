@@ -463,11 +463,13 @@ jobs:
             exit 1
           fi
 
-      # Built before the code is asked for, so compiling doesn't eat its 30 s window. ssign (MIT, Rust) at the commit
-      # that signed the v0.3.1-rc.1 exe on 2026-11-20 (v0.1.11); it talks only to Certum's signing and timestamp servers.
+      # Built before the code is asked for, so compiling doesn't eat its 30 s window. ssign (MIT, Rust) is pinned by
+      # commit; the "# vX.Y.Z" at the end of the line below is the version Renovate reads (renovate.json5, the ssign
+      # manager), so keep that shape. It talks only to Certum's signing and timestamp servers. Each bump: read the
+      # ssign diff (it handles the signing login), then one dry run (Release, Run workflow with `dry_run`, on the Renovate branch before you merge if the windows-signing environment allows that branch, else on main before you tag), which signs with a real code and publishes nothing, before tagging.
       - name: Build ssign
         shell: bash
-        run: cargo install --locked --git https://github.com/Le-Syl21/ssign --rev 367bf7d3da14d5041d5e47f855ae2397b8028e33 ssign --root "$RUNNER_TEMP/ssign"
+        run: cargo install --locked --git https://github.com/Le-Syl21/ssign --rev 367bf7d3da14d5041d5e47f855ae2397b8028e33 ssign --root "$RUNNER_TEMP/ssign" # v0.1.11
 
       - name: Download the unsigned archive
         uses: actions/download-artifact@v4
