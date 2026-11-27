@@ -434,8 +434,14 @@ jobs:
   sign-windows:
     name: Sign win-x64
     needs: [build]
-    if: always() && github.event_name != 'pull_request' && github.repository == 'stevedcc/TokenSwap' && needs.build.result == 'success'
+    # A cancelled run must not keep waiting for the owner's code. With always() a sign-windows job that had not started
+    # yet starts after the cancel and waits for a code, because GitHub's documentation says always() is true even when
+    # the run is cancelled; !cancelled() is the alternative it recommends. Written in ${{ }}: YAML reads a plain scalar
+    # that starts with ! as a tag. The needs.build.result check carries the success test.
+    if: ${{ !cancelled() && github.event_name != 'pull_request' && github.repository == 'stevedcc/TokenSwap' && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
+    # Observed to cover runner time only: on three real runs the approval wait showed outside the job's length
+    # (GitHub's docs don't say where the timer starts).
     timeout-minutes: 30
     permissions:
       contents: read
@@ -463,11 +469,13 @@ jobs:
             exit 1
           fi
 
-      # Built before the code is asked for, so compiling doesn't eat its 30 s window. ssign (MIT, Rust) at the commit
-      # that signed the v0.3.1-rc.1 exe on 2026-11-20 (v0.1.11); it talks only to Certum's signing and timestamp servers.
+      # Built before the code is asked for, so compiling doesn't eat its 30 s window. ssign (MIT, Rust) is pinned by
+      # commit; the "# vX.Y.Z" at the end of the line below is the version Renovate reads (renovate.json5, the ssign
+      # manager), so keep that shape. It talks only to Certum's signing and timestamp servers. Each bump: read the
+      # ssign diff (it handles the signing login), then one dry run (Release, Run workflow with `dry_run`, on the Renovate branch before you merge if the windows-signing environment allows that branch, else on main before you tag), which signs with a real code and publishes nothing, before tagging.
       - name: Build ssign
         shell: bash
-        run: cargo install --locked --git https://github.com/Le-Syl21/ssign --rev 367bf7d3da14d5041d5e47f855ae2397b8028e33 ssign --root "$RUNNER_TEMP/ssign"
+        run: cargo install --locked --git https://github.com/Le-Syl21/ssign --rev 367bf7d3da14d5041d5e47f855ae2397b8028e33 ssign --root "$RUNNER_TEMP/ssign" # v0.1.11
 
       - name: Download the unsigned archive
         uses: actions/download-artifact@v4
@@ -535,7 +543,7 @@ jobs:
   verify-windows:
     name: Verify win-x64 signature
     needs: [sign-windows]
-    if: always() && github.event_name != 'pull_request' && github.repository == 'stevedcc/TokenSwap' && needs.sign-windows.result == 'success'
+    if: ${{ !cancelled() && github.event_name != 'pull_request' && github.repository == 'stevedcc/TokenSwap' && needs.sign-windows.result == 'success' }}
     runs-on: windows-latest
     permissions:
       contents: read

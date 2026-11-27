@@ -33,6 +33,7 @@ public sealed class SignWindowsScriptTests : IDisposable
         ["SIGNING_ISSUE"] = null,
         ["SIGNING_OWNER"] = null,
         ["SIGN_MAX_ATTEMPTS"] = null,
+        ["SIGN_GET_TRIES"] = null,
     };
 
     public SignWindowsScriptTests()
@@ -52,9 +53,19 @@ public sealed class SignWindowsScriptTests : IDisposable
               prev=$a
             done
             case $method in
-              GET) cat "$d/comments.json" ;;
+              GET)
+                # get-fails holds N: the next N GETs fail, after a truncated page on stdout (gh's partial output).
+                left=$(cat "$d/get-fails" 2>/dev/null || echo 0)
+                if [ "$left" -gt 0 ]; then
+                  echo $((left - 1)) > "$d/get-fails"
+                  printf '[{"id": 1, "user": {"login": "ste'
+                  echo 'gh: HTTP 502' >&2
+                  exit 1
+                fi
+                cat "$d/comments.json" ;;
               DELETE) [ -f "$d/delete.fails" ] && { echo 'gh: Not Found (HTTP 404)' >&2; exit 1; } ;;
               POST)
+                [ -f "$d/post-fails" ] && { echo 'gh: HTTP 502' >&2; exit 1; }
                 printf '%s\n' "$body" >> "$d/posted.log"
                 n=$(cat "$d/next-id")
                 echo $((n + 1)) > "$d/next-id"
@@ -76,6 +87,11 @@ public sealed class SignWindowsScriptTests : IDisposable
             for last; do :; done
             [ "$code" = 0 ] && printf 'SIGNED' >> "$last"
             exit "$code"
+            """);
+        // Always installed, so no test ever really sleeps; it returns at once.
+        WriteTool("sleep", """
+            #!/bin/sh
+            printf 'sleep %s\n' "$*" >> "$FAKE_DIR/calls.log"
             """);
     }
 
@@ -138,6 +154,10 @@ public sealed class SignWindowsScriptTests : IDisposable
     private List<string> Calls() => ReadLines("calls.log");
     private List<string> Posted() => ReadLines("posted.log");
     private List<string> Deleted() => [.. Calls().Where(c => c.StartsWith("gh api -X DELETE ", StringComparison.Ordinal))];
+    private List<string> Gets() => [.. Calls().Where(c => c == "gh api repos/stevedcc/tswap-signing/issues/1/comments?per_page=100 --paginate")];
+    private List<string> Posts() => [.. Calls().Where(c => c.StartsWith("gh api -X POST ", StringComparison.Ordinal))];
+    private List<string> Sleeps() => [.. Calls().Where(c => c.StartsWith("sleep ", StringComparison.Ordinal))];
+    private void GetFails(int times) => File.WriteAllText(Path.Combine(_dir, "get-fails"), times.ToString());
     private List<string> SsignRuns() => [.. Calls().Where(c => c.StartsWith("ssign ", StringComparison.Ordinal))];
     private List<string> SsignEnv(int run) => [.. File.ReadAllLines(Path.Combine(_dir, $"ssign-env-{run}"))];
 
@@ -217,6 +237,47 @@ public sealed class SignWindowsScriptTests : IDisposable
         AssertNoSecretsLeaked(run);
     }
 
+    /// <summary>#381 item 1: a re-run of a finished job stops before it posts a request.</summary>
+    [JqUnixFact]
+    public void Request_AlreadySigned_RefusesBeforePosting()
+    {
+        var exe = Exe(signed: true);
+
+        var run = Run("request", exe);
+
+        Assert.Equal(1, run.ExitCode);
+        Assert.Contains("::error::tswap.exe is already signed (a re-run of a finished sign job?)", run.Stdout + run.Stderr);
+        Assert.Empty(Posted());
+        Assert.Empty(Calls());
+    }
+
+    [JqUnixFact]
+    public void Request_NotAPeFile_Refuses()
+    {
+        var exe = Path.Combine(_dir, "tswap.exe");
+        File.WriteAllText(exe, "not a PE file");
+
+        var run = Run("request", exe);
+
+        Assert.Equal(1, run.ExitCode);
+        Assert.Contains("is not a PE file", run.Stdout + run.Stderr);
+        Assert.Empty(Calls());
+    }
+
+    /// <summary>#381 item 2: a POST is not retried (a retried request could post twice).</summary>
+    [JqUnixFact]
+    public void Request_PostFails_IsNotRetried()
+    {
+        var exe = Exe();
+        File.WriteAllText(Path.Combine(_dir, "post-fails"), "");
+
+        var run = Run("request", exe);
+
+        Assert.NotEqual(0, run.ExitCode);
+        Assert.Single(Posts());
+        Assert.Empty(Posted());
+    }
+
     // ---- sign ----
 
     [JqUnixFact]
@@ -268,6 +329,128 @@ public sealed class SignWindowsScriptTests : IDisposable
         Assert.Contains("CERTUM_TOKEN=444444", SsignEnv(1));
         Assert.Equal(["gh api -X DELETE repos/stevedcc/tswap-signing/issues/comments/11"], Deleted());
         Assert.DoesNotContain("555555", run.Stdout, StringComparison.Ordinal);
+    }
+
+    // ---- sign: the poll retries a failed read (#381 item 2) ----
+
+    [JqUnixFact]
+    public void Sign_PollFailsOnce_RetriesAndSigns()
+    {
+        var exe = Exe();
+        Comments([Comment(11, "stevedcc", "246810")]);
+        GetFails(1);
+
+        var run = Sign(exe);
+
+        Assert.True(run.ExitCode == 0, run.Stdout + run.Stderr);
+        Assert.Single(SsignRuns());
+        Assert.Contains("CERTUM_TOKEN=246810", SsignEnv(1));
+        Assert.Equal(2, Gets().Count);
+        Assert.Contains("::warning::reading the signing issue failed (try 1 of 3)", run.Stderr);
+        Assert.Equal([$"Signed: {RunUrl}, SHA-256 {Sha256(exe)}."], Posted());
+        AssertNoSecretsLeaked(run, "246810");
+    }
+
+    [JqUnixFact]
+    public void Sign_PollFailsTwice_RetriesAndSigns()
+    {
+        var exe = Exe();
+        Comments([Comment(11, "stevedcc", "135791")]);
+        GetFails(2);
+
+        var run = Sign(exe);
+
+        Assert.True(run.ExitCode == 0, run.Stdout + run.Stderr);
+        Assert.Single(SsignRuns());
+        Assert.Contains("CERTUM_TOKEN=135791", SsignEnv(1));
+        Assert.EndsWith("SIGNED", File.ReadAllText(exe), StringComparison.Ordinal);
+        Assert.Equal(3, Gets().Count);
+    }
+
+    [JqUnixFact]
+    public void Sign_PollFailsEveryTime_FailsClearly()
+    {
+        var exe = Exe();
+        Comments([Comment(11, "stevedcc", "135791")]);
+        GetFails(99);
+
+        var run = Sign(exe);
+
+        Assert.Equal(1, run.ExitCode);
+        Assert.Contains("::error::could not read the comments of stevedcc/tswap-signing#1 after 3 tries", run.Stderr);
+        Assert.Equal(3, Gets().Count);
+        Assert.Empty(SsignRuns());
+        Assert.Empty(Deleted());
+        Assert.Empty(Posted());
+    }
+
+    [JqUnixFact]
+    public void Sign_PollTriesCap_IsTheVariable()
+    {
+        var exe = Exe();
+        GetFails(99);
+        Env["SIGN_GET_TRIES"] = "2";
+
+        var run = Sign(exe);
+
+        Assert.Equal(1, run.ExitCode);
+        Assert.Contains("::error::could not read the comments of stevedcc/tswap-signing#1 after 2 tries", run.Stderr);
+        Assert.Equal(2, Gets().Count);
+    }
+
+    [JqUnixFact]
+    public void Sign_PollRetries_SleepBetweenTries()
+    {
+        var exe = Exe();
+        Comments([Comment(11, "stevedcc", "975310")]);
+        GetFails(1);
+        Env["SIGN_GET_TRIES"] = "2";
+        Env["SIGN_POLL_SECONDS"] = "7";
+
+        var run = Sign(exe);
+
+        Assert.True(run.ExitCode == 0, run.Stdout + run.Stderr);
+        var calls = Calls();
+        var gets = calls.Select((call, at) => (call, at)).Where(c => Gets().Contains(c.call)).Select(c => c.at).ToList();
+        Assert.Equal(2, gets.Count);
+        Assert.Equal(["sleep 7"], Sleeps());
+        var sleep = calls.IndexOf("sleep 7");
+        Assert.True(gets[0] < sleep && sleep < gets[1], string.Join('\n', calls));
+        Assert.Single(SsignRuns());
+    }
+
+    /// <summary>A page jq can't parse is a parse error, not a transient one: not retried.</summary>
+    [JqUnixFact]
+    public void Sign_PollBadJson_IsNotRetried()
+    {
+        var exe = Exe();
+        File.WriteAllText(Path.Combine(_dir, "comments.json"), "[{\"id\": 11, \"user\": ");
+
+        var run = Sign(exe);
+
+        Assert.NotEqual(0, run.ExitCode);
+        Assert.Single(Gets());
+        Assert.Empty(Sleeps());
+        Assert.Empty(SsignRuns());
+        Assert.Empty(Deleted());
+    }
+
+    [JqUnixTheory]
+    [InlineData("0")]
+    [InlineData("abc")]
+    [InlineData("-1")]
+    [InlineData("")]
+    public void Sign_BadGetTries_Refused(string tries)
+    {
+        var exe = Exe();
+        Comments([Comment(11, "stevedcc", "135791")]);
+        Env["SIGN_GET_TRIES"] = tries;
+
+        var run = Sign(exe);
+
+        Assert.Equal(1, run.ExitCode);
+        Assert.Contains("::error::SIGN_GET_TRIES must be an integer of at least 1", run.Stdout + run.Stderr);
+        Assert.Empty(Calls());
     }
 
     [JqUnixTheory]
@@ -402,6 +585,36 @@ public sealed class SignWindowsScriptTests : IDisposable
 
     // ---- the script's text ----
 
+    /// <summary>Null when shellcheck is on PATH; otherwise the skip reason.</summary>
+    internal static string? ShellcheckMissing =>
+        (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator)
+            .Any(dir => dir.Length > 0 && File.Exists(Path.Combine(dir, "shellcheck")))
+            ? null
+            : "shellcheck is not installed (ubuntu runners have it)";
+
+    /// <summary>
+    /// #381 item 7: shellcheck finds nothing, info level included. Versions differ between runner images: a new
+    /// finding on a CI leg is fixed in the script, never by loosening this test.
+    /// </summary>
+    [ShellcheckUnixFact]
+    public void Script_PassesShellcheck()
+    {
+        var psi = new ProcessStartInfo("shellcheck") { RedirectStandardOutput = true, RedirectStandardError = true };
+        psi.ArgumentList.Add("-S");
+        psi.ArgumentList.Add("info");
+        psi.ArgumentList.Add(_script);
+        using var process = Process.Start(psi)!;
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEndAsync();
+        if (!process.WaitForExit(TimeSpan.FromMinutes(1)))
+        {
+            process.Kill(entireProcessTree: true);
+            Assert.Fail("shellcheck did not finish within a minute");
+        }
+
+        Assert.True(process.ExitCode == 0, stdout.Result + stderr.Result);
+    }
+
     private static string[] ScriptLines => File.ReadAllLines(RepoFile("contrib", "packaging", "sign-windows.sh"));
 
     private static IEnumerable<string> CodeLines => ScriptLines.Where(line => !line.TrimStart().StartsWith('#'));
@@ -438,6 +651,12 @@ public sealed class SignWindowsScriptTests : IDisposable
 public sealed class JqUnixFactAttribute : FactAttribute
 {
     public JqUnixFactAttribute() => Skip = PlatformFacts.SkipHere(PlatformRequirement.Unix, "bash") ?? SignWindowsScriptTests.JqMissing;
+}
+
+/// <summary>A fact that needs shellcheck: skipped on Windows and where shellcheck isn't installed.</summary>
+public sealed class ShellcheckUnixFactAttribute : FactAttribute
+{
+    public ShellcheckUnixFactAttribute() => Skip = PlatformFacts.SkipHere(PlatformRequirement.Unix, "shellcheck") ?? SignWindowsScriptTests.ShellcheckMissing;
 }
 
 /// <summary>A theory that needs bash and jq: skipped on Windows and where jq isn't installed (B4).</summary>
