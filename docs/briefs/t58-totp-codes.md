@@ -90,6 +90,87 @@ These bind and win over the text below where they differ.
     `RecordWrites_MatchNextRecord_OnRandomStates` (which compares `RecordWrites` with `NextRecord` plus `PrepareV3`)
     holds the two paths equal once its random states include otpauth values.
 
+## Amendments (round 1b: package upgrades; owner, 2026-11-27)
+
+Owner: "Make sure we have tests that would catch any issues on package upgrades". These bind as round 1's do.
+
+12. **Otp.NET contract tests.** `TswapTests/Totp/OtpNetContractTests.cs`, whose summary says it is the upgrade guard
+    for Otp.NET: each test pins one thing tswap relies on and fails by name when a bump changes it. Every row goes
+    through tswap's own path (`TotpSeed.FromUri`/`FromBase32` and `Compute`), not only the raw library. Task 1's rows
+    move into this class where they are this contract; the rest stay in Task 1's tests.
+    - The RFC 6238 Appendix B vectors: all six times × SHA1, SHA256 and SHA512, 8 digits, period 30 (18 codes; Task 1's
+      first row).
+    - Leading zeros kept: SHA1 8 digits at 1111111109 is `07081804`; the SHA1 URI with 6 digits at 1111111111 is
+      `050471` (Task 1's window-edge row). Assert the whole string, including the zero.
+    - Step boundaries at the last millisecond of a step and the first of the next. Period 30 is Task 1's window-edge row.
+      Period 60, SHA1 seed: at 1111111139.999, `360094` (8 digits: `19360094`) with 1 s left; at 1111111140.000,
+      `593113` (`68593113`) with 60 s left. Values computed with an independent HMAC (Python `hmac`), as the other
+      vectors were.
+    - Digits 6 and 8 for the same seed and time: the 6-digit code is the last six digits of the 8-digit one.
+    - Base32 decoding of the forms tswap hands the library. Each accepted spelling must decode to the bytes of
+      `12345678901234567890` (or the 32-byte seed): upper, lower and mixed case; padded with `=` or `%3D`; the bare
+      form with spaces. Compare the key bytes `TotpSeed` holds, not codes.
+    - Remaining seconds at a step's first and last millisecond, for periods 30 and 60.
+    - Break-it-once: compute with `totpSize: 7` (the digits row fails); pass the bare form to the library without
+      removing its spaces (the spaces decode row fails: Otp.NET throws on a space).
+13. **Trim and AOT warnings fail the Release publish.** Evidence on this base:
+    - `dotnet publish TswapCli/TswapCli.csproj -c Release -p:TrimmerSingleWarn=false -p:IlcTreatWarningsAsErrors=true`
+      on Linux x64 passes with no IL warning.
+    - CI run 45839723503 (main): the "AOT publish" step (`ci.yml:132`, Release) shows none on any of the four legs.
+    - The E2E step's Debug publish shows `warning IL2104: Assembly 'Yubico.YubiKey' produced trim warnings` on all
+      four. Locally, with `TrimmerSingleWarn=false`, that is one
+      `IL2026 Yubico.YubiKey.Cryptography.CryptographyProviders..cctor(): … HMAC.Create(String)`.
+
+    Because of that Debug warning the error is Release-only, which is what ships. Mechanism (NativeAOT's ILCompiler
+    reads both properties, `Microsoft.NETCore.Native.targets:31`, `:308`, `:311`): in `TswapCli/TswapCli.csproj`,
+    - `<TrimmerSingleWarn>false</TrimmerSingleWarn>` in the first PropertyGroup, so a package's warnings are listed
+      per member, not collapsed into one IL2104;
+    - a new `<PropertyGroup Condition="'$(Configuration)' == 'Release'">` with
+      `<IlcTreatWarningsAsErrors>true</IlcTreatWarningsAsErrors>` (ILC's `--warnaserror`: every IL2xxx/IL3xxx it
+      reports is an error).
+
+    Both get a comment saying why, and naming the Debug IL2026 above as known and pre-existing. `Directory.Build.props`
+    can't take them: `DependencyPinningTests` (`PropsProperties`, `:61`) allows exactly three properties there. The
+    implementer first re-runs the Release publish with both settings, here and from the newest main CI log. If any IL
+    warning shows in Release, stop and report.
+
+    Guard test `TswapTests/Build/AotWarningTests.cs`, reading files only:
+    - the two settings are present as above, unconditional and Release-conditioned respectively;
+    - no project file sets `IlcTreatWarningsAsErrors` false, `TrimmerSingleWarn` true, `SuppressTrimAnalysisWarnings`
+      or `NoWarn`/`WarningsNotAsErrors` with an `IL2`/`IL3` code;
+    - no file under `.github/workflows/` passes any of those as `-p:` (`release.yml` is read, not changed);
+    - one positive row per forbidden form, proving the scan finds it in a sample string.
+
+    Break-it-once, with output in the report: add a throwaway call of a `[RequiresUnreferencedCode]` method to
+    `Program.cs`. The Release publish fails with `error IL2026`, and the Debug publish only warns. Revert it.
+14. **Published-binary E2E** (`EndToEndTests`, which CI runs against the NativeAOT Debug publish via `TSWAP_E2E_BINARY`,
+    `TswapBinaryFixture.cs:27`). Vault set-up as the existing tests do it: `TSWAP_TEST_KEY` and a temp
+    `TSWAP_CONFIG_DIR` (`EndToEndTests.cs:63-65`), `init --yubikey --no-recovery` (`:340`). Values go in through
+    `ingest` on stdin. The real clock runs inside the binary, so these tests assert shapes and absences only, never a
+    code's value, and pass at any instant:
+    - `tswap totp` on the SHA1 URI (6 digits) and on a SHA512 URI with `digits=8`: exit 0. Stdout is exactly one line
+      of 6 (or 8) ASCII digits. Stderr has one line matching `^Valid for [0-9]+ more seconds? \(a new code every 30
+      seconds\)\.$`.
+    - `tswap run` with `{{t}}`: the child is a script (Unix `sh`, Windows `pwsh -File`, the pattern at `:388-391` and
+      `:782`). It prints only value-free markers: `LEN=<length of $1>`, `DIGITS=yes` when `$1` is all digits, and
+      `LEAK` when `$1` contains `otpauth` or the seed text, case ignored. Assert:
+      - `LEN=6` (`LEN=8` for the SHA512 URI) and `DIGITS=yes`;
+      - no `LEAK`;
+      - stdout doesn't contain the URI, the seed text or `otpauth`.
+    - `names --json`: the TOTP record's entry has `"kind": "totp"`, a plain one has no `kind`.
+    - A refused URI (`digits=7`): `run` and `totp` exit 1 with the R11 refusal on stderr, and neither stream contains
+      the URI or the seed.
+
+    Break-it-once: make `CommandValues` return the stored value (the `LEAK` assertion fails in the published binary).
+    Run it with `TSWAP_E2E_BINARY` pointed at a local Debug publish and report the output.
+15. **Renovate.** `renovate.json5` (checked, unchanged): an Otp.NET bump matches only the NuGet `rangeStrategy: 'pin'`
+    rule (and the majors rule). The only automerge rules are for test-package patches (`Microsoft.NET.Test.Sdk`,
+    `xunit*`), the first GitHub Actions pin and global.json patches, and `config:recommended` sets no automerge. So an
+    Otp.NET bump is always an ordinary PR, never automerged. `ci.yml` runs on `pull_request` with no path filter, on the
+    four-OS matrix (`ci.yml:26`). That covers this class, the AOT publish of amendment 13 and the E2E tests of
+    amendment 14. Whether Otp.NET joins the "security-critical packages" rule (no automerge either way, but a label and
+    the owner's eye) is the owner's call. This brief doesn't change it, since `renovate.json5` is T59's.
+
 ## What is wrong (evidence)
 
 The owner stored the Certum code-signing token's whole `otpauth://totp/...` URI as `certum-totp` (#368). Reproduced
