@@ -52,7 +52,7 @@ report when the brief can't be built as written.
 - Tasks 2 and 3: the tests that pin a record's whole extension list after a value write, a delete, or a merge that
   now sets a value aside, because each such record now carries a `0x0103` extension (a value write makes the lineage
   exact, §1.4 rule 4 and §1.5; a merge of a lineage-less tombstone or first value with an older value keeps that value,
-  §1.1's D2 fallback with an empty `S`). **These need the controller's sanction before launch** (the design doesn't
+  §1.1's D2 fallback with an empty `S`). **Sanctioned by the owner on 2026-11-27** (the design doesn't
   name them). Merges (Task 2): `RecordMergeV3Tests.MergeAll_Tombstone_DropsFields_KeepsOtherExtensions` (`:406`) and
   `.MergeAll_RecreatedWithoutFields_ThenTwoStaleCopies_NoOldFields` (`:449`);
   `RecordStoreV3Tests.VaultMerge_V3TombstoneWithAnExtension_IntoAnUnmarkedFolder_KeepsItAndWritesV3` (`:388`). Writes (Task 3):
