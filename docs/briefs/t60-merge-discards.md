@@ -1,10 +1,10 @@
 # Brief T60: a merge keeps the value it discards, warns, and lets a person use, restore or drop it (#312)
 
 Issue: https://github.com/stevedcc/TokenSwap/issues/312. Milestone 0.3.3. Design:
-`docs/superpowers/specs/2026-11-27-merge-discards-and-rollback-design.md` on branch `design/records-033` at **6262c2f**
-(rounds 1-10; Part 1, §1.4a, Tests "T60", "Briefs", owner Decisions). The design's body is authoritative; its amendment
+`docs/superpowers/specs/2026-11-27-merge-discards-and-rollback-design.md` on branch `design/records-033` at **a286f1a**
+(rounds 1-10, plus the owner's confirmation of Decisions item 4; Part 1, §1.4a, Tests "T60", "Briefs", owner Decisions). The design's body is authoritative; its amendment
 history only records why. This brief is Part 1 of that design; Part 2 (#197, the floors) is brief T61, which runs after
-this one. A later design amendment is diffed against 6262c2f.
+this one. A later design amendment is diffed against a286f1a.
 
 **Design rounds 8-9 (2f1ed12), folded into the body below:** the silence rule (an OR of three) and R12 without its
 "also the previous value" form; silent entries listed but never counted as open; R13 (position); R8 for any input,
@@ -18,12 +18,18 @@ value loses it too (confirmed by the owner on 2026-11-27, design Decisions 4); a
 earlier-life leak, the export warning naming the lineage, `S` alone and format 2, the `names` metadata cost; the v0.3.2
 release check kept.
 
-**Base.** This brief builds on T58 (TOTP, PR #433, branch `brief/t58` at a0836c2): its record extension `0x0101`
-(`ValueKinds`), `CommandValues` and its token grammar. **The base is `origin/main` once T58 has merged** (today main is
-dcc4c04, which `brief/t58` contains). Line numbers below are at `brief/t58` a0836c2; for files T58 doesn't touch they
-are the same at dcc4c04 (`RecordMerge.cs`, `SecretRecordCodec.cs`, `SecretRecord.cs`, `SecretEntry.cs`,
-`PendingWrite.cs`, `VaultView.cs`, `Hlc.cs`, `FingerprintIndex.cs`). If the merged T58 differs from a0836c2 in a place
-this brief names, stop and report.
+**Brief round 2 (MiMo r1, DeepSeek r1):** the base is main at 686f1fe; every T58 citation re-checked there
+(`CommandValues`' refusal split and `BurnedSeedAdvice`, `RunCommand`'s burned warning and shifted lines); two Task 2
+rows corrected to §1.4a (the `S` cap rows); the `Older032` test helpers T61 cites, with `LineageRule`; elevation words
+on Windows (R16); `--ack`'s default scope is the design's "every open entry"; `Encode`'s limits; `UnsealedDiscards`
+carried by writes; the entry predicate of `IsCurrent`; R13 "in place"; the full `:discarded` refusal and burned advice;
+the missing break-it-once; `ForSecret`'s timing; the ownership notes; the release check without T61's files.
+
+**Base.** Main at 686f1fe (T58, cd1a5e7, and T62, #439, merged), already merged into `brief/t60`; the implementer
+merges `origin/main` into `brief/t60` again before starting (a merge, never a rebase). This brief builds on T58's record
+extension `0x0101` (`ValueKinds`), `CommandValues` and its token grammar. Every line number below is checked at
+686f1fe. If a later main moves a place this brief names, follow the member it names and say so in the commit; stop and
+report only when the member or its behaviour changed.
 
 Read AGENTS.md and CLAUDE.md first ("The record store", "Privilege Boundary", "Token Substitution"). Then:
 - the design's Part 1 (§1.1-§1.10) and §1.4a in full; its Tests section, "T60 (#312)";
@@ -96,7 +102,10 @@ No test, message or log prints a value, seed or URI. `SpellingTests` scans `.cs`
 (its contract comment, Task 5), `Validation.cs`, `Apply.cs`, `Check.cs`, `ToCommentProcessor.cs`, `SecretMatcher.cs`, `Totp/CommandValues.cs`,
 `Fields/FieldSet.cs` (registry comment), `Prompt.cs`; in `TswapCli`: `CommandContext.cs`, `FieldWhoSource.cs` (make
 `ValidateBy` internal), `FingerprintStreamMatcher.cs`, `CliJson.cs`, `CommandRegistry.cs`, `Commands/FieldCommand.cs`
-(the adopt refusal, Task 5), and the commands that warn (Task 4) or change (Task 5); docs in Task 6. Don't touch `TswapCore/Vault/VaultUnlocker.cs`, `KeyringUnion.cs` or
+(the adopt refusal, Task 5), `ElevatedCommand.cs` (`Quoted`, R16), and the commands that warn (Task 4) or change
+(Task 5); `TswapTests/Older032.cs` (the helpers, Interfaces); docs in Task 6. `RecordMetadata.cs` is in the design's T60
+list but needs no change here (the lineage is an extension); an edit is allowed if one turns out to be needed.
+`Models.cs` is in the design's T61 list too; T60 edits `Secret` and `SecretsDb` there first (the briefs are serialised). Don't touch `TswapCore/Vault/VaultUnlocker.cs`, `KeyringUnion.cs` or
 `VaultCommand.cs` (T61's).
 
 ## What is wrong (evidence)
@@ -158,7 +167,16 @@ These are decided here; each is marked where it is used.
 - **R13, the merged `ValueLineage`'s position** (design §1.4 rule 6) follows `Fields`' rule in `MergeExtensions`
   (`RecordMerge.cs:315-346`): the place it has in the chosen list (the whole list of the input with the largest write
   stamp, `Fields` and `ValueLineage` left out for the tie order), at the end when that list has none; when both are
-  appended, `Fields` first, then `ValueLineage`.
+  appended, `Fields` first, then `ValueLineage`. When the chosen list holds both, each is **replaced in place** at its
+  own index (never stripped and reinserted), so `[F, A, V, B]` stays `[F, A, V, B]`.
+- **R16, elevation words** (design §2.5, round 8 MiMo M-5, T58 amendment 8): every new text that names
+  `sudo tswap …` gives, on Windows, `'tswap …' (from an elevated command prompt)` instead of `'sudo tswap …'`. Texts built
+  in Core keep the literal `tswap` and decide with `OperatingSystem.IsWindows()` through one new helper,
+  `internal static string ConflictDisplay.Elevated(string command, bool windows)` (`'sudo tswap {command}'` or
+  `'tswap {command}' (from an elevated command prompt)`); texts built in the CLI use `ctx.Prefix` and a new
+  `ElevatedCommand.Quoted(string prefix, string command, bool windows)` beside `ElevatedCommand.For`
+  (`TswapCli/ElevatedCommand.cs:13-16`). `CommandValues` already takes `windows` (`CommandValues.cs:15`). The texts
+  below are written in their Unix form.
 - **R14, earlier-life entries** (design §1.10, round 8 model 4): an entry of a live record whose version is below the
   current life's start, the `Fields` extension's `Since` (`FieldsCodec.TryGet(extensions)?.Since`; `RecordWrites.cs:99`
   sets it on a new life). A record with no `Fields` extension (re-created by v0.3.0) can't tell: every entry is
@@ -168,6 +186,39 @@ These are decided here; each is marked where it is used.
   lineage has `AsOf == W.Version`, `ExactFrom` then the smallest among those exact ones; with none exact, `AsOf` and
   `ExactFrom` are the smallest among the tied copies' lineages (both `Stamp.Zero` when none has one). `R` is the same
   for every tied copy (they must agree on the previous version, `:121-122`, `:208-215`).
+
+## Interfaces T61 relies on
+
+T61 cites these by name; keep the names and signatures. Besides the public types and members of Tasks 1-5
+(`ValueLineage`, `ValueLineageCodec`, `ConflictDisplay`, `VaultView.Record`, `VaultWriter.Record`,
+`RecordVaultStore.OwnOriginId`, `RecordVaultStore.ConflictCreated`, `LineageRule`), Task 2 adds the test helpers for
+what tswap 0.3.2 does to a record, in `TswapTests/Older032.cs`:
+
+```csharp
+/// What v0.3.2 does to a record (no 0x0101 or 0x0103 code: it keeps both byte for byte and merges them by the
+/// whole-list rule), for mixed-version tests. T60 and T61 cite it.
+internal static class Older032
+{
+    /// A new value version as v0.3.2's RecordWrites.NewVersion writes it: RecordVaultStore.NextRecord's version, burns
+    /// and previous value, with the extensions FieldEdits.ForWrite(state?.Extensions ?? [], live ? null : version, …)
+    /// gives (a live record's list unchanged; a new life a fresh Fields, the rest kept). Write = version.
+    internal static SecretRecord ValueWrite(SecretRecord? state, byte[] recordId, string name, byte[] value, Stamp version,
+        DateTime created);
+    /// A burn of the current version (extensions unchanged). Write = burn.
+    internal static SecretRecord Burn(SecretRecord state, Stamp burn, string? reason);
+    /// A delete: a tombstone that drops only Fields (FieldsCodec.With(extensions, null)), keeping 0x0101 and 0x0103.
+    internal static SecretRecord Delete(SecretRecord state, Stamp version);
+    /// v0.3.2's merge: RecordMerge.MergeAll(inputs, LineageRule.WholeList), and the metadata path likewise.
+    internal static SecretRecord MergeAll(IReadOnlyList<SecretRecord> inputs);
+    internal static (RecordMetadata Metadata, IReadOnlyDictionary<Stamp, byte[]> Sealed) MergeAllMetadata(
+        IReadOnlyList<(RecordMetadata Metadata, IReadOnlyDictionary<Stamp, byte[]> Sealed)> inputs);
+    /// Writes record as format 3 (SecretRecordCodec.Encode(record, vaultKey, 3)) to machine's records folder, as the
+    /// main file or, with conflictSuffix, as "<hash><conflictSuffix>".
+    internal static void Plant(FleetMachine machine, byte[] vaultKey, SecretRecord record, string? conflictSuffix = null);
+}
+```
+
+Every "0.3.2-shaped" row in this brief is built with these helpers.
 
 ## Task 1: `ValueLineage` and its codec (extension `0x0103`)
 
@@ -191,7 +242,13 @@ Equality of lineages is by `ValueLineageCodec.Encode` bytes (records holding lis
 `public static class ValueLineageCodec`:
 - `public const ushort Type = 0x0103; MaxStamps = 64; MaxEntries = 64; MaxEntryBytes = 65_536; MaxAcknowledgements = 8;`
 - `public static byte[] Encode(ValueLineage lineage)`; `public static ValueLineage Decode(byte[] data)` (throws
-  `TswapException("Malformed value lineage: <what>")`); a candidate entry starts with no acknowledgements;
+  `TswapException("Malformed value lineage: <what>")`); a candidate entry starts with no acknowledgements. `Encode`
+  throws `ArgumentException` past the layout's bounds (more than 255 entries, 64 superseded or retired stamps, 8
+  acknowledgements, a 255-byte label or a 65,534-byte reason); it doesn't apply the 64-entry or 64 KiB write caps (Task 3
+  does), and it encodes an empty (unsealed, R1) section as `sectionLength` 0, so equality by bytes works before
+  `WriteAll` seals it. A merge whose result would hold more than 255 entries throws
+  `RecordConflictException("more than 255 values a merge set aside")` (it takes 256 concurrent rotations of one secret;
+  the record is then unreadable until copies are removed, the fail-closed side);
 - `public static LineageRead Read(IReadOnlyList<RecordExtension> extensions)` →
   `public readonly record struct LineageRead(ValueLineage? Lineage, bool NewerFormat)`: none → `(null, false)`; one
   `0x0103` of format 1 → decoded; format byte > 1 → `(null, true)`; two or more `0x0103`, or a format 1 that doesn't
@@ -235,7 +292,8 @@ Tests, `TswapTests/ValueLineageCodecTests.cs`:
 
 | Case | Outcome |
 |---|---|
-| a lineage with each part filled (2 superseded, 1 retired, `forgotten`, two entries: one burned with a reason, one with 8 acknowledgements, one with and one without a set) | `Decode(Encode(x))` encodes to the same bytes; the bytes laid out as the table above, checked field by field |
+| a lineage with each part filled: 2 superseded, 1 retired, `forgotten`, and two entries, the first burned with a reason and with a set, the second with 8 acknowledgements (one with a `--by` label) and no set | `Decode(Encode(x))` encodes to the same bytes; the bytes laid out as the table above, checked field by field |
+| `Encode` of 256 entries, 65 superseded, 65 retired, 9 acknowledgements, a 256-byte label; of an entry with an empty section | `ArgumentException` for each of the first five; the empty section encodes as `sectionLength` 0 |
 | each malformed form: truncated in every field, superseded 65, retired 65, ack 9, a non-ascending or duplicate stamp in each list, flags `0x02`, `hasFingerprints` 2, a 27-byte section, a trailing byte, a bad UTF-8 label or reason | `TswapException` "Malformed value lineage: …" |
 | format byte 2 with any bytes after it | `Read` gives `(null, true)`; nothing decoded |
 | two `0x0103` extensions | `Read` throws |
@@ -286,16 +344,21 @@ The rule is the design's §1.1 and §1.4, exactly, with `W` the copy whose `Vers
 - A tombstone winner keeps its lineage and entries (owner decision 1).
 
 Wiring:
-- `RecordMerge.MergeAll` and `MergeAllMetadata` build one `LineageCopy` per input and call `Merge`. When any input's
-  `ValueLineageCodec.Read` reports `NewerFormat`, or `Merge` returns null, the `0x0103` follows `MergeExtensions` as
-  today (R8). Otherwise `MergeExtensions` leaves `0x0103` out of the chosen list (as it does `Fields`, `:322`) and the
+- `RecordMerge.MergeAll` and `MergeAllMetadata` gain an optional `LineageRule rule = LineageRule.Apply`
+  (`internal enum LineageRule { Apply, WholeList }`) and build one `LineageCopy` per input and call `Merge`. When
+  `rule` is `WholeList`, any input's `ValueLineageCodec.Read` reports `NewerFormat`, or `Merge` returns null, the
+  `0x0103` follows `MergeExtensions` as today and nothing is set aside (R8; `WholeList` is how 0.3.2 merges, which the
+  `Older032` helpers use). Otherwise `MergeExtensions` leaves `0x0103` out of the chosen list (as it does `Fields`, `:322`) and the
   merged lineage goes back in its place (`ValueLineageCodec.With`). A `TswapException` from `Read` becomes
   `RecordConflictException($"a copy's value lineage can't be read ({ex.Message})")`, as for `Fields` (`:337-340`).
 - Full path: a holding's section is `input.Sealed[stamp]` (format 3, `SecretRecordCodec.cs:700`) or none (format 2,
   `Sealed` null), its plaintext `input.Value` / `input.Previous.Value`. Metadata path: sections from the input's dictionary,
   no plaintext.
 - `SecretRecord` gains `public IReadOnlyDictionary<Stamp, byte[]>? UnsealedDiscards { get; init; }` (not in `SameState`):
-  `MergeAll` sets it from `Merge`'s `Unsealed`, references only, and keeps the inputs' own.
+  `MergeAll` sets it from `Merge`'s `Unsealed`, references only, and keeps the inputs' own. Writes carry it:
+  `NextRecord`, `SetFieldsRecord`, the burn branch and `EditLineageRecord` copy `state.UnsealedDiscards` to the record
+  they build, minus the stamps of entries the write removes; `Tombstone` keeps those of the entries a tombstone keeps
+  (none after a `delete`). The metadata path never has any (format 3 only).
 - Update the summaries of `MergeAll` (`:81-108`, the "Versions the winner doesn't retain are ignored" bullet) and
   `MergeExtensions` (`:304-314`).
 
@@ -336,9 +399,10 @@ the format 2 rows full path only), in every input order, asserting equal encoded
 | A and B create the same name | one entry |
 | a format 2 loser (full path): its plaintext against a format 3 copy holding it as previous; against an entry with another section | in `UnsealedDiscards`, section empty; merged (plaintexts equal); conflict (R2) |
 | an entry with `sectionLength` 0 read from a file | `RecordConflictException` (R1) |
-| 65 rotations on one machine, then a merge with a copy 65 behind | that copy's value an entry |
-| MiMo's r6 construction (A 65 rotations from `x`, B 64 more after syncing A, H frozen at `x`): all at once; ((A, H), B) | all at once entry `x`; ((A, H), B) no entry (pinned) |
-| the same with 63 and 62 rotations | entry `x` in every order |
+| A rotates 65 times from `x`; a merge with H, frozen at `x` | no entry: A's `S` is `{x, v1 … v63}`, exactly 64 stamps, so `x` is still knowingly superseded (§1.4a: "its `S` still holds `x`") |
+| A rotates 66 times from `x`; a merge with H at `x` | entry `x`: the cap pushed `x` out of A's `S` (the anti-goals' accepted false warning, a copy more than 64 value changes stale) |
+| MiMo's r6 construction (A 65 rotations from `x`, B 64 more after syncing A, H frozen at `x`): all at once; ((A, H), B) | all at once entry `x`; ((A, H), B) no entry (pinned, §1.4a) |
+| under the cap: A 30 rotations from `x`, B 30 more after syncing A, H at `x`: all at once and every pairwise order | no entry in any order (`x` in `S` at every step) |
 | 65 retirements on one record; a stale copy holding the first retired stamp as an acknowledged entry | the entry back; `Forgotten` ≥ its stamp |
 | those 65 retirements merged pairwise in every order and all at once | equal `Forgotten` |
 | 65 entries | merged without a cap (no trim, no exception) |
@@ -356,12 +420,24 @@ acknowledgements, sets present or stripped): `MergeAllMetadata` equals `MergeAll
 both refuse; every permutation gives the same bytes; re-merging the result with any input changes nothing. Count
 rounds that set something aside (> 50) and that refused (> 5) and assert both.
 
+`TswapTests/Older032Tests.cs` pins the helpers (Interfaces):
+
+| Case | Outcome |
+|---|---|
+| `Older032.ValueWrite` over a record whose extensions are `[0x0100, 0x0101, 0x0103, 0x7777]` | the version moved; the list byte-identical (so `AsOf` is stale) |
+| `Older032.ValueWrite` over a tombstone carrying `0x0103` | a fresh `Fields`, `0x0103` kept |
+| `Older032.Delete` | `0x0100` gone, `0x0101` and `0x0103` byte-identical |
+| `Older032.Burn` | extensions byte-identical |
+| `Older032.MergeAll` and `.MergeAllMetadata` of two concurrent rotations, either order | the winner's value and the extension list of the larger write stamp; no entry; both paths equal |
+
 Break-it-once, each named in the commit: drop the `S` exclusion (the "two rotations behind" row creates an entry);
 treat "has the extension" as exact (the stale-`asOf` row reports `v1`); let `S` remove entries (the previous-version
 row loses `a`); let `R` remove entries (the §1.4a demotion rows lose `a`); let a candidate with a retired stamp through
 (the (`Z`,`X`),`Y` order keeps `a`); drop the `known` term (both 0.3.2 tombstone/first-value rows lose the value);
 take the lineage from `tied[0]` alone (the tied-winners row differs between orders); decide R8 from the chosen list's
-`0x0103` only (the smaller-write-stamp row sets a value aside).
+`0x0103` only (the smaller-write-stamp row sets a value aside); remove an entry whose value equals a retained one (the
+"winner rotates to the entry's value again" row loses the entry); cap `S` before removing `R` (the 65-rotation row
+creates an entry); make `Older032.ValueWrite` refresh `AsOf` (the stale-`asOf` row through the helper finds it exact).
 
 ## Task 3: writes
 
@@ -422,7 +498,9 @@ keep the `0x0103` bytes as they are (`ValueLineageCodec.With` is not called for 
 - Metadata path: `WithMissingSets` (`:965`) also fills missing entry sets, through `OpenValueSection` with that entry's
   section, but only for a `ValueWrite` (burn, field, ack and clear writes carry entries as they are; a tombstone's only
   through `vault reindex`, since `WithMissingSets` returns early for one, `:996-997`).
-- `IsCurrent` (`:1434`) is false when an entry has no set, an older set, or an empty section.
+- `IsCurrent` (`:1434`) is false when an entry has no set, an empty section, or a set that is not current by
+  metadata alone: `set.VariantSetVersion < SecretVariants.CurrentSetVersion && !SecretVariants.IsCurrent(set)`
+  (`SecretVariants.cs:60`, `:128`; there is no plaintext for `LacksFormsOf`, `:151`).
 
 **`VaultWriter`** (all public):
 - `public RecordMetadata? Record(string name)`: the opened record's merged metadata, tombstone included; null for no
@@ -436,8 +514,8 @@ keep the `0x0103` bytes as they are (`ValueLineageCodec.With` is not called for 
   a section that can't be decrypted: `SecretsDb.UnreadableRecordText` (nothing written).
 - `public int Acknowledge(string name, string? stamp, string? by, byte[] thisOrigin)` and
   `public int ClearDiscarded(string name, string? stamp)`: stage a `LineageWrite`; return how many entries they name
-  (0: nothing staged). Without `--stamp`, `Acknowledge` names every entry `ConflictDisplay` shows as not acknowledged on
-  this machine, `ClearDiscarded` every entry.
+  (0: nothing staged). Without `--stamp`, `Acknowledge` names every open entry (design §1.9: those for which
+  `ConflictDisplay.Warns`, so neither silent nor acknowledged ones), `ClearDiscarded` every entry.
 
 **`SecretEntry`**: `public byte[] DecryptDiscarded(Stamp version)`: format 3 through `RecordVaultStore.OpenValueSection`
 with a one-entry dictionary of that entry's section and its set (so the `ValueDecrypted` seam fires once and a set is
@@ -518,7 +596,7 @@ via `Hlc.ToDisplayDate`, as `FieldCommand.cs:403`; machine = the first 8 hex of 
 | Command | Call |
 |---|---|
 | `run` (every secret a token, `--env` value or `{{@file}}` marker names), `totp`, `get`, `apply`, `field show` | `ForSecret(ctx, view.Record(name))` |
-| `rotate`, `ingest` (incl. `--rotate`), `add`, `restore`, `burn`, `delete`, `field set`/`unset` | `ForSecret(ctx, writer.Record(name))` |
+| `rotate`, `ingest` (incl. `--rotate`), `add`, `restore`, `burn`, `field set`/`unset` | `ForSecret(ctx, writer.Record(name))`, on the record as opened, before staging; `delete`, `restore --discarded` and every `conflicts` mode don't call it (they act on the entries) |
 | `names`, `burned`, `list`, `check`, `redact`, `tocomment` | `Summary(ctx, view.LoadAll(…).Records)` once |
 
 `VaultView` gains `public RecordMetadata? Record(string name)` (from `LoadAll`'s records when loaded, tombstones
@@ -566,6 +644,7 @@ Tests, `TswapTests/ConflictWarningTests.cs` (`FleetMachine` A and B sharing a fo
 | a newer-format lineage | the R8 warning once |
 | a newer-format `0x0103` on the input with the **smaller** write stamp, format 1 on the other | the whole-list rule for the whole merge; nothing set aside; the R8 warning once |
 | merged `ValueLineage` position: the chosen list has `Fields` then `ValueLineage`; has neither | kept in place; appended `Fields` then `ValueLineage` (R13) |
+| the chosen list is `[0x0100, 0x7777, 0x0103, 0x7778]` | the same order after the merge (both replaced in place) |
 | an entry without a set, `redact` | refused as "not fully fingerprinted" |
 | the current value rotated after the entry was set aside, `get` | the "moved on" form (R12) |
 | a set-less entry whose value equals the current value, its stamp neither in `S` nor the previous | warns (equality needs base entries) |
@@ -584,7 +663,7 @@ Break-it-once: drop the writer's-machine rule (the "open on A" row fails); compu
 `:discarded` too; the previous-value pre-check stays `:previous` only); `Check.MarkerRegex` (`Check.cs:8`) and its split
 (`:156-160`: a `:discarded` marker is `Ok`/`Burned` by `IsBurnedToken` of the token, `Missing` when the secret is,
 entries not checked); `ToCommentProcessor.ExistingMarker` (`:16`); `SecretMatcher.ConsumedMarker` (`:290`) and `BaseName`
-(`:367-368`); `RunCommand.BracedNameRegex` (`:511`), the encoded-token decoding and the `--env` text (`:445`). Texts:
+(`:367-368`); `RunCommand.BracedNameRegex` (`:512`), the encoded-token decoding and the `--env` text (`:446`). Texts:
 - `Unknown token '{{x:bogus}}': the suffixes are ':previous' (the value the last rotation replaced), ':totp' (the current code of a TOTP seed) and ':discarded' (a value a merge set aside).`
 - `'…' is not a valid token: a token is {{NAME}}, {{NAME:previous}}, {{NAME:totp}} or {{NAME:discarded}}, and fields aren't substituted into commands.`
 - `'…' is not a valid marker: a marker is # tswap: NAME, # tswap: NAME:previous, # tswap: NAME:totp or # tswap: NAME:discarded, and fields aren't substituted into commands.`
@@ -594,10 +673,22 @@ entries not checked); `ToCommentProcessor.ExistingMarker` (`:16`); `SecretMatche
 `{{x:discarded:totp}}` stays two suffixes: refused by T58's rule (my-call row in the design §1.10).
 
 **Resolution.** `SecretsDb.DiscardedSuffix = ":discarded"` (`Models.cs:258-261`).
-- `CommandValues` passes `x:discarded` to `inner` unchanged, exactly as `x:previous` (`CommandValues.cs:66-67`), and
-  decides from the returned value as for `:previous`; its name derivation (`:72-74`) strips `:discarded` too. Its
-  refusal for a `:discarded` token names the restore: Unix `… so nothing was substituted. The user can put that value back with 'sudo <prefix> restore x --discarded' and then see it with 'sudo <prefix> get x'.`;
-  Windows `… with '<prefix> restore x --discarded' and then see it with '<prefix> get x', from an elevated command prompt.`
+- `CommandValues` passes `x:discarded` to `inner` unchanged, exactly as `x:previous` (the lookup at
+  `CommandValues.cs:76-79`), and decides from the returned value as for `:previous`. `NameOf` (`:112-113`) strips
+  `:discarded` too. The refusal (`:90-95`) gets a third arm: a `:previous` lookup keeps `PreviousRefusalText`
+  (`:119-120`, which names no `get` or `add`), a `:discarded` lookup gets the new
+  `internal static string DiscardedRefusalText(string shown, string name, string reason, string prefix, bool windows)`:
+  `{shown}: the value of secret 'x' that a merge set aside isn't a usable otpauth URI (<reason>) and can give no code, so nothing was substituted. The user can put it back with 'sudo <prefix> restore x --discarded' and correct it there.`
+  (R16 on Windows: `'<prefix> restore x --discarded' (from an elevated command prompt)`); everything else keeps
+  `RefusalText` (`:123-127`).
+- **Burned advice** (T58's code review added it after a0836c2): `run` ends its burned warning with
+  `values.GaveCode(token) ? values.BurnedSeedAdvice(token) : "rotate it after use"` (`RunCommand.cs:154-156`), `apply`
+  with `Apply.BurnedAdvice` (`Apply.cs:172-173`). Both act on the current value and are wrong for a discarded one. New
+  `public string BurnedAdvice(string token)` on `CommandValues`: for a `:discarded` token, code or not,
+  `it is a value a merge set aside: once nothing uses it, the user drops it with 'sudo <prefix> conflicts --clear x'` (R16);
+  otherwise `BurnedSeedAdvice(token)` when `GaveCode(token)`, else null. `run` uses it, falling back to
+  `"rotate it after use"`; `Apply.BurnedAdvice` checks it first (when `db` is a `CommandValues`), falling back as today.
+  `BurnedSeedAdvice` (`:53-54`) is unchanged.
 - `VaultView` (`Split`, `:280-284`, becomes a suffix kind): `ResolveToken` for `x:discarded`, with `shown` = `'{{x:discarded}}'`
   or `'# tswap: x:discarded' (line N)` as `CommandValues.cs:40`: no record → today's not-found path; a tombstone with no
   entry → `Secret 'x' not found{where}`; a tombstone with entries →
@@ -612,7 +703,7 @@ entries not checked); `ToCommentProcessor.ExistingMarker` (`:16`); `SecretMatche
 - `SecretsDb.ResolveToken` (`Models.cs:286`): `'{{x:discarded}}': values a merge set aside are read through 'tswap run' on a record vault only.`;
   `SecretsDb.IsBurnedToken` (`:273`) false for it. `ISecretLookup`'s summary ("Both give the same answers and the same
   exception texts", `ISecretLookup.cs:6-7`) gains: except `:discarded`, which `SecretsDb` refuses (design round 8, MiMo M-6).
-- `run` needs nothing else: its burned warning and its masking label come from the token (`RunCommand.cs:150-155`,
+- Otherwise `run` needs nothing else: its burned warning and its masking label come from the token (`RunCommand.cs:152-156`,
   `:179-193`). The broker is unchanged (it serves names, not tokens).
 - An entry without a set, used: `run` adds the set it computes from the decrypted value to that command's matcher
   before the child starts (`VaultView` returns it with the value through a new `internal FingerprintSet? ComputedSet(string token)`;
@@ -698,7 +789,10 @@ harness and value recorder; `FleetMachine.Time` fixed; T58's SHA1 URI at 1111111
 | `{{t:discarded:totp}}` | T58's unknown-suffix text |
 | the child prints the discarded seed in each spelling T58's `StoredForms` lists | each `[REDACTED: t:discarded]`; a hex key line unmasked |
 | a discarded bare Base32 value, `{{t:discarded}}` | the stored text, as `{{t}}` gives for one |
-| an unusable discarded otpauth value | the refusal naming `restore t --discarded` |
+| an unusable discarded otpauth value | `DiscardedRefusalText`, naming `restore t --discarded`, not `get` or `add` |
+| a burned discarded otpauth value: `{{t:discarded}}`; `# tswap: t:discarded` through `sudo apply` | the burned warning ends with the `conflicts --clear` advice, not `ingest --rotate` or "rotate"; the same in `apply` |
+| a burned discarded plain value, `{{x:discarded}}` | the `conflicts --clear` advice |
+| R16: every new text that names `sudo tswap …`, built with `windows` true and false (`ConflictDisplay.Elevated`, `ElevatedCommand.Quoted`, `CommandValues`) | the Unix form, and on Windows `'tswap …' (from an elevated command prompt)` with no `sudo` |
 | `{{x:discarded}}` through `SecretsDb.ResolveToken` | its refusal |
 | A and B rotate from `v0`; B folds; A rotates again before its folder merges; B rotates; full sync | both of A's values entries on both machines; `conflicts` two entries |
 | `{{x:discarded}}` on a tombstone with an entry; `restore --discarded` there | the tombstone text; the secret back |
@@ -774,7 +868,9 @@ entry).
   dropped, warns, and `tswap conflicts` lists it; `{{name:discarded}}`; 0.3.x machines still drop such values in their
   own merges; export leaves them out; **upgrade every machine, then run `tswap conflicts`** (the two numbered steps).
   And the release check (design "Briefs"): the v0.3.2 binary on a copy of a vault
-  this build wrote (`names`, `run`, a rotate, a merge of a conflict copy), recorded in the PR.
+  this build wrote (`names`, `run`, a rotate, a merge of a conflict copy), recorded in the PR. The design's check also
+  has `seen-records.json` and `seen-keyring` in the config folder; those are T61's files, so T60's check runs without
+  them and T61's adds them.
 
 ## Out of scope
 
