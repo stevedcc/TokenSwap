@@ -18,13 +18,77 @@ One commit per task, test first, a break-it-once check per key test (name in the
 changed and which test failed), `./runtests.sh --unit` after each task, the full `./runtests.sh` at the end. No
 hardware suites, `ykman`, `sudo`, real YubiKeys or `~/.config/tswap`. Commits end with
 `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`, explicit-path commits, no push, merge or rebase; stop and
-report when the brief can't be built as written. **No existing test's assertions change except the four this brief
+report when the brief can't be built as written. **No existing test's assertions change except the five this brief
 names** (Task 2: `FieldTokenRefusalTests.MalformedMessage` and `.MarkerMessage`, `RunEnvTests.Exactly` and its
-`{{x:bogus}}` row); the controller sanctions them because each pins the list of token suffixes, which gains `:totp`.
+`{{x:bogus}}` row; the controller sanctions them because each pins the list of token suffixes, which gains `:totp`.
+Task 4: `WriteCommandDecryptionTests.Rotate_DecryptsNoValue`, sanctioned by the owner, amendment 1).
 Adding a parameter at a call site is not an assertion change. Tests never read the real clock: every time is a fixed
 `TimeProvider` (`FleetMachine.Time`, `CommandContext.Time`), and no test sleeps. No test, message or log prints a seed,
 a URI or a code it didn't compute from a public test vector. A parallel brief (T59) owns `.github/workflows/release.yml`,
 `renovate.json5`, the release-packaging tests and `docs/BROKER.md`: don't touch them.
+
+## Amendments (round 1: MiMo; GLM's round 1 hit its quota and reviews round 2; controller and owner rulings)
+
+These bind and win over the text below where they differ.
+
+1. **`rotate` decides from the value (MiMo I1; owner decision 2026-11-27, option a).** The metadata mark alone fails
+   open: `certum-totp` (written by 0.3.2) has none, and `burn` then `rotate` needs no sudo, so an agent could replace the
+   seed with a random value. `rotate` therefore decrypts the record's current value once (one value section, the read
+   `get` uses; bytes zeroed after) and refuses with Task 4's text when `Classify` gives `Totp` or `OtpAuthUnusable`,
+   marked or not. A current section that can't be decrypted doesn't refuse: `rotate` goes on as today (owner decision 8,
+   `Add_OtherVariantSet_DamagedCurrent_RefusesNamingTheFile_WritesNothing` keeps its `rotate`; a damaged seed can't be
+   lost further). `ingest --rotate` decrypts nothing and still works (the issuer's new seed). The owner sanctions the
+   extra decrypt. Changed assertion: `WriteCommandDecryptionTests.Rotate_DecryptsNoValue`'s `Assert.Empty(_values)`
+   becomes exactly one entry, `a`'s file at its current version before the rotate (rename the test
+   `Rotate_DecryptsOnlyTheCurrentValue`). Security model: the "A reading command decrypting values it doesn't use" row
+   (`docs/security-model.md:179`) and the "What each command decrypts" row of the write commands (`:230`) take `rotate`
+   out: its own row, "The one current value, to refuse a TOTP seed (#374); none for a section that can't be
+   decrypted". New Task 4 test rows: a record written as 0.3.2 writes it (no mark) holding the SHA1 URI, `burn t` then
+   `rotate t` → refused, exit 1, the value and the record file unchanged; the same with a marked record; a damaged
+   current section → `rotate` works; after `burn t`, `<new URI> | ingest --rotate t` works and the new value is marked.
+2. **`PrintsSecretValues` (M2).** `TotpCommand.PrintsSecretValues => false`: the flag only makes a redirected stdout
+   UTF-8 on Windows for values (`ICliCommand.cs:39-43`), and a code is ASCII digits.
+   `SecretValueOutputTests.OnlyGetAndApplyPrintSecretValues` stays as it is.
+3. **The period in `totp`'s stderr line (M3)** is the seed's: `Valid for 17 more seconds (a new code every 60 seconds).`
+   for `period=60`.
+4. **Newlines (M4).** Task 3's stdout and stderr assertions compare after `ReplaceLineEndings("\n")`.
+5. **What `run` masks for a token that gave a code (M5).** `StoredForms(token)` is exactly: the stored value as stored
+   (the whole URI, or the bare seed text); the `secret` parameter's text as written in the URI (before
+   percent-decoding) and percent-decoded; and the seed in four spellings: upper case unpadded, upper case padded, lower
+   case unpadded, lower case padded (for a bare seed: after removing spaces). Each goes through `Redaction.Variants` as
+   any value does, so its base64 and base64url forms are masked too; the code itself is masked as in Task 2. No other
+   spelling is masked (the seed grouped with spaces or in mixed case other than as stored, the key bytes in hex or
+   base64, the URI re-encoded). Task 2's redaction row gains the percent-decoded and lower-case-padded seed, and a hex
+   key line that stays unmasked. The security-model note says "`run` masks the code, the stored value and the
+   spellings of the seed listed in docs/commands.md; another spelling of the same key is not masked", and commands.md
+   lists them.
+6. **B2 and B3 (M6).** Checked in the order B1, B2, B3, B4, B5. B2 is the unpadded length (the text before any `=`)
+   with length mod 8 of 1, 3 or 6. B3 is every padding fault: an `=` before a non-`=` character, or a trailing run whose
+   length isn't the one the unpadded length needs (mod 8 of 0: none; 2: 6; 4: 4; 5: 3; 7: 1). New refusal rows:
+   `GEZDGNBVGY3TQOJQ=` (B3: 16 characters need no padding) and `GEZDGNBVGY3TQ==` (B3: 13 need three).
+7. **Merges (M7).** `ValueKinds` follows `RecordMerge.MergeExtensions`' rule for every type but `Fields`: the whole list
+   of the input with the largest write stamp. It never makes a record unreadable; a mark lost because an unmarked copy
+   (an older build's write) wins comes back with `sudo tswap vault reindex`. New Task 4 row: two copies of the TOTP
+   record (a main file and a sync-conflict copy), the unmarked one with the larger write stamp → `names` shows no mark,
+   `run` still gives the code, `vault reindex` → marked; with the marked one larger → marked.
+8. **Platform wording (M8).** `CommandValues` takes `string prefix, bool windows` from the CLI (`ctx.Prefix`,
+   `ctx.Os == OSPlatform.Windows`). The refusal's last sentence is, on Unix, `The user can see the value with 'sudo
+   <prefix> get x' and store a corrected one with 'sudo <prefix> add x'.`, and on Windows, `The user can see the value
+   with '<prefix> get x' and store a corrected one with '<prefix> add x', from an elevated command prompt.`
+   (`RunCommand.ViewSecretLine`'s split). The broker text needs neither.
+9. **`field adopt` (M9).** The security-model "TOTP secrets" note gains: `sudo tswap field adopt NAME FIELD --from
+   <TOTP secret>` turns the URI into a visible field, which `field show` prints without sudo; adopt only what is meant
+   to be visible.
+10. **Hyphenated algorithms (M10; controller ruling).** `algorithm` also accepts `SHA-1`, `SHA-256`, `SHA-512`, case
+    ignored, as aliases (authenticators accept them, and they name the same hash). R10's text becomes `algorithm must be
+    SHA1, SHA256 or SHA512 (or SHA-1, SHA-256, SHA-512)`; its refusal row uses `algorithm=MD5`; the accepted-spellings
+    row gains `algorithm=sha-256`. The other strict rules stay (B4 non-canonical trailing bits, R12 above 300, B5 under
+    80 bits, R11 `digits=7`) and docs/commands.md lists each with its reason. The refusal table has 19 rows: one per
+    reason, two for R12 (`period=0`, `period=301`), three for B3 (amendment 6 and `GEZD=GNB…`).
+11. **The plaintext write path (M11).** `NextRecord` needs no change: `WriteAll` sends every format 3 write made from
+    plaintext through `PrepareV3` (`RecordVaultStore.cs:2018`), which sets the extension. That is why
+    `RecordWrites_MatchNextRecord_OnRandomStates` (which compares `RecordWrites` with `NextRecord` plus `PrepareV3`)
+    holds the two paths equal once its random states include otpauth values.
 
 ## What is wrong (evidence)
 
@@ -60,7 +124,7 @@ accessing the seed, but only with sudo."
 | D6 | The seed only with sudo: `sudo tswap get` prints the stored URI unchanged; no non-sudo path hands it out (table in Task 2) | owner |
 | D7 | `sudo tswap apply` fills markers exactly as `run`'s `{{@file}}` does (codes), so the two documented forms of one file agree; the seed is `get`'s | controller default; owner may change (to "apply writes the URI") |
 | D8 | The broker refuses otpauth records (routes, templates, ssh-agent); a broker that hands out codes is a later feature | controller default; owner may change |
-| D9 | `rotate` (random value) refuses an otpauth record; `ingest --rotate` (the issuer's new seed) works | controller default; owner may change |
+| D9 | `rotate` (random value) refuses an otpauth record, marked or not (amendment 1); `ingest --rotate` (the issuer's new seed) works | owner, 2026-11-27 |
 | D10 | `digits` 6 or 8 only (the Key URI Format allows exactly these; Otp.NET would take 1-10, so 7 is refused by tswap, not by the library) | controller, from the spec |
 
 ## Task 1: parse and compute (Otp.NET, pinned)
