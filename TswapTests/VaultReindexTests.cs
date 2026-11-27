@@ -206,6 +206,60 @@ public sealed class VaultReindexTests : IDisposable
         Assert.Equal(asciiBefore, File.ReadAllBytes(RecordFile(_m, _key, "a")));
     }
 
+    /// <summary>A version 2 set without its NFC and NFD entries, as a machine without ICU writes it.</summary>
+    private static FingerprintSet BaseOnly(FingerprintSet set) =>
+        new(SecretVariants.CurrentSetVersion, [.. set.Entries.Where(e => e.Kind.BaseKind() == e.Kind)]);
+
+    /// <summary>
+    /// Brief T62 (#425): the G1 clause on an ordinary write (<c>recomputeOlderSets: false</c>): a version 2 set
+    /// without the form entries this machine computes is recomputed from the value, and an ASCII value's set (it has
+    /// no forms) comes back as it is.
+    /// </summary>
+    [IcuFact]
+    public void PrepareV3_AnOrdinaryWrite_RecomputesAVersionTwoSetWithoutItsFormEntries()
+    {
+        WriteMarker(_m);
+        _m.Ok("caf\u00e9-value", "ingest", "c");
+        _m.Ok("ascii-value", "ingest", "a");
+        using var keys = FingerprintKeys.Derive(_key);
+        var stored = ReadRecord(_m, _key, "c");
+        var record = stored with { Fingerprints = BaseOnly(stored.Fingerprints!) };
+
+        var prepared = RecordVaultStore.PrepareV3(record, keys, recomputeOlderSets: false);
+
+        Assert.Equal(Fingerprints(_key, Encoding.UTF8.GetBytes("caf\u00e9-value")), prepared.Fingerprints);
+
+        var asciiRecord = ReadRecord(_m, _key, "a");
+        Assert.Equal(Fingerprints(_key, Encoding.UTF8.GetBytes("ascii-value")), asciiRecord.Fingerprints);
+
+        var asciiPrepared = RecordVaultStore.PrepareV3(asciiRecord, keys, recomputeOlderSets: false);
+
+        Assert.Same(asciiRecord.Fingerprints, asciiPrepared.Fingerprints);
+    }
+
+    /// <summary>
+    /// Brief T62 (#425): <c>vault merge</c> that takes the other copy's value writes it from its plaintext, so a
+    /// version 2 set without its form entries (written on a machine without ICU) is recomputed here.
+    /// </summary>
+    [IcuFact]
+    public void Merge_AVersionTwoSetWithoutItsFormEntries_IsRecomputedHere()
+    {
+        WriteMarker(_m);
+        _m.Ok("caf\u00e9-value", "ingest", "c");
+        var otherVault = CopyVault(_m, _other);
+        _other.Ok("caf\u00e9-other", "ingest", "--rotate", "c");
+        var record = ReadRecord(_other, _key, "c");
+        File.WriteAllBytes(RecordFile(_other, _key, "c"),
+            SecretRecordCodec.Encode(record with { Fingerprints = BaseOnly(record.Fingerprints!) }, _key, 3));
+
+        var (exit, _, err) = _m.Run("", "vault", "merge", otherVault);
+
+        Assert.True(exit == 0, err);
+        var merged = ReadRecord(_m, _key, "c");
+        Assert.Equal(Encoding.UTF8.GetBytes("caf\u00e9-other"), merged.Value);
+        Assert.Equal(Fingerprints(_key, Encoding.UTF8.GetBytes("caf\u00e9-other")), merged.Fingerprints);
+    }
+
     [Fact]
     public void Reindex_UnreadableRecord_RefusesBeforeWriting()
     {

@@ -121,3 +121,20 @@ public sealed class WindowsConPtyFactAttribute : FactAttribute
     public WindowsConPtyFactAttribute(string? why = null) =>
         Skip = PlatformFacts.SkipHere(PlatformRequirement.Windows, why) ?? PlatformFacts.ConPtySkipReason(Environment.OSVersion.Version);
 }
+
+/// <summary>
+/// Brief T62 (GLM M5): a fact that needs a Unicode library (ICU). Under .NET's invariant mode
+/// (<c>DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1</c>) normalisation is a no-op, so no NFC or NFD fingerprint entries are
+/// computed and a test about them can't tell its outcome from its break; it is skipped there with this reason.
+/// </summary>
+public sealed class IcuFactAttribute : FactAttribute
+{
+    public const string SkipReason =
+        "Needs ICU: under .NET's invariant mode (DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1) normalisation is a no-op, so " +
+        "no NFC or NFD fingerprint entries are computed and a base-only set equals the recomputed one.";
+
+    public IcuFactAttribute() => Skip = HasIcu ? null : SkipReason;
+
+    /// <summary>Whether this process normalises Unicode (false in invariant mode).</summary>
+    public static bool HasIcu => "José".Normalize(System.Text.NormalizationForm.FormD).Length == 5;
+}

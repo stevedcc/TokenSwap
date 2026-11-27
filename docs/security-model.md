@@ -793,8 +793,15 @@ formats: [commands.md](commands.md#fields-plain-data-next-to-a-secret).
     that is neither normal form (part composed, part not), and compatibility forms (full-width letters,
     ligatures), which are other text. Records fingerprinted by an older tswap get the other spellings with
     `sudo tswap vault reindex`. A machine without a Unicode library (.NET's invariant mode: no ICU, as in a
-    musl image without `icu-libs`) recognises only the stored spelling and stretches the vault password as
-    typed; a record it writes gets the other spellings at the next `vault reindex` on a machine with one.
+    musl image without `icu-libs`) computes no other spelling itself and stretches the vault password as
+    typed. The fingerprint checks (`redact`, `tocomment`, `run`'s masking of the vault's values, and this
+    check) still find every spelling a record's fingerprints hold, so a record fingerprinted on a machine
+    with a Unicode library is recognised in its NFC and NFD spellings there too. What it computes from a
+    value has the stored spelling alone: the fingerprints of a record it writes, `run`'s plaintext masking
+    of the values it substitutes (their fingerprints are still scanned), and the broker's masking of the
+    secret it injects. A record it writes gets the other spellings at the next write of that record from
+    its value on a machine with one (a rotation, a merge that takes the other copy's value, or
+    `vault reindex`).
   - **Deleted secrets' values are not checked**, so a value `field adopt` moved into a field can be set
     again.
   - **The warning the other way round is narrower.** `add`, `ingest`, `ingest --rotate` and `rotate` warn

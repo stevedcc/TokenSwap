@@ -16,11 +16,19 @@ namespace TswapTests.Build;
 /// its stored hash and a cache would defeat the check. File reads only: the file list is
 /// <see cref="MarkdownLinks.AllTracked"/> (its <c>git ls-files</c> is the only process these tests start), no network.
 /// The workflow scan is plain text and reads only <c>.github/</c>, so these remain a residual risk: shell quoting
-/// (<c>Restore''LockedMode</c>), shell or PowerShell forms it has no row for (it has rows for <c>unset</c>, <c>env -u</c>,
-/// <c>env -i</c>, <c>export -n</c>, <c>printf -v</c>, <c>Remove-Item env:CI</c> and its aliases,
+/// (<c>Restore''LockedMode</c>; for <c>env</c>, quotes inside an option, as in <c>env -"i" x</c>, while an option or
+/// value quoted as a whole, <c>env "-i" x</c> or <c>--chdir "/My Dir"</c>, is a hit), shell line continuations
+/// (<c>env \</c> then <c>-i x</c> on the next line, which really empties the environment), bash's <c>exec -c</c>
+/// (an empty environment too), shell or PowerShell forms it has no row for (it has rows for <c>unset</c>,
+/// <c>env -u</c>, <c>env -i</c> and <c>env -S</c> with <c>env</c>'s long options by any unambiguous prefix,
+/// <c>export -n</c>, <c>+x</c>, <c>printf -v</c>, <c>Remove-Item env:CI</c> and its aliases,
 /// <c>SetEnvironmentVariable('CI', …)</c>), scripts outside <c>.github/</c> that a workflow calls, and a nuget.config
 /// fetched or written at run time by other means than the forms it has rows for, and an MSBuild props or targets file
-/// written at run time.
+/// written at run time. The <c>env -i</c> row over-refuses (fail closed): value-attached clusters (<c>env -ai x</c>,
+/// <c>env -Ci x</c>, where the <c>i</c> is the value), <c>env -- -i x</c>, an assignment before <c>-i</c>
+/// (<c>env FOO=1 -i x</c>: GNU env's <c>shortopts</c> start with <c>+</c>, so getopt stops at the first
+/// <c>NAME=VALUE</c> and <c>-i</c> is the program), <c>bash -c "env -i"</c> (an <c>env -i</c> with no command), and the
+/// <c>-0</c> rows (<c>env -0 -i x</c>), although env refuses <c>-0</c> with a command.
 /// </summary>
 public partial class DependencyPinningTests
 {
@@ -286,9 +294,34 @@ public partial class DependencyPinningTests
     [GeneratedRegex(@"(?<![\w-])(?:(?:Remove-Item|ri|rm|del|erase|rmdir|rd)\b[^;|&\n]*?(?<![\w-])['""]?env:\\?CI|SetEnvironmentVariable\s*\(\s*(?:name\s*:\s*)?['""]CI['""])(?![\w-])", RegexOptions.IgnoreCase)]
     private static partial Regex CiRemovalPowerShell();
 
-    /// <summary><c>env</c> as a command whose options (before the command it runs) include <c>-i</c>, <c>--ignore-environment</c> or <c>-</c>.</summary>
-    [GeneratedRegex(@"(?<![\w{.$:-])env(?:\s+(?:-C\s*\S+|--chdir(?:=|\s+)\S+|-u\s*\S+|--unset(?:=|\s+)\S+|-[a-z-]+(?:=\S*)?|[A-Za-z_]\w*=\S*))*?\s+(?:-[a-z]*i[a-z]*|--ignore-environment|-)(?=\s|$|`)", RegexOptions.IgnoreCase)]
-    private static partial Regex EnvIgnoreEnvironment();
+    /// <summary>
+    /// <c>env</c> as a command whose options (before the command it runs) include <c>-i</c>, <c>--ignore-environment</c>,
+    /// <c>-</c> or <c>-S</c> / <c>--split-string</c> (brief T62, #429), parser-first from GNU env's options (coreutils
+    /// 9.10): short options cluster, and a value-taking one (<c>-a</c>, <c>-C</c>, <c>-u</c>) takes the rest of its token
+    /// or the next token; long options take any unambiguous prefix, with <c>=</c> or a separate value; <c>-S</c>
+    /// re-parses its string as options, so any <c>-S</c> is a hit whatever it holds (fail closed). An option or value in
+    /// shell quotes as a whole (<c>"-i"</c>, <c>-C "/My Dir"</c>) is read too (GLM M2).
+    /// </summary>
+    private static Regex EnvIgnoreEnvironment() => EnvIgnoreEnvironmentRegex;
+
+    /// <summary>Every prefix of <paramref name="option"/> (length 1 up), longest first, each escaped, as one alternation.</summary>
+    private static string Prefixes(string option) =>
+        string.Join('|', Enumerable.Range(1, option.Length).Reverse().Select(n => Regex.Escape(option[..n])));
+
+    private const string Quote = @"['""]?";
+    private const string EnvValue = @"(?:""[^""]*""|'[^']*'|\S+)";
+
+    private static readonly Regex EnvIgnoreEnvironmentRegex = new(
+        $@"(?<![\w{{.$:-])env"
+        + $@"(?:\s+(?:{Quote}-[a-z0-9]*[Cua]{Quote}\s*{EnvValue}"
+        + $@"|{Quote}--(?:{Prefixes("chdir")}|{Prefixes("unset")}|{Prefixes("argv0")}){Quote}(?:=|\s+){EnvValue}"
+        + $@"|{Quote}-[a-z0-9-]+(?:=\S*)?{Quote}"
+        + $@"|[A-Za-z_]\w*=\S*))*?"
+        + $@"\s+{Quote}(?:-[a-z0-9]*i[a-z0-9]*"
+        + $@"|-[a-z0-9]*S\S*"
+        + $@"|--(?:{Prefixes("ignore-environment")}|{Prefixes("split-string")})(?:=\S*)?"
+        + $@"|-){Quote}(?=\s|$|`)",
+        RegexOptions.IgnoreCase);
 
     [GeneratedRegex(@"(?<![\w-])(?:(?:export\s+-[a-z]*n[a-z]*|(?:export|declare|typeset)\s+\+[a-z]*x[a-z]*)(?=\s)[^;|&\n]*?(?<![\w-])CI|printf\s+-v\s*['""]?CI)(?![\w-])", RegexOptions.IgnoreCase)]
     private static partial Regex CiUnexportedOrOverwritten();
@@ -433,7 +466,7 @@ public partial class DependencyPinningTests
             t => LinesMatching(t, EnvIgnoreEnvironment()),
             "run: env -i dotnet restore",
             "run: environment -i x; penv -i x; env -u FOO dotnet test; env --ignore-environments x\nrun: Get-ChildItem \"${env:ProgramFiles(x86)}\\x\" -ErrorAction SilentlyContinue\nrun: env FOO=1 dotnet test -i"),
-        new("export -n CI / printf -v CI", "unexporting or overwriting CI turns the locked restore off",
+        new("CI unexported or overwritten (export -n, +x, printf -v)", "unexporting or overwriting CI turns the locked restore off",
             t => LinesMatching(t, CiUnexportedOrOverwritten()),
             "run: export -n CI; dotnet restore\nrun: printf -v CI '%s' false",
             "run: export -n CI_REQUIRE_BWRAP; export CI=true; printf -v CI_X '%s' 1; xexport -n CI; export +x CI_X; declare +x FOO"),
@@ -509,6 +542,8 @@ public partial class DependencyPinningTests
         Assert.True(Hits(ReleaseWorkflowPath) > 0, "A lock-files job in release.yml must get no --force-evaluate allowance.");
         Assert.True(Hits(".github/actions/x/action.yml") > 0, "A lock-files key in a composite action must get no --force-evaluate allowance.");
         const string otherJob = "jobs:\n  build-test-publish:\n    steps:\n      - run: dotnet build TokenSwap.slnx --force-evaluate\n";
+        Assert.True(ForbiddenForms.Single(f => f.Name == "--force-evaluate outside lock-files").Find(otherJob).Any(),
+            "In ci.yml, the '--force-evaluate outside lock-files' row itself must hit --force-evaluate in a job other than lock-files.");
         var otherJobHits = ForbiddenForms.Where(f => f.AppliesIn(CiWorkflowPath)).Sum(f => f.Find(otherJob).Count());
         Assert.True(otherJobHits > 0, "In ci.yml, --force-evaluate in a job other than lock-files must hit.");
     }
@@ -520,7 +555,8 @@ public partial class DependencyPinningTests
     [Fact]
     public void LockFilesJob_ReResolvesAndComparesOnLinuxX64()
     {
-        var lines = JobLines(Read(CiWorkflowPath), "lock-files").Select(l => l.Trim()).ToList();
+        var ci = Read(CiWorkflowPath);
+        var lines = JobLines(ci, "lock-files").Select(l => l.Trim()).ToList();
         Assert.True(lines.Count > 0, $"{CiWorkflowPath} has no lock-files job (two spaces under jobs:); it re-resolves and diffs the lock files (brief T57).");
         int IndexOf(string what, Func<string, bool> match)
         {
@@ -531,16 +567,18 @@ public partial class DependencyPinningTests
             return i;
         }
         IndexOf("runs-on: ubuntu-24.04", l => l == "runs-on: ubuntu-24.04");
+        string Step(string l) => l.StartsWith("- ", StringComparison.Ordinal) ? l[2..].Trim() : l;
         // checkout and setup-dotnet pinned exactly as build-test-publish pins them (read from ci.yml, not hard-coded).
         string BuildUses(string action)
         {
-            var uses = JobLines(Read(CiWorkflowPath), "build-test-publish").Select(l => l.Trim())
-                .Where(l => !l.StartsWith('#')).Select(l => l.StartsWith("- ", StringComparison.Ordinal) ? l[2..].Trim() : l)
+            var buildLines = JobLines(ci, "build-test-publish").ToList();
+            Assert.True(buildLines.Count > 0, $"{CiWorkflowPath} has no build-test-publish job");
+            var uses = buildLines.Select(l => l.Trim())
+                .Where(l => !l.StartsWith('#')).Select(Step)
                 .Where(l => l.StartsWith($"uses: {action}@", StringComparison.Ordinal)).Distinct().ToList();
             Assert.True(uses.Count == 1, $"{CiWorkflowPath}'s build-test-publish job should use {action} exactly one way; found: {string.Join(", ", uses)}.");
             return uses[0];
         }
-        string Step(string l) => l.StartsWith("- ", StringComparison.Ordinal) ? l[2..].Trim() : l;
         var checkoutUses = BuildUses("actions/checkout");
         var setupUses = BuildUses("actions/setup-dotnet");
         var checkout = IndexOf($"`{checkoutUses}` (as build-test-publish pins it)", l => Step(l) == checkoutUses);
@@ -559,9 +597,17 @@ public partial class DependencyPinningTests
         Assert.True(checkout < setup && setup < globalJson && globalJson < restore && restore < diff && diff < untracked
                     && untracked < untrackedFails && untrackedFails < exit,
             $"{CiWorkflowPath}'s lock-files job: checkout, the SDK set-up from global.json, the re-resolve, the diff and the untracked check (and its exit 1) must come in that order.");
+        string[] failsOnUntracked = ["echo \"::error::lock files that no commit has: $untracked\" >&2", "exit 1", "fi"];
+        Assert.True(lines.Skip(untrackedFails + 1).Take(3).SequenceEqual(failsOnUntracked),
+            $"{CiWorkflowPath}'s lock-files job: the untracked check's `if` must be followed at once by the ::error:: echo, "
+            + $"`exit 1` and `fi`; found: {string.Join(" | ", lines.Skip(untrackedFails + 1).Take(3))}.");
+        var softened = lines.Where(l => !l.StartsWith('#')).Select(Step)
+            .Where(l => l.StartsWith("if:", StringComparison.Ordinal) || l.StartsWith("continue-on-error:", StringComparison.Ordinal)).ToList();
+        Assert.True(softened.Count == 0,
+            $"{CiWorkflowPath}'s lock-files job must run every step and fail on every failure: no `if:` or `continue-on-error:`; found: {string.Join(", ", softened)}.");
     }
 
-    /// <summary>Each way of starting a command from an empty environment the <c>env -i</c> row knows, one line each.</summary>
+    /// <summary>Each spelling of <c>env</c>'s options this scan knows, one line each.</summary>
     [Theory]
     [InlineData("env -i dotnet restore")]
     [InlineData("env --ignore-environment PATH=$PATH dotnet build")]
@@ -573,8 +619,42 @@ public partial class DependencyPinningTests
     [InlineData("echo `env -i x`")]
     [InlineData("env -C /tmp -i x")]
     [InlineData("env --chdir /tmp -i x")]
+    // Brief T62 (#429): digits, abbreviations, -a/--argv0 and env -S / --split-string (which re-parses its string as
+    // options, so any -S is a hit).
+    [InlineData("env -0 -i x")]
+    [InlineData("env -0i x")]
+    [InlineData("env -S '-i dotnet restore'")]
+    [InlineData("env -S'-i dotnet restore'")]
+    [InlineData("env -vS-i dotnet restore")]
+    [InlineData("env --split-string='-i x'")]
+    [InlineData("env --split-string '-i x'")]
+    [InlineData("env --sp '-i x'")]
+    [InlineData("env --ignore-e x")]
+    [InlineData("env --ignore-env x")]
+    [InlineData("env --un FOO -i x")]
+    [InlineData("env --ch /tmp -i x")]
+    [InlineData("env -a name -i x")]
+    [InlineData("env --argv0=name -i x")]
+    [InlineData("env -v0C /tmp -i x")]
+    // Brief T62, GLM M2 (controller ruling): a whole option or value in shell quotes.
+    [InlineData("env \"-i\" x")]
+    [InlineData("env '-i' x")]
+    [InlineData("env -C \"/My Dir\" -i x")]
+    [InlineData("env --chdir '/My Dir' -i x")]
     public void EnvIgnoreEnvironment_FindsEachForm(string line) =>
         Assert.True(EnvIgnoreEnvironment().IsMatch("run: " + line), $"The env -i scan misses: {line}");
+
+    /// <summary>Brief T62 (#429): near misses of the <c>env -i</c> row: options that keep the environment.</summary>
+    [Theory]
+    [InlineData("env --sx x")]
+    [InlineData("env --ignore-signal x")]
+    [InlineData("env --ignore-environments x")]
+    [InlineData("env FOO=1 dotnet test -S x")]
+    [InlineData("env -u FOO dotnet test")]
+    [InlineData("env --chdir=/tmp dotnet test")]
+    [InlineData("env --argv0 name dotnet test")]
+    public void EnvIgnoreEnvironment_LeavesEachNearMiss(string line) =>
+        Assert.False(EnvIgnoreEnvironment().IsMatch("run: " + line), $"The env -i scan hits a near miss: {line}");
 
     /// <summary>Each way of unexporting or overwriting <c>CI</c> the scan knows, one line each.</summary>
     [Theory]

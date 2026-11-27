@@ -149,7 +149,8 @@ Spike round 3 (`MsysSpike2Tests.Spike3_…` on the `t55-spike` branch; msys runt
       Steps 2–4 of amendment 14 and its "changed" test then apply to every **contiguous run of pieces**, joined without
       the quotes. For a word with pieces p1..pk, that is p1, p1p2, …, p2, p2p3, …, the whole word without its quotes.
       R1 refuses when any run changes the option and an argument holds `\` or `"`.
-    - **Why every run:** every token `strbrk` can produce is such a run. The rule never has to model where `strbrk` cuts.
+    - **Why every run:** every token `strbrk` produces that changes the option begins with such a run that changes it
+      too (the converse does not hold, so some runs are over-refused). The rule never has to model where `strbrk` cuts.
     - **Unchanged rows:** every row of amendment 14 keeps its outcome, `"no"glob` included (still over-refused).
     - **New rows, refused with `a\b`:** `glob:"":x`, `glob:""x`, `glob="":x`, `"glob:"":x`, `noglob""x`.
     - **New row, allowed:** `"glob:ignorecase"`, because none of its runs changes the option.

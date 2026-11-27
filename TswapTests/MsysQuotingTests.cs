@@ -6,8 +6,8 @@ namespace TswapTests;
 
 /// <summary>
 /// Brief T55 Task 3 (#402): <see cref="MsysTarget.QuoteArguments"/> (each argument one word of MSYS2's command-line
-/// parser, never split, never an @file, never expanded) and <see cref="MsysTarget.Refusal"/> (R1 the glob option, R2 a
-/// locale that isn't UTF-8, R3 U+F000-U+F0FF).
+/// parser, never split, never an @file, never expanded) and <see cref="MsysTarget.Refusal"/> (R1 the glob option (and an
+/// unclosed quote in <c>MSYS</c>), R2 a locale that isn't UTF-8, R3 U+F000-U+F0FF, R4 an argument over 8,000 bytes).
 /// </summary>
 public class MsysQuotingTests
 {
@@ -130,8 +130,8 @@ public class MsysQuotingTests
     }
 
     /// <summary>
-    /// Brief T55 amendment 14: every MSYS spelling spike round 3 measured with <c>a\b</c> and <c>a"b</c>, and whether
-    /// R1 refuses it: globbing off (both arrived altered) refuses; globbing on (both arrived exactly) does not, except
+    /// Brief T55 amendment 14: every MSYS spelling spike round 3 measured with <c>a\b</c> and <c>a"b</c>, and amendment
+    /// 16's rows (a word cut at a quote), and whether R1 refuses it: globbing off (both arrived altered) refuses; globbing on (both arrived exactly) does not, except
     /// the accepted over-refusals (<c>nonoglob</c>, <c>--glob</c>, <c>no-glob</c>, <c>"no"glob</c>: fail closed). Null
     /// is <c>MSYS</c> unset.
     /// </summary>
@@ -197,6 +197,148 @@ public class MsysQuotingTests
                 Assert.Null(text);
         }
         Assert.Null(Refuse(["abc*def"], variables));
+    }
+
+    // ── Brief T62 Task 2 (#427): the linear R1 scan and an unclosed quote in MSYS ─────────────────────────────
+
+    /// <summary>
+    /// The oracle: the run model as T55 wrote it (dcc4c04 <c>MsysTarget.cs:183-215</c>, copied verbatim), quadratic in
+    /// the pieces and cubic in characters. <see cref="MsysTarget.ChangesGlobOption"/> must give its verdict for every word.
+    /// </summary>
+    private static bool WordChangesGlobOption(string word)
+    {
+        var pieces = word.Split('"');
+        for (var first = 0; first < pieces.Length; first++)
+        for (var last = first; last < pieces.Length; last++)
+            if (RunChangesGlobOption(string.Concat(pieces[first..(last + 1)])))
+                return true;
+        return false;
+    }
+
+    private static bool RunChangesGlobOption(string run)
+    {
+        var rest = run.AsSpan();
+        var prefixed = false;
+        while (true)
+        {
+            if (rest.StartsWith("no", StringComparison.OrdinalIgnoreCase))
+                rest = rest[2..];
+            else if (rest.StartsWith('-'))
+                rest = rest[1..];
+            else
+                break;
+            prefixed = true;
+        }
+        if (!rest.StartsWith("glob", StringComparison.OrdinalIgnoreCase))
+            return false;
+        rest = rest[4..];
+        if (rest.IsEmpty)
+            return prefixed;
+        if (rest[0] is not (':' or '='))
+            return false;
+        return prefixed || rest.Length == 1;
+    }
+
+    private static readonly string[] ModelTokens = ["no", "NO", "-", "glob", "GLOB", "gl", "ob", ":", "=", "\"", "x", "n", "o"];
+
+    /// <summary>
+    /// Every word of one to five of <see cref="ModelTokens"/> (402,233 words): the linear scan gives the run model's
+    /// verdict. A mismatch names the word.
+    /// </summary>
+    [Fact]
+    public void ChangesGlobOption_AgreesWithTheRunModel()
+    {
+        var words = new List<string>(402_233);
+        void Build(string prefix, int depth)
+        {
+            if (depth == 0)
+                return;
+            foreach (var token in ModelTokens)
+            {
+                words.Add(prefix + token);
+                Build(prefix + token, depth - 1);
+            }
+        }
+        Build("", 5);
+
+        var mismatches = words.Where(w => MsysTarget.ChangesGlobOption(w, null) != WordChangesGlobOption(w)).Take(20).ToList();
+
+        Assert.Equal(402_233, words.Count);
+        Assert.True(mismatches.Count == 0,
+            "The linear scan disagrees with the run model on: " + string.Join(", ", mismatches.Select(w => $"'{w}' (model: {WordChangesGlobOption(w)})")));
+    }
+
+    public static TheoryData<string> LinearRows => ["quote x 10000", "-quote x 5000", "no-quote x 3333", "glob:quote x 2000", "random 10000"];
+
+    private static (string Msys, bool? Verdict) LinearInput(string row) => row switch
+    {
+        "quote x 10000" => (string.Concat(Enumerable.Repeat("\"", 10_000)), false),
+        "-quote x 5000" => (string.Concat(Enumerable.Repeat("-\"", 5_000)), false),
+        "no-quote x 3333" => (string.Concat(Enumerable.Repeat("no\"", 3_333)), false),
+        "glob:quote x 2000" => (string.Concat(Enumerable.Repeat("glob:\"", 2_000)), true), // glob: is a run ending at a quote
+        "random 10000" => (RandomMsys(), null),
+        _ => throw new ArgumentOutOfRangeException(nameof(row), row, null),
+    };
+
+    private static string RandomMsys()
+    {
+        const string alphabet = "no-glob:=\"x ";
+        var random = new Random(62);
+        return new string([.. Enumerable.Range(0, 10_000).Select(_ => alphabet[random.Next(alphabet.Length)])]);
+    }
+
+    [Theory]
+    [MemberData(nameof(LinearRows))]
+    public void ChangesGlobOption_IsLinear(string row)
+    {
+        var (msys, verdict) = LinearInput(row);
+        long steps = 0;
+
+        var changes = MsysTarget.ChangesGlobOption(msys, () => steps++);
+
+        Assert.True(steps <= 4L * (msys.Length + 1), $"{steps} steps for {msys.Length} characters (bound {4L * (msys.Length + 1)}).");
+        if (verdict is { } expected)
+            Assert.Equal(expected, changes);
+    }
+
+    private const string UnclosedStart = "Refused: MSYS holds a double quote that is never closed";
+
+    [Theory]
+    [InlineData("\"winsymlinks:native", true)]
+    [InlineData("winsymlinks:native \"x", true)]
+    [InlineData("x\"", true)]
+    [InlineData("\\\"", true)]
+    [InlineData("\"a b", true)]
+    [InlineData("a \"b", true)]
+    [InlineData("\"a\\\"", true)]
+    [InlineData("\"\\\\\"", true)]
+    [InlineData("\"a\\\"b\"", false)]
+    [InlineData("\"a\"", false)]
+    [InlineData("\"\"", false)]
+    [InlineData("a\"b\"c", false)]
+    [InlineData("\"a b\"", false)]
+    [InlineData(null, false)]
+    [InlineData("winsymlinks:native", false)]
+    public void Refusal_R1_AnUnclosedQuoteInMsys(string? msys, bool refused)
+    {
+        Dictionary<string, string> variables = msys is null ? [] : new() { ["MSYS"] = msys };
+
+        var text = Refuse(["a\\b"], variables);
+
+        if (refused)
+            Assert.StartsWith(UnclosedStart, text);
+        else
+            Assert.Null(text);
+        Assert.Null(Refuse(["abc"], variables));
+    }
+
+    [Fact]
+    public void Refusal_R1_GlobBeforeUnclosedQuote()
+    {
+        Dictionary<string, string> variables = new() { ["MSYS"] = "\"noglob" };
+
+        Assert.StartsWith(R1Start, Refuse(["a\\b"], variables));
+        Assert.Null(Refuse(["abc"], variables));
     }
 
     public static TheoryData<Dictionary<string, string>, string, bool> LocaleRows => new()
@@ -370,6 +512,7 @@ public class MsysQuotingTests
         (Dictionary<string, string> Vars, string Start)[] cases =
         [
             (new() { ["MSYS"] = "noglob" }, R1Start),
+            (new() { ["MSYS"] = "\"winsymlinks:native" }, UnclosedStart),
             (new() { ["LANG"] = "ja_JP.SJIS" }, R2Start),
             (new(), "Refused: the argument(s) from 'pw' " + R3Middle),
         ];
@@ -384,6 +527,7 @@ public class MsysQuotingTests
             Assert.DoesNotContain("\uF022", text);
             Assert.DoesNotContain("noglob", text);
             Assert.DoesNotContain("SJIS", text);
+            Assert.DoesNotContain("winsymlinks", text);
         }
     }
 }
