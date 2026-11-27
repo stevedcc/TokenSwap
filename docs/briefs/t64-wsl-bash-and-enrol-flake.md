@@ -122,25 +122,29 @@ and inside a distribution, a `bash.exe` word is never the Linux shell, so refusi
   `bash`, so `BashMain`). Both re-parse the command line. `ProgramName` already reduces these to `bash`
   (`WindowsFileName` trims trailing dots and spaces, `:1450`), so they are checked: refused.
 - **Leading white space** (` bash`). .NET's process start trims `FileName` (RedactingPty's FallbackPty), so it can
-  reach the launcher. `ProgramName` does not trim leading white space, but the check splits a word into pieces at white space (Task 2), so ` bash` names bash, and it is not plain: refused.
+  reach the launcher. `ProgramName` does not trim leading white space, but the check strips it before it finds a
+  word's would-be program (Task 2), so ` bash` would start bash, and it is not plain: refused.
 - **A quoted path** (a word that holds `"`, such as `"C:\Windows\System32\bash.exe"` with the quotes in the word, which
   PowerShell 5.1 can pass through). .NET passes a `FileName` that starts and ends with `"` to `CreateProcess` as it is,
-  which starts the file. No Windows file name holds `"`, so the check splits at `"` before naming the word. Such a
+  which starts the file. No Windows file name holds `"`, so the check reads a quoted program as cmd.exe does and ignores `"` in it. Such a
   word is then refused **outright**, even when it names Git's bash: T55's start (`RunCommand.cs:289`) resolves the raw
   word, would not find it, and would quote for the C runtime instead of MSYS2.
 - **A stream or a dotted folder** (`bash.exe::$DATA`, `C:\Windows\System32\.\bash.exe`,
   `C:\Windows\System32\..\System32\bash.exe`, `\\?\C:\Windows\System32\bash.exe`). `ProgramName` gives `bash`. `Resolve`
   takes the path as it is, so it is either not found or not MSYS2: refused.
-- **Extra text in one word** (`bash ./x.sh`, `bash;x`, `x&bash`, `bash.exe:stream`). As `run`'s own program word,
-  none of these starts bash. Both start paths quote a word with white space whole. `CreateProcess` looks for
+- **Extra text in one word** (`bash ./x.sh`, `bash;x`, `x&bash`, `bash.exe:stream`). None of these starts bash as
+  `run`'s own program word. Both start paths quote a word with white space whole. `CreateProcess` looks for
   `bash;x.exe` (no dot, so `.exe` is appended). `bash.exe:stream` names a stream of a file in the current folder that
   doesn't exist. **Behind a command runner they can.** A runner that hands its command to `cmd.exe` (npm's `exec` runs
-  it through its script shell, `cmd /d /s /c` on Windows) splits at white space, `;`, `,` and `=`, and starts a new
-  command at `&`, `|`, `<`, `>`, `(` and `)`. So `npm exec bash;x` and `npm exec "x&bash ./x.sh"` start `bash`, which
-  CreateProcess finds in System32. The check therefore splits a word at all of these, at `^`, `"` and `'` too, and
-  treats a word as naming bash when **any** of its pieces does (Task 2, "Naming a word"). Such a word is refused,
-  never resolved. A Git Bash path with a space in it (`C:\Program Files\Git\bin\bash.exe`) names bash through its last
-  piece. It is still accepted when the word as a whole is a plain absolute MSYS2 path; see Task 2.
+  it through its script shell, `cmd /d /s /c` on Windows) starts a new command only at `&`, `|`, `<`, `>`, `(`, `)` or
+  a line break. In each command the program is the first word: after leading white space and `^`, a quoted name up to
+  its closing `"`, otherwise the text up to white space, `;`, `,` or `=`. So `npm exec bash;x` and
+  `npm exec "x&bash ./x.sh"` start `bash`, which CreateProcess finds in System32. `git commit -m "fix the bash script"`
+  starts nothing: a space never starts a command, and its only would-be program is `fix`. The check reads each word
+  this way (Task 2, "A word's would-be programs") and refuses a word whose would-be program is bash. Such a word is
+  never resolved, unless the whole word is a plain absolute MSYS2 path.
+- **Off Windows,** a runner hands its command to `sh -c`, which also starts a command at `;`, a backtick and `$(`. The
+  off-Windows split adds these, which fails closed.
 - **8.3 short names** (review F6). `Resolve` does not canonicalise them: it only joins strings and calls `FileExists`.
   `bash.exe` is already an 8.3 name, so System32's file and the alias have no separate short name. A short folder name
   (`C:\WINDOW~1\System32\bash.exe`) still ends in `bash.exe`, so it is checked: refused. A short name such as
@@ -227,22 +231,39 @@ return walk.Verdict;` followed by its tail (`:1019-1024`) on `walk.Exec` and `wa
 every `wsl` row of `InlineCodeBlockTests` (the refused, allowed and `WslShell`/`WslInner`/`WslUnknown` rows) must
 pass unchanged.
 
-**Naming a word.** Let the delimiters `D` be white space and `"` `'` `;` `,` `=` `&` `|` `<` `>` `(` `)` `^`: cmd.exe's
-argument delimiters and command operators, the two quote characters, and sh's operators. The **pieces** of a word `w`
-are the non-empty parts of `w` split at `D`.
-- On Windows, `w` **names bash** when the `ProgramName` of one of its pieces is `bash` (ignoring case, so `bash`,
-  `BASH.EXE`, `bash.exe.`, `bash.exe::$DATA` and `bash.com` all count). `w` is **plain** when `ProgramName(w)` is
-  `bash`, `w` has no leading or trailing white space, and `w` holds no character of `D` except the space (U+0020)
-  inside it. So `C:\Program Files\Git\bin\bash.exe` is plain, and `"…"`, ` bash`, `bash;x` and `bash ./x.sh` are not.
-- Off Windows, `w` **names bash.exe** when the `WindowsFileName` of one of its pieces is `bash.exe` (ignoring case).
+**A word's would-be programs** (round 3 ruling). These are the programs a word starts if a runner hands it to cmd.exe
+(on Windows) or sh (off Windows):
+1. Split the word into pieces at the **command starts**. On Windows these are `&`, `|`, `<`, `>`, `(`, `)`, CR and LF,
+   where cmd.exe starts a new command; a space never starts one. Off Windows they are the same plus `;`, a backtick and
+   `$(`, sh's command starts.
+2. In each piece, strip leading white space and `^`. If the piece then starts with `"`, the would-be program is the
+   text up to the next `"` (or the end): cmd.exe's quoted program name. Otherwise it is the text up to the first white
+   space, `;`, `,` or `=` (cmd.exe's argument separators). Remove every `"` and `^` from it: cmd.exe ignores them in a
+   name (`ba"sh"`, `ba^sh`).
+3. On Windows the word **would start bash** when a would-be program's `ProgramName` is `bash` (ignoring case, so
+   `bash`, `BASH.EXE`, `bash.exe.`, `bash.exe::$DATA` and `bash.com` all count). Off Windows it **would start
+   bash.exe** when a would-be program's `WindowsFileName` is `bash.exe` (ignoring case).
+
+So the word `bash` (no delimiters) is its own would-be program, as before. `fix the bash script`, `use bash` and
+`correct horse bash staple` start `fix`, `use` and `correct`. `x & bash -c y`, `bash;x`, `x&bash ./x.sh` and
+` bash` would start bash. A Git Bash path with a space (`C:\Program Files\Git\bin\bash.exe`) has the would-be program
+`C:\Program`. It is still checked as a whole by the plain-path rule below, because `ProgramName` of the whole word is
+`bash`.
+
+A word **names bash** (Windows) when it would start bash **or** `ProgramName` of the whole word is `bash`. The second
+condition catches `C:\Program Files\…\bash.exe` and other paths with spaces. A word is **plain** when `ProgramName(w)`
+is `bash`, `w` has no leading or trailing white space, and `w` holds none of `"` `'` `;` `,` `=` `&` `|` `<` `>` `(`
+`)` `^`, no CR or LF, and no white space other than inner spaces (U+0020). So `C:\Program Files\Git\bin\bash.exe` is
+plain, and `"…"`, ` bash`, `bash;x` and `bash ./x.sh` are not. Off Windows a word **names bash.exe** when it would
+start bash.exe or its whole `WindowsFileName` is `bash.exe`.
 
 A word is **absolute** when it starts with a drive letter, `:` and `\` or `/` (`C:\…`, `c:/…`), or with two separators
 (`\\server\…`, `\\?\C:\…`). `\Program Files\…` (rooted on the current drive) and `.\bash`, `sub\bash.exe` are not.
 
 **Windows** (`windows` true). Let `k0` be the first position from `ProgramPositions(argv)` whose `ProgramName` is
 `wsl`, or `argv.Count` if there is none. For each index `k < k0` **of every word**, not only the program positions
-(round 2 I1: `ProgramPositions` ends at a tool with subcommands, so `uv run bash.exe` is never one), whose word names
-bash:
+(round 2 I1: `ProgramPositions` ends at a tool with subcommands, so `uv run bash.exe` is never one), and so for every
+substituted value too, whose word names bash:
 - the word is not plain: refused;
 - `probe` is null: refused (run can't tell which file starts);
 - `k == 0` (run's own program): allowed only when `MsysTarget.Resolve(argv[0], probe)` is not null **and**
@@ -269,7 +290,7 @@ prefix can't echo text from the command. Write the reasons as constant (non-inte
 
 The refusals, exact (`{{secret}}` literally; no word from the command and no value in them):
 - Windows, `Program` `bash`:
-  `'bash' here is not a bash.exe that 'run' recognises as Git Bash or MSYS2 (msys-2.0.dll beside it, or Git's bin\bash.exe launcher). It may be WSL's launcher (System32's bash.exe, or the WSL app's bash.exe alias), which runs its whole command line through the Linux shell (/bin/bash -c), so a substituted value is parsed again and can transform and print secrets past redaction. A word that names bash anywhere in the command is refused unless it is the full path of Git Bash or MSYS2's bash. For WSL give the command after -e: 'wsl -e ./deploy.sh {{secret}}'; for Git Bash name it by its path: 'run "C:\Program Files\Git\bin\bash.exe" ./deploy.sh {{secret}}'.`
+  `'bash' here is not a bash.exe that 'run' recognises as Git Bash or MSYS2 (msys-2.0.dll beside it, or Git's bin\bash.exe launcher). It may be WSL's launcher (System32's bash.exe, or the WSL app's bash.exe alias), which runs its whole command line through the Linux shell (/bin/bash -c), so a substituted value is parsed again and can transform and print secrets past redaction. A word in the command that would start bash (exactly bash, or bash after & | < > ( ) or a line break) is refused unless it is the full path of Git Bash or MSYS2's bash. For WSL give the command after -e: 'wsl -e ./deploy.sh {{secret}}'; for Git Bash name it by its path: 'run "C:\Program Files\Git\bin\bash.exe" ./deploy.sh {{secret}}'.`
 - Off Windows, `Program` `bash.exe`:
   `'bash.exe' is a Windows program: under WSL it is System32's bash.exe, WSL's launcher, reached through Windows interop, which runs its whole command line through the Linux shell (/bin/bash -c), so a substituted value is parsed again and can transform and print secrets past redaction. Run the Linux shell instead: 'run bash ./deploy.sh {{secret}}'.`
 
@@ -307,7 +328,9 @@ script argument is `./x.sh {{x}}` unless shown otherwise. A path shown in `"…"
 | `uv run bash.exe ./x.sh {{x}}`, `poetry run bash ./x.sh {{x}}`, `conda run -n x bash.exe ./x.sh {{x}}`, `npm exec bash.exe ./x.sh {{x}}`, `pipx run bash ./x.sh {{x}}`, `dotnet tool run bash ./x.sh {{x}}` | true | WSL | refused |
 | `uv run "C:\Program Files\Git\bin\bash.exe" ./x.sh {{x}}` | true | WSL | null |
 | `npm exec bash;x {{x}}`, `npm exec "x&bash ./x.sh" {{x}}` (one word) | true | WSL | refused |
-| `git commit -m bash {{x}}`, `git commit -m "fix the bash script" {{x}}` (one word) | true | WSL | refused (declared over-refusal: an argument that names bash) |
+| `git commit -m bash {{x}}` | true | WSL | refused (declared over-refusal: an argument that is exactly a bash name) |
+| `git commit -m "fix the bash script" {{x}}`, `echo "use bash" {{x}}`, `tool "correct horse bash staple"` (one word each) | true | WSL | null (no would-be program is bash) |
+| `tool "x & bash -c y"`, `tool bash`, `tool "x|bash.exe"`, `tool "x(bash)"`, `tool ba^sh`, `tool x&ba"sh"` (one word each; the last holds its quotes) | true | WSL | refused |
 | `timeout 5 C:\Windows\System32\bash.exe ./x.sh {{x}}` | true | WSL | refused |
 | `wsl -e bash ./x.sh {{x}}`, `wsl -d Ubuntu --exec bash ./x.sh {{x}}`, `wsl -e ./deploy.sh {{x}}`, `wsl --shell-type none bash ./x.sh {{x}}` | true | WSL | null (Linux bash inside the distribution) |
 | `wsl -e bash.exe ./x.sh {{x}}`, `wsl --exec BASH.EXE ./x.sh {{x}}`, `wsl --shell-type none bash.exe ./x.sh {{x}}`, `wsl -d Ubuntu -e /mnt/c/Windows/System32/bash.exe ./x.sh {{x}}`, `wsl -e sudo bash.exe ./x.sh {{x}}` | true | WSL | refused; the reason starts `'wsl' runs 'bash.exe': ` |
@@ -320,7 +343,8 @@ script argument is `./x.sh {{x}}` unless shown otherwise. A path shown in `"…"
 | `bash.exe`, `BASH.EXE`, `bash.exe.`, `/mnt/c/Windows/System32/bash.exe`, `/mnt/c/Program Files/Git/bin/bash.exe` | false | null | refused |
 | `sudo bash.exe ./x.sh {{x}}` | false | null | refused |
 | `bash`, `/bin/bash`, `/usr/bin/bash` | false | null | null |
-| `wsl.exe -e bash.exe ./x.sh {{x}}`, `wsl.exe -e /mnt/c/Windows/System32/bash.exe ./x.sh {{x}}`, `wsl.exe -e wsl.exe -e bash.exe ./x.sh {{x}}`, `uv run bash.exe ./x.sh {{x}}`, `tool x;bash.exe` | false | null | refused |
+| `wsl.exe -e bash.exe ./x.sh {{x}}`, `wsl.exe -e /mnt/c/Windows/System32/bash.exe ./x.sh {{x}}`, `wsl.exe -e wsl.exe -e bash.exe ./x.sh {{x}}`, `uv run bash.exe ./x.sh {{x}}`, `tool bash.exe`, `tool "x;bash.exe"`, `tool "x&&bash.exe -c y"`, `tool "$(bash.exe)"` (one word each) | false | null | refused |
+| `tool "echo bash.exe"`, `git commit -m "use bash.exe on Windows"` (one word each) | false | null | null |
 | `wsl.exe -e bash ./x.sh {{x}}`, `uv run bash ./x.sh {{x}}`, `sudo bash ./x.sh {{x}}` | false | null | null (Linux bash) |
 | `"bash.exe"` (quotes in the word), ` bash.exe`, `bash.exe ./x.sh` (one word) | false | null | refused |
 
@@ -336,7 +360,9 @@ Break-it-once:
 3a. Scan only `ProgramPositions` instead of every word before `k0` (the round-2 design). The `uv run bash.exe`,
    `poetry run bash`, `npm exec` and `tool bash` rows must fail.
 3b. Accept a relative word with a separator at `k >= 1`. The `sudo sub\bash.exe` row must fail.
-3c. Split pieces at white space only. The `bash;x`, `npm exec bash;x` and `x&bash` rows must fail.
+3c. Split pieces at white space as well (every word is a would-be program). The `fix the bash script`, `use bash`
+   and `correct horse bash staple` rows must fail (refused).
+3d. Drop `&` from the command starts. The `x & bash -c y` and `npm exec "x&bash ./x.sh"` rows must fail (allowed).
 4. Make it check the inner command with the caller's `windows` instead of the off-Windows rule. The Windows
    `wsl -e bash.exe` rows must fail, and `wsl -e bash` must still pass.
 5. Drop the off-Windows branch. The off-Windows `bash.exe` rows must fail.
@@ -368,6 +394,8 @@ secret `pw` = `a\b"c`; `"…"` around a path is shell quoting, as in Task 2's ta
 | Windows | WSL | `run --env PW={{pw}} -- bash ./capture.sh` | exit 1, 0 starts, the Windows reason, no key asked |
 | Windows | WSL | `run uv run bash.exe ./capture.sh {{pw}}` | exit 1, 0 starts, the Windows reason, no key asked |
 | Windows | WSL | `run "C:\Program Files\Git\bin\bash.exe" ./capture.sh {{pw}}` | exit 0, 1 start, argv `[GitBash]`, `WindowsArguments` as in `GitBash_StartsByItsResolvedPath_…` |
+| Windows | WSL | `run tool {{pw}}` with `pw` = `correct horse bash staple` | exit 0, 1 start |
+| Windows | WSL | `run tool {{pw}}` with `pw` = `x & bash -c y`, and with `pw` = `bash` | exit 1, 0 starts; the generic after-substitution message naming `{{pw}}`; the value not in stderr |
 | Windows | WSL | `run {{prog}} ./capture.sh {{pw}}` with `prog` = `bash` | exit 1, 0 starts; stderr holds `After substitution, the value of {{prog}} makes this a command 'run' refuses` (`RunCommand.cs:266-270`, `:497-505`); stderr holds no `bash` word from the value (assert `DoesNotContain("'bash'")`) |
 | Linux | null | `run bash.exe ./capture.sh {{pw}}` | exit 1, 0 starts, the off-Windows reason then `ViewSecretLine(false)`, no key asked |
 | Linux | null | `run bash ./capture.sh {{pw}}` | exit 0, 1 start, argv as given |
@@ -409,10 +437,13 @@ have no WSL distribution to run it in. Name the CI branch in the report once it 
   `bash.exe` word is refused, since there it reaches that launcher through interop. A copy or link of the launcher (or
   of `wsl.exe`) under another name, or that name's 8.3 short name, still re-parses its command line unchecked." In the same cell's "Accepted over-refusals" list, add: "on
   Windows, a `bash` that isn't MSYS2 (Cygwin's included), a `bash` not found, a word naming `bash` that holds `"`,
-  leading or trailing white space or one of `;,=&|<>()^'`, and any word after `run`'s program that names a file
-  `bash` or `bash.exe` (a mere argument such as `git commit -m "fix the bash script"` included, and a substituted value
-  that holds `bash` as a word) unless it is an absolute path to Git Bash or MSYS2's bash, so a relative path to Git
-  Bash behind a wrapper (`sudo .\bash`) is refused too; any word naming `bash.exe` off Windows".
+  leading or trailing white space or one of `;,=&|<>()^'`, and any word after `run`'s program (a substituted value
+  included) that cmd.exe would start as `bash`: exactly `bash` or `bash.exe` (so `git commit -m bash`), or `bash`
+  after `&`, `|`, `<`, `>`, `(`, `)` or a line break. This applies unless the word is an absolute path to Git Bash or
+  MSYS2's bash, so a relative path to Git Bash behind a wrapper (`sudo .\bash`) is refused too. Off Windows, any word
+  that is `bash.exe` or would start it (also after `;`, a backtick or `$(`). A path with spaces whose last component
+  is `bash` (`see C:\x\bash`) is refused too, because the whole word is read as a path". A word that merely mentions bash among
+  other words (`git commit -m "fix the bash script"`, a passphrase) is not refused.
 - `docs/scripts.md:53-54` (only this sentence; T62 edits `:55-58` of the same paragraph): replace "A bare `bash` can
   still start WSL's `bash.exe` in System32, which `run` leaves alone, so name Git Bash by its path:" with "Where WSL is
   installed, a bare `bash` starts WSL's `bash.exe` in System32 (Windows searches System32 before `PATH`), which `run`
@@ -451,3 +482,10 @@ have no WSL distribution to run it in. Name the CI branch in the report once it 
   key asked" asserted. M6: `:1450` and `SlotEnrol.cs:311`. Parser-first: words with extra text (`bash;x`, `x&bash`,
   `bash.exe:stream`) are split at cmd.exe's and sh's delimiters and refused. The pre-unlock call moved after the
   file-token check.
+- **Round 3 (controller's ruling on the round-2 open question).** A word is no longer refused for merely containing
+  `bash`. Only its would-be programs count: the pieces split at cmd.exe's command starts (`& | < > ( )`, line breaks;
+  off Windows also sh's `;`, backtick and `$(`), each read up to the first separator or as a quoted name. So
+  `git commit -m "fix the bash script"` and a passphrase are allowed, and `x & bash -c y` and `bash` are refused. Two
+  parser-first details go beyond the ruling's wording, both failing closed: a quoted program is read to its closing
+  `"` (cmd.exe's rule, so `"C:\…\bash.exe"` is caught), and `"`/`^` inside a name are ignored, as cmd.exe ignores them.
+  The over-refusal list in the docs task is narrowed to match.
