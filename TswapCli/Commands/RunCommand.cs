@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using RedactingPty;
 using TswapCore;
 using TswapCore.Fingerprints;
+using TswapCore.Totp;
 
 namespace TswapCli.Commands;
 
@@ -132,6 +133,8 @@ public sealed partial class RunCommand : ICliCommand
         var key = ctx.Unlock(config);
         using var view = ctx.OpenVault(key);
         var metadata = view.LoadAll(FormatTwoRecords.Skip);
+        // Brief T58 (#374): what the child is given (codes for otpauth records), one clock reading for the command.
+        var values = new CommandValues(view, ctx.Time.GetUtcNow(), ctx.Prefix, windows);
         // Every other fingerprinted value version of the vault is masked too (the matcher), and what
         // can't be is said before the child starts and again after it exits.
         RunCoverage.Warn(ctx.Console.Error, ctx.Prefix, metadata);
@@ -142,13 +145,13 @@ public sealed partial class RunCommand : ICliCommand
         {
             // Resolve every token first: a missing secret, a missing previous value or an unreadable record
             // (named by its hashed file) refuses before anything is written or started.
-            // A token is a name or 'name:previous'.
+            // A token is a name, 'name:previous' or 'name:totp' (brief T58: an otpauth record gives its code).
             Dictionary<string, string> resolved = [];
             foreach (var token in allTokens)
             {
-                resolved[token] = view.ResolveToken(token);
+                resolved[token] = values.ResolveToken(token);
                 // Warn about a burned value (current or previous), as apply does.
-                if (view.IsBurnedToken(token))
+                if (values.IsBurnedToken(token))
                     ctx.Console.Error.WriteLine($"Warning: '{token}' is a burned value — using it anyway; rotate it after use.");
             }
 
@@ -179,8 +182,14 @@ public sealed partial class RunCommand : ICliCommand
                     foreach (var variant in Redaction.Variants(form))
                         target.TryAdd(variant, $"[REDACTED: {name}]");
             }
+            // Brief T58: a token that gave a code also masks its stored forms (the URI, the secret text, the seed's
+            // spellings), each routed by its own length: all are long, so they are masked anywhere.
             foreach (var (token, value) in resolved)
+            {
                 Redact(token, value, []);
+                foreach (var form in values.StoredForms(token))
+                    Redact(token, form, []);
+            }
 
             // Issue #251: every file is resolved and filled in memory before anything is written; a
             // missing or unreadable file, one without markers or a marker naming a missing secret refuses
@@ -194,9 +203,13 @@ public sealed partial class RunCommand : ICliCommand
                     var source = FullSourcePath(token, filesEnv.CurrentDirectory);
                     if (!bySource.TryGetValue(source, out var content))
                     {
-                        var (text, applied) = Apply.ApplySecretsReporting(ReadSource(token, source), view, ctx.Console.Error);
+                        var (text, applied) = Apply.ApplySecretsReporting(ReadSource(token, source), values, ctx.Console.Error);
                         foreach (var (name, raw, written) in applied)
+                        {
                             Redact(name, raw, written);
+                            foreach (var form in values.StoredForms(name))
+                                Redact(name, form, []);
+                        }
                         bySource[source] = content = text;
                     }
                     filled.Add((token, source, content));
@@ -426,10 +439,10 @@ public sealed partial class RunCommand : ICliCommand
         }
     }
 
-    /// <summary>An --env value: exactly one <c>{{name}}</c> or <c>{{name:previous}}</c>, nothing else.</summary>
+    /// <summary>An --env value: exactly one <c>{{name}}</c>, <c>{{name:previous}}</c> or <c>{{name:totp}}</c>, nothing else.</summary>
     private static string EnvToken(string name, string value)
     {
-        const string exactly = "the value must be exactly one {{name}} or {{name:previous}} token";
+        const string exactly = "the value must be exactly one {{name}}, {{name:previous}} or {{name:totp}} token";
         if (value.Contains("{{@", StringComparison.Ordinal))
             throw new TswapException(
                 $"'--env {name}': a {{{{@file}}}} token can't be an --env value (a file path isn't a secret): put it in the command.");
@@ -494,8 +507,8 @@ public sealed partial class RunCommand : ICliCommand
     public const string NoTokensText = "No {{tokens}} or {{@file}} tokens found in command";
 
     // Brief T35 (#348.1): a whole argument that is a token with one pair of braces removed, as PowerShell does to an
-    // unquoted {{name}} (a script block): {name}, {name:previous} or {@path}. Never part of a longer argument.
-    [GeneratedRegex(@"^\{[a-zA-Z0-9_-]{1,64}(?::previous)?\}$")]
+    // unquoted {{name}} (a script block): {name}, {name:previous}, {name:totp} or {@path}. Never part of a longer argument.
+    [GeneratedRegex(@"^\{[a-zA-Z0-9_-]{1,64}(?::previous|:totp)?\}$")]
     private static partial Regex BracedNameRegex { get; }
 
     [GeneratedRegex(@"^\{@[^{}]+\}$")]

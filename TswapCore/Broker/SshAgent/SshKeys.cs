@@ -96,7 +96,15 @@ public sealed class VaultSshKeySource(RecordVaultStore store, VaultUnlocker unlo
         {
             CryptographicOperations.ZeroMemory(key);
         }
-        return value ?? throw new BrokerSecretException($"secret '{secretName}' is not in the vault");
+        if (value is null)
+            throw new BrokerSecretException($"secret '{secretName}' is not in the vault");
+        // Brief T58 (D8): the broker hands out neither a TOTP seed nor a code.
+        if (TswapCore.Totp.OtpAuthUri.IsOtpAuth(value))
+        {
+            CryptographicOperations.ZeroMemory(value);
+            throw new BrokerSecretException(TswapCore.Totp.OtpAuthUri.BrokerRefusal(secretName));
+        }
+        return value;
     }
 }
 
