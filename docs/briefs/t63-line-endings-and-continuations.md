@@ -27,7 +27,7 @@ and which test failed), `./runtests.sh --unit` after each task, the full `./runt
 `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`, explicit-path commits, no push, merge or rebase; stop and
 report when the brief can't be built as written. **No existing test's assertions change, and no existing test file
 changes:** every new test goes in a new file, under the name this brief gives it. The one exception is Task 1's oracle
-rule, **pending owner sanction** (an owner-sanctioned rule change to an otherwise frozen file, as for T50b and T54),
+rule, **sanctioned by the owner on 2026-11-27** (an owner-sanctioned rule change to an otherwise frozen file, as for T50b and T54),
 and only if the corpus needs it. If any existing test fails on an assertion, stop and list it. No production message
 and no custom test failure text contains a value or the text of a line that holds one.
 
@@ -183,7 +183,7 @@ Facts:
 `Content` after, and stderr holds the full warning for `line 2` and `'b'` exactly; neither A nor B is in stdout or stderr
 of either run.
 
-**Oracle (pending owner sanction).** Run `Engine_MatchesOracle_OnRandomCorpus` and the other tests that compare with the oracle (`ToCommentWholeValueTests`,
+**Oracle (sanctioned by the owner on 2026-11-27).** Run `Engine_MatchesOracle_OnRandomCorpus` and the other tests that compare with the oracle (`ToCommentWholeValueTests`,
 `ToCommentLineBreakTests`, `RedactBehaviourPinTests`) after the change. If every oracle comparison passes, leave
 `PlaintextRedactOracle.cs` alone and say so in the report. If it differs on a continuation line, this rule mirrors
 production and is the only change: in the `ToCommenter` loop (`PlaintextRedactOracle.cs:90-108`, after the
@@ -193,8 +193,8 @@ kind, no boundary or whole-value rule: what `FingerprintIndex.Scan` sees), the l
 production does (a `CommentedLineDiff` in `diffs`) and the loop goes on. Kept lines go into a set that the outer loop
 in `Processor.Process` skips unchanged; only `ToCommenter` fills it (gated on `ShouldRemoveContinuationLines()`), so
 `Redactor` is unaffected. The class summary's list of sanctioned changes gets "T63, 2026-11-27: a continuation
-candidate that holds a value is commented out (or kept in block content), never removed". Do not commit the oracle
-change until the owner's sanction is recorded; stop and report with the corpus difference. Any other difference: stop
+candidate that holds a value is commented out (or kept in block content), never removed". The owner sanctioned this
+oracle change on 2026-11-27; commit it with that line in the message. Any other difference: stop
 and report; don't change the seed or the generator.
 
 **Break it once:** delete step 3 (the new `index.Scan(lines[j])` branch): rows 1-8, 8a, 10 and the command test must
@@ -360,7 +360,7 @@ the command test must fail; drop the `"\n"` spelling: row 4 must fail; drop the 
     past a commented line, and row 11 checks the structure (no YAML parser is a test dependency). There is a new
     `CommentedLineDiff`, exact warning and dry-run texts, and a release-note line.
   - I-2: the oracle rule now mirrors production (any occurrence over the match list, no boundary or whole-value rule;
-    the outer loop skips kept lines, gated on `ToCommenter`). Pending owner sanction.
+    the outer loop skips kept lines, gated on `ToCommenter`). Sanctioned by the owner on 2026-11-27.
   - I-3: every new test has its own name in a new file; no existing test file changes.
   - I-4: a lone CR is a line break, in any mix, for the broker and the field check. Row 5 now expects masking, rows 6, 7
     and field row 5 were added, and the window arithmetic is shown. The field check now scans whole spellings
