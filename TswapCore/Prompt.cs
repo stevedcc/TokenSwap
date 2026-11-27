@@ -31,9 +31,13 @@ automated/silent unlocking by malicious processes.
   `%CMD% rotate db-pw && %CMD% run psql ""postgresql://app:{{db-pw:previous}}@db/app"" -c ""ALTER ROLE app PASSWORD '{{db-pw}}'""`
   (that works for a burned db-pw; if it isn't burned, the user runs the rotate with sudo, then you run the `run`).
   A rotation is visible (the burn stays in the record) and reversible: the user can run `sudo %CMD% restore <name>`
-- `%CMD% names [<pattern>...]` - List secret names (no values shown); with quoted glob patterns (`*`, `?`, whole names, case ignored) only the names that match, e.g. `%CMD% names 'k8s-*'`
+- `%CMD% names [<pattern>...]` - List secret names (no values shown); with quoted glob patterns (`*`, `?`, whole names, case ignored) only the names that match, e.g. `%CMD% names 'k8s-*'`; `[TOTP]` marks TOTP secrets
 - `%CMD% migrate` - Guide to upgrade YubiKey slots for touch requirement
 - `%CMD% run <command>` - Execute a command with {{secret-name}} token substitution; `{{@path}}` hands the command a private copy of a file whose `# tswap:` markers are filled in; in PowerShell quote each argument holding a token (`'{{name}}'`, `'{{@file}}'`), or PowerShell turns it into a script block and run finds no token
+  A TOTP secret (an `otpauth://totp/` URI) gives its current code in `{{name}}` and in `# tswap:` markers, never its
+  seed; `{{name:totp}}` is for a secret stored as a bare Base32 seed. Store a URI alone, not inside other text; the
+  seed is for the user only (`sudo %CMD% get <name>`)
+- `%CMD% totp <name>` - Print the current code of a TOTP secret on stdout and how many seconds it stays valid on stderr. A code is a short-lived live credential, not the seed: use it at once, never store it; seeing a code needs no burn.
 - `%CMD% burn <name> [reason]` - Mark a secret as burned if you accidentally see its value
 - `%CMD% burned` - List all burned secrets that need rotation
 - `%CMD% check <path>` - Scan a file or directory for `# tswap:` markers; exits 1 if any secret is missing; otherwise exits 2 if any secret is burned or a marker is under `data:` in a Kubernetes Secret (base64 expected; use `stringData:`)
@@ -112,6 +116,7 @@ Rules for fields:
    log messages, error messages), you MUST IMMEDIATELY run `%CMD% burn <name> <reason>`
    BEFORE continuing any other work. Do not finish your current task first.
    Check `%CMD% names` to find the matching secret name if needed.
+   A TOTP secret's URI or seed is burned like any value.
 5. To import secrets from external systems, pipe them directly - NEVER use intermediate variables or
    echo. For Kubernetes, use jq (not jsonpath, which has shell quoting issues with dots/underscores):
    `kubectl get secret <secret> -n <ns> -o json | jq -r '.data[""<key>""] // empty' | base64 -d | %CMD% ingest <name>`
@@ -119,6 +124,8 @@ Rules for fields:
 7. Burned secrets should be rotated - check with `%CMD% burned`, then replace each one with
    `%CMD% rotate <name> [length]` (or `<source> | %CMD% ingest --rotate <name>`) and update the system that
    uses it with `%CMD% run`. Never delete and re-create a secret to rotate it
+   A TOTP seed can't be rotated: replacing one is the user's job, with the issuer's new seed stored as
+   `<source> | %CMD% ingest --rotate <name>`
 8. When you create or ingest a secret, always inform the user of the secret name you used
 9. Check `%CMD% burned` at the start of each session and inform the user of any pending rotations
 10. If a command fails because the vault's slot on this machine needs the vault password, stop and

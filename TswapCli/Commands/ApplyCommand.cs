@@ -1,4 +1,6 @@
+using System.Runtime.InteropServices;
 using TswapCore;
+using TswapCore.Totp;
 
 namespace TswapCli.Commands;
 
@@ -28,7 +30,9 @@ public sealed class ApplyCommand : ICliCommand
         try
         {
             var content = File.ReadAllText(filePath);
-            var applied = Apply.ApplySecrets(content, view, warnings: ctx.Console.Error);
+            // Brief T58 (D7): markers are filled as run's {{@file}} fills them (codes for otpauth records); the seed is get's.
+            var values = new CommandValues(view, ctx.Time.GetUtcNow(), ctx.Prefix, ctx.Os == OSPlatform.Windows);
+            var applied = Apply.ApplySecrets(content, values, warnings: ctx.Console.Error);
             ctx.Console.Out.Write(applied);
             return 0;
         }

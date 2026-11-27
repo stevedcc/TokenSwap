@@ -4,15 +4,16 @@ namespace TswapCore;
 
 public static class Apply
 {
-    // Fix round 1, B: '# tswap: name:previous' names the value the last rotation replaced.
-    private static readonly Regex MarkerRegex = new(@"#\s*tswap\s*:\s*([a-zA-Z0-9_-]+(?::previous)?)");
+    // Fix round 1, B: '# tswap: name:previous' names the value the last rotation replaced. Brief T58 (#374):
+    // '# tswap: name:totp' the current code of a TOTP seed. One suffix at most.
+    private static readonly Regex MarkerRegex = new(@"#\s*tswap\s*:\s*([a-zA-Z0-9_-]+(?::previous|:totp)?)");
 
-    // Fix round 3/4: every marker on a line must be 'name' or 'name:previous'; any other
+    // Fix round 3/4: every marker on a line must be 'name', 'name:previous' or 'name:totp'; any other
     // ':suffix' is a typo, refused (naming it) instead of applying 'name'.
     private static readonly Regex AnyMarkerRegex = new(@"#\s*tswap\s*:\s*([a-zA-Z0-9_-]+(?::[^\s#]*)*)");
     // #311: a secret name followed by '.' in a marker is a field (or a typo), never a request for the secret.
     private static readonly Regex DottedMarkerRegex = new(@"#\s*tswap\s*:\s*([a-zA-Z0-9_-]+)\.([^\s#]*)");
-    private static readonly Regex ValidMarkerTail = new(@"^[a-zA-Z0-9_-]+(?::previous)?$");
+    private static readonly Regex ValidMarkerTail = new(@"^[a-zA-Z0-9_-]+(?::previous|:totp)?$");
     
     // Match empty string patterns with quotes: key: "" or key: ''
     private static readonly Regex EmptyValueRegex = new(@"^(.*[:=]\s*)([""'])\2(\s*)$");
@@ -70,20 +71,21 @@ public static class Apply
                 var shown = Validation.Printable(dotted.Value);
                 throw new TswapException((Validation.IsFieldName(dotted.Groups[2].Value)
                     ? Validation.FieldTokenMessage(shown, dotted.Groups[1].Value)
-                    : $"'{shown}' is not a valid marker: a marker is # tswap: NAME or # tswap: NAME:previous, " +
+                    : $"'{shown}' is not a valid marker: a marker is # tswap: NAME, # tswap: NAME:previous or # tswap: NAME:totp, " +
                       "and fields aren't substituted into commands.") + $" (line {i + 1})");
             }
 
             foreach (Match marker in AnyMarkerRegex.Matches(line))
                 if (!ValidMarkerTail.IsMatch(marker.Groups[1].Value))
                     throw new TswapException(
-                        $"Unknown marker '# tswap: {marker.Groups[1].Value}' (line {i + 1}): the only suffix is ':previous'.");
+                        $"Unknown marker '# tswap: {marker.Groups[1].Value}' (line {i + 1}): the suffixes are ':previous' and ':totp'.");
 
             var secretName = markerMatch.Groups[1].Value;
 
             // Check the secret exists (and, for name:previous, that it has a previous value).
-            var baseName = secretName.EndsWith(SecretsDb.PreviousSuffix, StringComparison.Ordinal)
-                ? secretName[..^SecretsDb.PreviousSuffix.Length]
+            var previous = secretName.EndsWith(SecretsDb.PreviousSuffix, StringComparison.Ordinal);
+            var baseName = previous ? secretName[..^SecretsDb.PreviousSuffix.Length]
+                : secretName.EndsWith(SecretsDb.TotpSuffix, StringComparison.Ordinal) ? secretName[..^SecretsDb.TotpSuffix.Length]
                 : secretName;
             if (!db.Contains(baseName))
             {
@@ -93,7 +95,7 @@ public static class Apply
             // Brief T16-S2: ':previous' without a previous value fails here, in today's order, from
             // metadata; the value itself is decrypted only for a line that is filled in (Value()).
             var where = $" (line {i + 1})";
-            if (secretName.Length != baseName.Length && !db.HasPreviousValue(baseName))
+            if (previous && !db.HasPreviousValue(baseName))
                 db.ResolveToken(secretName, where); // throws the "no previous value" text
             string Value() => db.ResolveToken(secretName, where);
             var burned = db.IsBurnedToken(secretName);
@@ -127,7 +129,7 @@ public static class Apply
                     quote = "\"";
                 var escapedValue = EscapeForQuote(value, quote);
                 if (burned)
-                    warnings.WriteLine($"Warning: Secret '{secretName}' is burned (line {i + 1}) — applying anyway; rotate this secret after use");
+                    warnings.WriteLine($"Warning: Secret '{secretName}' is burned (line {i + 1}) — applying anyway; {BurnedAdvice(db, secretName)}");
                 // Ensure at least one space before the marker so '#' is a valid YAML comment
                 // (without whitespace, key: "value"# tswap: name is not a comment in YAML)
                 var sep = whitespace.Length > 0 ? whitespace : " ";
@@ -147,7 +149,7 @@ public static class Apply
                     RefuseControlCharactersOnEnvLine(prefix, value, secretName, i + 1);
                     var escapedValue = EscapeForQuote(value, "\"");
                     if (burned)
-                        warnings.WriteLine($"Warning: Secret '{secretName}' is burned (line {i + 1}) — applying anyway; rotate this secret after use");
+                        warnings.WriteLine($"Warning: Secret '{secretName}' is burned (line {i + 1}) — applying anyway; {BurnedAdvice(db, secretName)}");
                     lines[i] = $"{prefix}\"{escapedValue}\"  {markerPart}";
                     Report(secretName, value, escapedValue);
                 }
@@ -162,6 +164,13 @@ public static class Apply
         return (string.Join('\n', lines),
             applied.Select(r => (r.Name, r.Raw, (IReadOnlyList<string>)r.WrittenForms)).ToList());
     }
+
+    /// <summary>
+    /// The end of a burned line's warning: rotate, or for a marker that gave a TOTP code (code review round 1), the
+    /// advice to replace the seed, which can't be rotated.
+    /// </summary>
+    private static string BurnedAdvice(ISecretLookup db, string marker) =>
+        db is Totp.CommandValues values && values.GaveCode(marker) ? values.BurnedSeedAdvice(marker) : "rotate this secret after use";
 
     /// <summary>
     /// Brief T20 (#315): a line whose separator (the last non-space character of the prefix) is

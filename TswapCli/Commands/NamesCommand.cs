@@ -82,7 +82,12 @@ public sealed partial class NamesCommand : ICliCommand
         {
             var entries = secrets
                 .OrderBy(s => s.Name)
-                .Select(s => new NameEntry(s.Name, s.BurnedAt.HasValue, s.BurnedAt))
+                .Select(s => new NameEntry(s.Name, s.BurnedAt.HasValue, s.BurnedAt, s.Kind switch
+                {
+                    TswapCore.Totp.ValueKind.Totp => "totp",
+                    TswapCore.Totp.ValueKind.OtpAuthUnusable => "otpauth-unusable",
+                    _ => null,
+                }))
                 .ToList();
             ctx.Console.Out.WriteLine(JsonSerializer.Serialize(entries, CliJsonContext.Default.ListNameEntry));
             return;
@@ -106,7 +111,14 @@ public sealed partial class NamesCommand : ICliCommand
         foreach (var secret in secrets.OrderBy(s => s.Name))
         {
             var burned = secret.BurnedAt.HasValue ? " [BURNED]" : "";
-            ctx.Console.Out.WriteLine($"{secret.Name.PadRight(width)}  {TswapCore.Keyring.Hlc.Display(secret.Modified)}{burned}");
+            // Brief T58: the mark from metadata, before the burn.
+            var kind = secret.Kind switch
+            {
+                TswapCore.Totp.ValueKind.Totp => " [TOTP]",
+                TswapCore.Totp.ValueKind.OtpAuthUnusable => " [OTPAUTH: unusable]",
+                _ => "",
+            };
+            ctx.Console.Out.WriteLine($"{secret.Name.PadRight(width)}  {TswapCore.Keyring.Hlc.Display(secret.Modified)}{kind}{burned}");
         }
     }
 }

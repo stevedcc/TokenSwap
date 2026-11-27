@@ -17,6 +17,12 @@
           "Konscious.Security.Cryptography.Blake2": "1.1.1"
         }
       },
+      "Otp.NET": {
+        "type": "Direct",
+        "requested": "[1.4.1, 1.4.1]",
+        "resolved": "1.4.1",
+        "contentHash": "UXjZ80T6BfVACJWmEcz4UFZ93hwX3STKojKvVpPk3qUhubjnLwIiZMsI4Hh91HhYxC0JlatNdNrVK2wkv4O9/Q=="
+      },
       "Yubico.YubiKey": {
         "type": "Direct",
         "requested": "[1.18.1, 1.18.1]",

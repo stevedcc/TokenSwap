@@ -98,7 +98,7 @@ sudo, tswap's own sudo check refuses the operator's commands either way.
 
 ```bash
 # Example allowlist for an AI agent wrapper
-ALLOWED_COMMANDS="create|ingest|rotate|names|slots|run|burn|burned|check|redact|tocomment|prompt|prompt-hash|migrate"
+ALLOWED_COMMANDS="create|ingest|rotate|names|slots|run|totp|burn|burned|check|redact|tocomment|prompt|prompt-hash|migrate"
 
 # Reject anything not in the allowlist
 if ! echo "$1" | grep -qE "^($ALLOWED_COMMANDS)$"; then

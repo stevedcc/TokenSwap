@@ -14,6 +14,23 @@
     <OptimizationPreference>Size</OptimizationPreference>
     <!-- LibraryImport's generated stubs (PcscStrategy.cs) need /unsafe, as in TswapCore. -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!--
+      Brief T58 Task 5: TrimmerSingleWarn false makes the trimmer and NativeAOT's ILCompiler list a package's trim and
+      AOT warnings per member instead of collapsing them into one IL2104 per assembly, so a package bump (Otp.NET,
+      Yubico.YubiKey, ...) that adds one shows which member it is. Pinned by TswapTests/Build/AotWarningTests.cs.
+    -->
+    <TrimmerSingleWarn>false</TrimmerSingleWarn>
+  </PropertyGroup>
+
+  <!--
+    Brief T58 Task 5: in a Release build (what ships) every trim or AOT warning the ILCompiler reports (IL2xxx, IL3xxx)
+    is an error: IlcTreatWarningsAsErrors is ILC's warnaserror. Release only, because the Debug publish (CI's E2E
+    binary) has one known, pre-existing warning: IL2026 in Yubico.YubiKey.Cryptography.CryptographyProviders..cctor()
+    (HMAC.Create(String)), which the Release publish doesn't report. Not in Directory.Build.props, which may set only the
+    lock-file properties (DependencyPinningTests). Pinned by TswapTests/Build/AotWarningTests.cs.
+  -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <IlcTreatWarningsAsErrors>true</IlcTreatWarningsAsErrors>
   </PropertyGroup>
 
   <!--
