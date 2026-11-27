@@ -139,7 +139,16 @@ public partial class TotpParseTests
         { "a raw space in the label", "otpauth://totp/Acme Co:alice?secret=" + Sha1Seed + "&issuer=Acme", SpaceText },
         { "a raw space in the issuer", "otpauth://totp/Acme:alice?secret=" + Sha1Seed + "&issuer=Acme Co", SpaceText },
         { "spaces in the secret and the issuer", "otpauth://totp/X?secret=GEZD GNBV&issuer=Acme Co", SpaceText },
+        // Fix round 3 (MiMo minor): any char.IsWhiteSpace outside the secret, not only U+0020.
+        { "NBSP and notes after &issuer=Acme", "otpauth://totp/Example:alice?secret=" + Sha1Seed + "&issuer=Acme\u00A0notes", SpaceText },
+        { "U+2028 between two parts", "otpauth://totp/Example:alice\u2028?secret=" + Sha1Seed + "&issuer=Acme", SpaceText },
+        { "U+2003 in the label", "otpauth://totp/Acme\u2003Co:alice?secret=" + Sha1Seed, SpaceText },
+        { "U+3000 in the issuer", "otpauth://totp/Acme:alice?secret=" + Sha1Seed + "&issuer=Acme\u3000Co", SpaceText },
     };
+
+    [Fact]
+    public void NonAsciiIssuerWithoutWhiteSpace_IsAccepted() =>
+        Assert.Equal("050471", CodeOf("otpauth://totp/Acme:alice?secret=" + Sha1Seed + "&issuer=Acme\u00DCnicorn"));
 
     [Theory]
     [MemberData(nameof(RawSpaces))]

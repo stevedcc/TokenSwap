@@ -97,8 +97,9 @@ public sealed class TotpSeed : IDisposable
         if (text.Any(char.IsControl) || text.IndexOf("otpauth:", 1, StringComparison.OrdinalIgnoreCase) >= 0)
             throw new TotpSeedException(R0);
         // Controller ruling (code review round 1): RFC 3986 allows no raw space. One in the secret's value keeps R14 (its
-        // own text, checked with the values); one anywhere else is R0's space text.
-        if (OutsideTheSecret(text).Contains(' ')) throw new TotpSeedException(R0Space);
+        // own text, checked with the values); one anywhere else is R0's space text. Fix round 3: any white space
+        // (char.IsWhiteSpace: NBSP, U+2000-200A, U+2028/2029, U+3000, ...), not only U+0020; %20 is not white space.
+        if (OutsideTheSecret(text).Any(char.IsWhiteSpace)) throw new TotpSeedException(R0Space);
         if (!text.StartsWith("otpauth://", StringComparison.OrdinalIgnoreCase)) throw new TotpSeedException(R1);
 
         var rest = text["otpauth://".Length..];

@@ -72,9 +72,15 @@ public sealed class RunTotpTests : IDisposable
         Assert.DoesNotContain("otpauth://", text, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static string Refusal(string shown, string reason) =>
+    /// <summary>
+    /// The refusal as the machine's commands give it: its last sentence follows the OS the context reports (the real one
+    /// unless a test sets <see cref="FleetMachine.Os"/>), as the product's platform switch does. On Windows there is no sudo.
+    /// </summary>
+    private string Refusal(string shown, string reason) =>
         $"{shown}: secret 't' holds no TOTP seed tswap can use ({reason}), so nothing was substituted. " +
-        "The user can see the value with 'sudo tswap get t' and store a corrected one with 'sudo tswap add t'.";
+        ((_m.Os ?? TswapCore.Vault.YubiKeyAccessTexts.CurrentOs()) == System.Runtime.InteropServices.OSPlatform.Windows
+            ? "The user can see the value with 'tswap get t' and store a corrected one with 'tswap add t', from an elevated command prompt."
+            : "The user can see the value with 'sudo tswap get t' and store a corrected one with 'sudo tswap add t'.");
 
     // ── codes ──────────────────────────────────────────────────────────────────────
 
