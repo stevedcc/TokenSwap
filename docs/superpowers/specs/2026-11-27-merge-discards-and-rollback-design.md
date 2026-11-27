@@ -403,7 +403,7 @@ list from the T60 and T61 writers (`~/RiderProjects/tswap-wt/tools/design-record
 2. **DeepSeek I-2, the caps are lifetime properties:** the anti-goals' exception and the docs give the arithmetic.
 3. **DeepSeek I-3, `--clear` and a live value elsewhere:** the rule stays; the `--clear` output and the docs say that a
    machine still holding the value as its current value loses it too, with no warning there, and to check
-   `tswap conflicts --json` on each machine first. Decisions item 4: controller ruling, round 6; owner to confirm.
+   `tswap conflicts --json` on each machine first. Decisions item 4: confirmed by the owner on 2026-11-27.
 4. **DeepSeek M-1 to M-7** adopted: bare Base32 seeds (§1.10), the v0.3.0 earlier-life leak (§1.10), the export
    warning names the lineage (§1.10), `S` alone and format 2 (§1.4 rule 4), the `names` metadata cost (§1.4 Bounds),
    the deleted-copy-with-no-newer-main row with its repair (§2.4, Tests), the v0.3.2 one-off check kept in both briefs
@@ -1969,6 +1969,6 @@ Output (stdout), per target, exit 0:
 3. **Export leaves discarded values out and warns, naming the secrets (owner).** Exports stay importable by 0.3.2;
    the warning is the one in §1.10.
 4. **A person's `--clear`, `restore --discarded` or `delete` retires that value for good, also on a machine that still
-   holds it as its current value, which loses it with no warning there** (controller ruling, round 6; owner to
-   confirm). The `--clear` output and the docs say so and ask the person to check `tswap conflicts --json` on each
+   holds it as its current value, which loses it with no warning there** (controller ruling, round 6;
+   confirmed by the owner on 2026-11-27). The `--clear` output and the docs say so and ask the person to check `tswap conflicts --json` on each
    machine first (round 10 amendment 3).
