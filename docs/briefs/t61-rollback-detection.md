@@ -1,8 +1,8 @@
 # Brief T61: notice records and keyring slots rolled back to an older copy (#197)
 
 Issue: https://github.com/stevedcc/TokenSwap/issues/197. Milestone 0.3.3. Design: Part 2 of
-`docs/superpowers/specs/2026-11-27-merge-discards-and-rollback-design.md` at **39fd371** (branch `design/records-033`;
-still under review, GLM round 3 pending: if the design moves after 39fd371, stop and ask which wins). Its body is
+`docs/superpowers/specs/2026-11-27-merge-discards-and-rollback-design.md` at **2f1ed12** (branch `design/records-033`;
+still under review, GLM round 3 pending: if the design moves after 2f1ed12, stop and ask which wins). Its body is
 authoritative where this brief is silent; this brief wins where it rules on something the design leaves open (the
 rulings are marked **R-n**).
 
@@ -75,6 +75,14 @@ and list it.
 - T60's test helpers for a "0.3.2-shaped" write (the extension dropped, or kept byte for byte with a stale `asOf`).
 
 If T60 as merged names any of these differently, use T60's names; if one is missing, stop and report.
+
+## Amendments (design rounds 8-9)
+
+- The `restore-slots` vault-id step is dropped (design round 8 model 8): Task 3's steps are renumbered, its row now
+  expects the "no record of slots" text, and a malformed `VaultId` is treated as absent everywhere. Every text here
+  matches the design's Appendix A as of 2f1ed12: R4 loses the "import of an export" cause (design round 8, Claude 4),
+  gains the "retired value back" text (the floor's `Retired` list, design §2.3, §2.4), and `restore-slots` handles a
+  `keyring` the codec refuses (design round 9, M-9).
 
 ## Rulings (where the design is open or contradicts the code)
 
@@ -239,7 +247,7 @@ Texts (stderr, each at most once per command and file):
 
 `Config` (`TswapCore/Models.cs:60-176`) gains, last, `[property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
 string? VaultId = null`: base64 of the keyring's 16-byte vault id, a machine field (R-8 says where it is written). A
-`VaultId` that isn't base64 of 16 bytes is treated as absent everywhere except `restore-slots` (Task 3).
+`VaultId` that isn't base64 of 16 bytes is treated as absent everywhere.
 
 Tests (`SeenStateTests`, files in a temp config folder; `MachineConfigVaultIdTests` for `VaultId`):
 
@@ -333,11 +341,13 @@ as they are with 'sudo tswap vault accept-rollback NAME…' (--file <hash> for a
 Items in ordinal file order: `'<name>'` for R1, `<64 hex> (missing)` for R2; up to 5, then `and <k> more`.
 
 R4, one line per finding (design §2.4/§2.5 texts, plus R-13's sentence):
-- `⚠ <name>: a value a merge had set aside (machine <o>, <t>) is gone from its record; an older tswap's merge, a
-  rolled-back file, or an import of an export (which carries no set-aside values) dropped it. To stop this warning:
-  'sudo tswap vault accept-rollback <name>'.`
+- `⚠ <name>: a value a merge had set aside (machine <o>, <t>) is gone from its record; an older tswap's merge or a
+  rolled-back file dropped it. To stop this warning: 'sudo tswap vault accept-rollback <name>'.`
 - `⚠ <name>: the value machine <o> wrote at <t> (set aside by a merge) was burned when this machine last saw it; its
   burn is gone. It is still compromised. To stop this warning: 'sudo tswap vault accept-rollback <name>'.`
+- `⚠ <name>: the value machine <o> wrote at <t> was dropped on purpose (here or on another machine), but an older
+  tswap's merge, a rolled-back file, or 64 later drops on this secret brought it back. Drop it again with 'sudo tswap
+  conflicts --clear <name>'.`
 
 `run` with `{{x:discarded}}` on an entry the floor saw burned gives T60's burned-value warning (R-9).
 
@@ -491,24 +501,21 @@ through new store methods `public Keyring.Keyring? ReadFolderKeyring()` (null: n
 
 1. No `keyring` file: today's text (`:259-260`) plus, per file in `SeenKeyringFiles()`, `This machine kept a copy of
    every slot it saw: <path>. It is a complete keyring; to put it back, copy it to <vault folder>/keyring.` Exit 1,
-   nothing written.
-2. `config.json`'s `VaultId` not valid base64 of 16 bytes: `Config is corrupted: VaultId is not the base64 of a 16-byte
-   vault id. Restore config.json from backup.` Set and different from the keyring's: `The keyring in <vault folder>
-   belongs to vault <16 hex>, but this machine's config.json is for vault <16 hex>. Nothing was written.` Exit 1.
-   Absent: go on.
-3. No seen file for the keyring's vault id (missing or damaged): `This machine has no record of slots for vault <16
+   nothing written. A `keyring` the codec refuses takes the same shape, with `The keyring file <vault folder>/keyring
+   can't be read: <codec message>.` in place of today's text.
+2. No seen file for the keyring's vault id (missing or damaged): `This machine has no record of slots for vault <16
    hex>; nothing to put back.` Exit 1.
-4. Missing = seen slots whose id the folder lacks; a same-id slot with other bytes is skipped with the "differs"
+3. Missing = seen slots whose id the folder lacks; a same-id slot with other bytes is skipped with the "differs"
    warning, and when it is this machine's own slot the own-slot "differs" text follows. None missing: `Nothing to put
    back.` Exit 0.
-5. Each slot to add: `Putting back: <SlotCommand.DescribeSlot(slot)>` (`SlotCommand.cs:1970-1982`: id, kind,
+4. Each slot to add: `Putting back: <SlotCommand.DescribeSlot(slot)>` (`SlotCommand.cs:1970-1982`: id, kind,
    fingerprint). Input redirected and no `--yes`: `The keyring this machine saw has <n> slot(s) the vault folder's
    keyring lacks:` + one `  <DescribeSlot>` line each + `Putting a slot back gives whoever holds its device a way to
    open this vault again. Compare each fingerprint with the one shown when that slot was created, then run this again
    on a terminal to confirm each one, or pass --yes. Nothing was put back.` Exit 1 (as `merge`, `:95-101`). On a
    terminal, `YesNo.Ask(…, "Put it back? Compare the fingerprint first.", defaultAnswer: null)` per slot; a no:
    `Slot not confirmed. Nothing was put back.` Exit 1.
-6. `RestoreSlots`, then `✓ Put back <n> slot(s) in <vault folder>/keyring.` Exit 0.
+5. `RestoreSlots`, then `✓ Put back <n> slot(s) in <vault folder>/keyring.` Exit 0.
 
 `HelpUsage` (`:33`) and `Description` (`:34`) name both new subcommands.
 
@@ -527,7 +534,8 @@ does):
 | `restore-slots` with no file for the keyring's vault id | the "no record of slots" text; nothing written |
 | `restore-slots` where the folder keyring's same-id slot differs | that slot skipped with the warning; the others put back |
 | `restore-slots` with no `keyring` file | the refusal naming each `seen-keyring-*`; nothing written |
-| `restore-slots` against a folder whose keyring has another vault id than `config.json` | the vault-id refusal; nothing written |
+| `restore-slots` against a folder whose keyring belongs to another vault | `This machine has no record of slots for vault <16 hex>; nothing to put back.`; nothing written |
+| `restore-slots` on a `keyring` the codec refuses | step 1's shape with the decode message; nothing written |
 | `restore-slots`, input redirected, no `--yes` | refused; nothing written |
 | `restore-slots` without sudo (`Sudo = false`) | refused ("requires"); nothing written |
 | `seen-keyring` damaged | the warning; a fresh baseline; nothing refused |
