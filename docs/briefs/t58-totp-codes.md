@@ -4,7 +4,7 @@ Milestone 0.3.3. Base: `origin/main` at e86f028 (this brief's branch, `brief/t58
 CLAUDE.md first (AGENTS.md "Lock files", "Privilege Boundary", "Token Substitution", "Files with secrets"), then:
 `TswapCli/Commands/RunCommand.cs` (`Execute` from the token checks to the matcher, `EnvToken`, `BracedNameRegex`);
 `TswapCore/Validation.cs:1-60` and `:160-175`; `TswapCore/Apply.cs` (all); `TswapCore/Check.cs` (`MarkerRegex`,
-`CheckMarkers`); `TswapCore/ISecretLookup.cs`; `VaultView.ResolveToken` and `Find` (`TswapCore/VaultView.cs:66`,
+`CheckMarkers`); `TswapCore/ISecretLookup.cs`; `VaultView.Find` and `ResolveToken` (`TswapCore/VaultView.cs:66`,
 `:183`); `TswapCli/Commands/NamesCommand.cs`; `TswapCli/CliJson.cs`; `TswapCore/SecretInfo.cs`;
 `TswapCore/Keyring/RecordMetadata.cs`; the format 3 layout comment in `TswapCore/Keyring/SecretRecordCodec.cs:60-80`;
 `TswapCore/Fields/FieldSet.cs:5-18` (the extension registry); `TswapCore/Keyring/RecordWrites.cs`;
@@ -83,7 +83,7 @@ These bind and win over the text below where they differ.
     ignored, as aliases (authenticators accept them, and they name the same hash). R10's text becomes `algorithm must be
     SHA1, SHA256 or SHA512 (or SHA-1, SHA-256, SHA-512)`; its refusal row uses `algorithm=MD5`; the accepted-spellings
     row gains `algorithm=sha-256`. The other strict rules stay (B4 non-canonical trailing bits, R12 above 300, B5 under
-    80 bits, R11 `digits=7`) and docs/commands.md lists each with its reason. The refusal table has 19 rows: one per
+    80 bits, R11 `digits=7`) and docs/commands.md lists each with its reason. The refusal table has 20 rows (amendment 18; 23 with amendment 26): one per
     reason, two for R12 (`period=0`, `period=301`), three for B3 (amendment 6 and `GEZD=GNB…`).
 11. **The plaintext write path (M11).** `NextRecord` needs no change: `WriteAll` sends every format 3 write made from
     plaintext through `PrepareV3` (`RecordVaultStore.cs:2018`), which sets the extension. That is why
@@ -227,6 +227,57 @@ amendment 16 replaces amendment 11.
 25. **Task 2's table (M-8):** `sudo list` shows names and dates, no value (`ListCommand.cs:9`). Its cell reads
     "unchanged: no value"; `get`, `export` and `field adopt` keep "the stored value".
 
+## Amendments (round 3: MiMo; controller ruling on I-1)
+
+These bind and win over everything above where they differ. Round 1b and round 2 are unaffected, except that
+amendment 26 widens D1. The body lines that rounds 1-2 had left contradicting the amendments (the `CommandValues`
+suffix sentence, `ValueKinds.Of`'s signature, the row count, the header's `VaultView` citation) are now edited in
+place to match.
+
+26. **Recognition: `otpauth:` anywhere (I-1; controller ruling, toward fail-closed; widens D1).**
+    `OtpAuthUri.IsOtpAuth(value)` is true when the value contains `otpauth:` anywhere, case ignored. Before, it had to
+    start the trimmed text. The strict parse is unchanged and runs on the value trimmed of `char.IsWhiteSpace`, as
+    before. When that trimmed text doesn't start with `otpauth:` (case ignored), the parse fails with a new first
+    reason:
+    `R0 the value holds an otpauth URI among other text; store the URI alone`.
+    This covers a labelled paste, a BOM (U+FEFF is not white space) and a URI on a later line. `Classify` gives
+    `OtpAuthUnusable` for such a value. Every consumer refuses it:
+    - `{{x}}`, `{{x:previous}}`, `{{x:totp}}`, `--env`, markers in `run` and `apply`, and `totp`, with the refusal text
+      of Task 2 (its last sentence names `sudo <prefix> get x` and `sudo <prefix> add x`, per amendment 8);
+    - the broker (D8), with its text;
+    - `rotate` (amendment 1).
+
+    `names` shows `[OTPAUTH: unusable]`. A value that merely mentions `otpauth:` (a note, a URL in a JSON blob) is
+    thereby refused where it was passed on before. That is the intended price: such a value is used with sudo, or
+    stored differently.
+
+    New rows in Task 1's refusal table, which now has 23 rows:
+    - `﻿otpauth://totp/…` (the SHA1 URI behind a BOM);
+    - `certum-totp: otpauth://totp/…` (a labelled paste);
+    - `user: alice\notpauth://totp/…` (two lines, the URI on the second).
+
+    Each gives R0, and the message holds neither the URI nor the secret text.
+
+    The same three values get end-to-end rows in Task 2. `{{t}}`, `--env OTP={{t}}` and `# tswap: t` are refused,
+    exit 1, the child not started, and neither the URI nor the secret text appears on stdout or stderr. The broker
+    row is refused with its text. `names` shows `[OTPAUTH: unusable]`. Task 1's `Classify` row gains them
+    (`OtpAuthUnusable`), and a value with `otpauth` but no colon (`otpauth-backup-codes`) stays `None`.
+    `docs/commands.md` and the prompt say: store the URI alone.
+27. **Migration writes the kind (M-1).** `RecordVaultStore.WriteSnapshot` (`:1613-1640`, the `migrate --to-records`
+    path, `RecordMigration.cs:163`) builds each record as a new version from its plaintext. It sets the entry from
+    `Classify` of that value, as amendment 16 does for a version being sealed. New Task 4 row: a classic vault holding
+    the SHA1 URI, migrated, shows `[TOTP]` without a reindex.
+28. **AGENTS.md's agent rules (M-2).** Task 5 also adds `totp` to rule 3's command list (`AGENTS.md:349`, "Use `create`,
+    `ingest`, `names`, `run`, …"), next to the No-sudo list (`:115`) and the "Token Substitution" sentence.
+29. **B3 is tswap's own (M-3).** Amendment 24's list gains B3. An exact padding run is tswap's rule; the Key Uri Format
+    says padding "should be omitted", and Otp.NET and Google Authenticator accept any run. Its reason: one key, one
+    accepted spelling. The controller's release note mentions it.
+30. **ILCompiler line numbers (M-4; refuted).** Amendment 13's `:31`, `:308`, `:311` are the lines of
+    `Microsoft.NETCore.Native.targets` in the package the pinned SDK restores
+    (`~/.nuget/packages/microsoft.dotnet.ilcompiler/11.0.0/build/`, checked). MiMo's `:32/:317/:320` are dotnet/runtime's
+    main branch. The comment in `TswapCli.csproj` names the properties, not line numbers.
+31. **Body contradictions and header (M-5, M-6):** fixed in place (above).
+
 ## What is wrong (evidence)
 
 The owner stored the Certum code-signing token's whole `otpauth://totp/...` URI as `certum-totp` (#368). Reproduced
@@ -351,8 +402,8 @@ the two marker texts (`:73`, `:80`); `Check.MarkerRegex` (`:8`) and `CheckMarker
 - `the value must be exactly one {{name}}, {{name:previous}} or {{name:totp}} token`
 
 **`CommandValues`** (`TswapCore/Totp/CommandValues.cs`): `sealed class CommandValues(ISecretLookup inner,
-DateTimeOffset now) : ISecretLookup`, the one place a stored value becomes what a command is given. Every method
-strips a `:totp` suffix before asking `inner`. `ResolveToken(token, where)`: the stored value of `name` or
+DateTimeOffset now) : ISecretLookup`, the one place a stored value becomes what a command is given. The token-taking
+members strip a `:totp` suffix before asking `inner` (amendment 21). `ResolveToken(token, where)`: the stored value of `name` or
 `name:previous` from `inner`; then `:totp` → `FromUri` when `IsOtpAuth`, else `FromBase32`; no suffix (or
 `:previous`) and `IsOtpAuth` → `FromUri`; otherwise the stored value as today. A code is computed at `now` (one clock
 reading per command, so `{{x}}`, `{{x:totp}}` and a marker of `x` in one run get the same code) and cached per token. A
@@ -431,7 +482,7 @@ Because a build before this one keeps the extension when it writes a new value, 
 - **`ValueKinds` extension, type `0x0101`** (add it to the registry comment in `FieldSet.cs`): format byte `1`, count
   (1 byte, 0-2), per entry the version stamp (28 bytes, the codec's stamp encoding) and the kind (1 byte: 1 `Totp`,
   2 `OtpAuthUnusable`). Only otpauth versions get an entry; no entries, no extension.
-- **Read** (`ValueKinds.Of(RecordMetadata, bool previous)`): the entry whose stamp equals that retained version's;
+- **Read** (`ValueKinds.Of(RecordMetadata)`, amendment 23): the entry whose stamp equals the current version's;
   none, an unknown kind byte or an extension that doesn't decode is `None` (display only: never an unreadable record).
   `SecretInfo` gains `ValueKind Kind` (the current version's), set in `SecretInfo.From`.
 - **Write.** Where a new version is sealed, from the value in hand (no new decryption, so the decrypt counts of the
