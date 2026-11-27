@@ -103,6 +103,50 @@ public partial class TotpParseTests
     [Fact]
     public void Refusals_CoverTwentyFiveRows() => Assert.Equal(25, Refusals().Count);
 
+    // Code review round 1 (Claude I-1, controller ruling): a value holding more than the one URI is refused.
+    private const string R0Text = "the value holds an otpauth URI among other text; store the URI alone";
+    private const string UriB = "otpauth://totp/New:bob?secret=JBSWY3DPEHPK3PXP&issuer=New";
+    private const string SecretLast = "otpauth://totp/Example:alice?issuer=Example&secret=" + Sha1Seed;
+
+    public static TheoryData<string, string, string> MoreThanOneUri() => new()
+    {
+        { "a newline, then URI B", Sha1 + "&issuer=Old\n" + UriB, R0Text },
+        { "a CR LF, then URI B", Sha1 + "\r\n" + UriB, R0Text },
+        { "a newline, then notes", Sha1 + "&issuer=Old\n\nbackup codes: 1234 5678", R0Text },
+        { "a tab inside", Sha1 + "&issuer=A\tB", R0Text },
+        { "two URIs joined by a space", Sha1 + " " + UriB, R0Text },
+        { "two URIs joined directly", Sha1 + UriB, R0Text },
+        { "a second OTPAUTH: in upper case", Sha1 + "&issuer=OTPAUTH:x", R0Text },
+        { "notes on the same line after the secret", SecretLast + "  notes", "the secret parameter contains a space (a URI's secret is Base32 without spaces)" },
+    };
+
+    [Theory]
+    [MemberData(nameof(MoreThanOneUri))]
+    public void MoreThanTheOneUri_IsRefused_NeverTheFirstUrisCode(string row, string value, string reason)
+    {
+        var ex = Assert.Throws<TotpSeedException>(() => TotpSeed.FromUri(value));
+        Assert.True(reason == ex.Message, $"{row}: expected '{reason}', got '{ex.Message}'");
+        Assert.Equal(ValueKind.OtpAuthUnusable, TotpCodes.Classify(value));
+    }
+
+    [Theory]
+    [InlineData("\n")]
+    [InlineData("\r\n")]
+    [InlineData(" \t\n")]
+    public void TrailingWhitespace_IsTrimmed_AndGivesTheCode(string tail) =>
+        Assert.Equal("050471", CodeOf(Sha1 + tail));
+
+    // Code review round 1 (Claude M-1): the algorithm's six spellings are matched in ASCII only.
+    [Theory]
+    [InlineData("%C5%BFHA256")] // U+017F LATIN SMALL LETTER LONG S, which upper-cases to 'S'
+    [InlineData("%E2%84%AAHA1")] // not an algorithm either way
+    [InlineData("SHA%E2%80%91256")] // a non-breaking hyphen
+    public void Algorithm_OutsideTheSixAsciiSpellings_IsRefused(string algorithm)
+    {
+        var ex = Assert.Throws<TotpSeedException>(() => TotpSeed.FromUri(Sha1 + "&algorithm=" + algorithm));
+        Assert.Equal("algorithm must be SHA1, SHA256 or SHA512 (or SHA-1, SHA-256, SHA-512)", ex.Message);
+    }
+
     [Theory]
     [InlineData("gezd gnbv gy3t qojq gezd gnbv gy3t qojq", "050471")]
     [InlineData("GeZd GnBv Gy3T QoJq GeZd GnBv Gy3T QoJq", "050471")]

@@ -89,6 +89,11 @@ public sealed class TotpSeed : IDisposable
     {
         var text = value.Trim();
         if (!text.StartsWith("otpauth:", StringComparison.OrdinalIgnoreCase)) throw new TotpSeedException(R0);
+        // Code review round 1 (controller ruling, fail closed): the value is the one URI and nothing else. A control
+        // character (a line break, a tab) or a second otpauth: means more text, such as a replacement URI or notes, so
+        // the first URI's code is never given from it.
+        if (text.Any(char.IsControl) || text.IndexOf("otpauth:", 1, StringComparison.OrdinalIgnoreCase) >= 0)
+            throw new TotpSeedException(R0);
         if (!text.StartsWith("otpauth://", StringComparison.OrdinalIgnoreCase)) throw new TotpSeedException(R1);
 
         var rest = text["otpauth://".Length..];
@@ -139,13 +144,16 @@ public sealed class TotpSeed : IDisposable
         return new TotpSeed(Decode(canonical), TotpAlgorithm.Sha1, 6, 30, canonical, null, null);
     }
 
-    private static TotpAlgorithm ParseAlgorithm(string text) => text.ToUpperInvariant() switch
+    // Code review round 1: the six spellings in ASCII only, case ignored ordinally (no culture or invariant upper-casing,
+    // which would map U+017F to 'S').
+    private static TotpAlgorithm ParseAlgorithm(string text)
     {
-        "SHA1" or "SHA-1" => TotpAlgorithm.Sha1,
-        "SHA256" or "SHA-256" => TotpAlgorithm.Sha256,
-        "SHA512" or "SHA-512" => TotpAlgorithm.Sha512,
-        _ => throw new TotpSeedException(R10),
-    };
+        bool Is(string spelling) => System.Text.Ascii.EqualsIgnoreCase(text, spelling);
+        return Is("SHA1") || Is("SHA-1") ? TotpAlgorithm.Sha1
+            : Is("SHA256") || Is("SHA-256") ? TotpAlgorithm.Sha256
+            : Is("SHA512") || Is("SHA-512") ? TotpAlgorithm.Sha512
+            : throw new TotpSeedException(R10);
+    }
 
     private static int ParseDigits(string text) => text switch
     {

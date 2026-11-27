@@ -35,7 +35,7 @@ public sealed class TotpCommand : ICliCommand
             var values = new CommandValues(view, ctx.Time.GetUtcNow(), ctx.Prefix, ctx.Os == OSPlatform.Windows);
             var code = values.Code(name);
             if (values.IsBurnedToken(name))
-                ctx.Console.Error.WriteLine($"Warning: '{name}' is a burned value — using it anyway; rotate it after use.");
+                ctx.Console.Error.WriteLine($"Warning: '{name}' is a burned value — using it anyway; {values.BurnedSeedAdvice(name)}.");
             ctx.Console.Out.WriteLine(code.Code);
             ctx.Console.Error.WriteLine(ValidityLine(code));
             return 0;

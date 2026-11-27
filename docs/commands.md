@@ -629,7 +629,9 @@ Since 0.3.3 tswap hands out a TOTP secret's current code, never its seed, wherev
 **Recognition.** A value that contains `otpauth:` anywhere (case ignored) is an otpauth record. Recognition is
 generous and the parse strict: an otpauth record that isn't a clean, usable `otpauth://totp/` URI is refused wherever
 a code or a value would be given without sudo, and is never passed on as itself. That includes a value that only
-mentions a URI among other text (a labelled paste, a note): **store the URI alone**. A bare Base32 seed is never
+mentions a URI among other text (a labelled paste, a note), and a URI followed by more: after trimming white space at
+both ends, a value with a control character anywhere (a line break, a tab) or a second `otpauth:` is refused, so a
+replacement URI or notes pasted after the first URI never give the first URI's code. **Store the URI alone.** A bare Base32 seed is never
 recognised, since any random value may be Base32.
 
 **Tokens and markers.**
@@ -682,7 +684,10 @@ A refusal names the reason and the secret, never the value, and says how the use
 ` [OTPAUTH: unusable]`, from metadata written with each value (no value decrypted); `names --json` adds
 `"kind": "totp"` or `"kind": "otpauth-unusable"`. A record written before 0.3.3 is marked after one
 `sudo tswap vault reindex`, or its next write; `run`, `totp` and `rotate` are right at once, because they decide from
-the value. `burned` adds a line for an outstanding TOTP seed: it can't be rotated.
+the value. `burned` adds a line for an outstanding TOTP seed: it can't be rotated. Using a burned TOTP secret in `run`, `apply` or
+`totp` warns `… is a burned value — using it anyway; the seed was seen; ask the service for a new one and pipe its URI
+to tswap ingest --rotate <name>.` instead of the usual "rotate it after use". A refused `{{name:previous}}` says only
+that the previous value isn't a usable otpauth URI and can give no code (`get` and `add` act on the current value).
 
 **Rotation.** `rotate` (a random value) refuses a TOTP seed, decided from the decrypted value, marked or not: a seed
 comes from the issuer. Store the issuer's new seed with `<source> | tswap ingest --rotate <name>` (no sudo for a

@@ -38,15 +38,27 @@ public sealed class CommandValues(ISecretLookup inner, DateTimeOffset now, strin
     public string ResolveToken(string token, string? where = null)
     {
         var shown = where is null ? $"'{{{{{token}}}}}'" : $"'# tswap: {token}'{where}";
-        return Resolve(token, shown, where) is { } code ? code.Code : inner.ResolveToken(token, where);
+        // One resolve of the inner lookup per call, also when the value is passed on as stored (code review round 1).
+        var (code, stored) = Resolve(token, shown, where);
+        return code?.Code ?? stored;
     }
+
+    /// <summary>True when <paramref name="token"/> (as <see cref="ResolveToken"/> received it) gave a code.</summary>
+    public bool GaveCode(string token) => _codes.ContainsKey(token);
+
+    /// <summary>
+    /// The end of a burned warning for a token that gave a code (code review round 1): a seed can't be rotated, only
+    /// replaced with the service's new one. <paramref name="token"/> may carry a suffix; the hint names the secret.
+    /// </summary>
+    public string BurnedSeedAdvice(string token) =>
+        $"the seed was seen; ask the service for a new one and pipe its URI to {prefix} ingest --rotate {NameOf(StripTotp(token, out _))}";
 
     /// <summary>
     /// <c>totp</c>'s read: the code of <paramref name="name"/> as <c>name:totp</c> resolves it (a bare Base32 seed
     /// too), with a refusal that names the secret as <c>'name'</c>.
     /// </summary>
     public TotpCode Code(string name) =>
-        Resolve(name + SecretsDb.TotpSuffix, $"'{name}'", null)
+        Resolve(name + SecretsDb.TotpSuffix, $"'{name}'", null).Code
         ?? throw new InvalidOperationException("A ':totp' token always gives a code or a refusal.");
 
     /// <summary>
@@ -58,20 +70,18 @@ public sealed class CommandValues(ISecretLookup inner, DateTimeOffset now, strin
     public IReadOnlyList<string> StoredForms(string token) =>
         _storedForms.TryGetValue(token, out var forms) ? forms : [];
 
-    /// <summary>The code for <paramref name="token"/>, or null when its value is passed on as stored.</summary>
-    private TotpCode? Resolve(string token, string shown, string? where)
+    /// <summary>The code for <paramref name="token"/> (null when its value is passed on as stored), and the stored value.</summary>
+    private (TotpCode? Code, string Stored) Resolve(string token, string shown, string? where)
     {
-        if (_codes.TryGetValue(token, out var cached))
-            return cached;
         var lookup = StripTotp(token, out var totp);
+        if (_codes.TryGetValue(token, out var cached))
+            return (cached, _storedForms[token][0]);
         var stored = inner.ResolveToken(lookup, where);
         var otpauth = OtpAuthUri.IsOtpAuth(stored);
         if (!totp && !otpauth)
-            return null;
+            return (null, stored);
 
-        var name = lookup.EndsWith(SecretsDb.PreviousSuffix, StringComparison.Ordinal)
-            ? lookup[..^SecretsDb.PreviousSuffix.Length]
-            : lookup;
+        var name = NameOf(lookup);
         TotpSeed seed;
         try
         {
@@ -79,7 +89,9 @@ public sealed class CommandValues(ISecretLookup inner, DateTimeOffset now, strin
         }
         catch (TotpSeedException ex)
         {
-            throw new TswapException(RefusalText(shown, name, ex.Reason, prefix, windows));
+            throw new TswapException(lookup.Length != name.Length
+                ? PreviousRefusalText(shown, name, ex.Reason)
+                : RefusalText(shown, name, ex.Reason, prefix, windows));
         }
         using (seed)
         {
@@ -93,9 +105,19 @@ public sealed class CommandValues(ISecretLookup inner, DateTimeOffset now, strin
             forms.Add(seed.PaddedBase32.ToLowerInvariant());
             _codes[token] = code;
             _storedForms[token] = forms.Distinct(StringComparer.Ordinal).ToList();
-            return code;
+            return (code, stored);
         }
     }
+
+    private static string NameOf(string lookup) =>
+        lookup.EndsWith(SecretsDb.PreviousSuffix, StringComparison.Ordinal) ? lookup[..^SecretsDb.PreviousSuffix.Length] : lookup;
+
+    /// <summary>
+    /// Code review round 1 (Claude M-2): the refusal for an unusable previous value. It names no <c>get</c> or <c>add</c>,
+    /// which act on the current value (possibly the working seed).
+    /// </summary>
+    internal static string PreviousRefusalText(string shown, string name, string reason) =>
+        $"{shown}: the previous value of secret '{name}' isn't a usable otpauth URI ({reason}) and can give no code, so nothing was substituted.";
 
     /// <summary>The refusal for a value that can't give a code; <paramref name="reason"/> holds nothing of the value.</summary>
     internal static string RefusalText(string shown, string name, string reason, string prefix, bool windows) =>
