@@ -52,15 +52,19 @@ bytes; longer values are refused, pass them with `--env`. Quotes, braces, globs,
 change it ([#402](https://github.com/stevedcc/TokenSwap/issues/402)). Tested by
 `EndToEndTests.Run_GitBashScript_EvilValues_ArriveExactly_Windows`. A bare `bash` can still start WSL's `bash.exe` in
 System32, which `run` leaves alone, so name Git Bash by its path: `tswap run "C:\Program Files\Git\bin\bash.exe"
-./deploy.sh {{db-pw}}`. `run` refuses, before the script starts, when `MSYS` changes the glob option (`noglob`,
-`-glob`, or an empty `glob:` or `glob=`) and an argument holds a backslash or double quote, when the locale (`LC_ALL`,
-`LC_CTYPE` or `LANG`) isn't UTF-8 and an argument holds a non-ASCII character, and for a character from U+F000 to
-U+F0FF (which older MSYS2 runtimes turn into ASCII). The environment stays the way that works in every case, also through a program that starts
-Git Bash in turn: `tswap run --env PW={{db-pw}} -- "C:\Program Files\Git\bin\bash.exe" ./deploy.sh`, read as
-`"$PW"`, tested by `EndToEndTests.Run_GitBashScript_EnvValue_EvilValues_ArriveExactly_Windows` with every test value that
-fits on a Windows command line. MSYS2's path conversion doesn't apply when tswap starts Git Bash; it applies when the
-script passes the value on to a Windows `.exe`, and that is where `MSYS_NO_PATHCONV=1` (or `MSYS2_ARG_CONV_EXCL='*'`)
-belongs.
+./deploy.sh {{db-pw}}`. `run` refuses, before the script starts, when `MSYS` changes the glob option (such as `noglob`,
+`-glob`, or an empty `glob:` or `glob=`, also cut at a quote) or holds a double quote it never closes, and an argument
+holds a backslash or double quote, when the locale (`LC_ALL`, `LC_CTYPE` or `LANG`) isn't UTF-8 and an argument holds a
+non-ASCII character, and for a character from U+F000 to U+F0FF (which older MSYS2 runtimes turn into ASCII). The
+environment stays the way that works in every case, also through a program that starts Git Bash in turn: `tswap run
+--env PW={{db-pw}} -- "C:\Program Files\Git\bin\bash.exe" ./deploy.sh`, read as `"$PW"`, tested by
+`EndToEndTests.Run_GitBashScript_EnvValue_EvilValues_ArriveExactly_Windows` with every test value that fits on a Windows
+command line. MSYS2's path conversion doesn't apply when tswap starts Git Bash; it applies when the script passes the
+value on to a Windows `.exe`, and that is where `MSYS_NO_PATHCONV=1` (or `MSYS2_ARG_CONV_EXCL='*'`) belongs. A limit,
+until [#426](https://github.com/stevedcc/TokenSwap/issues/426) is settled: `run` also takes a native Windows program
+that ships beside `msys-2.0.dll` (perhaps Git's `usr\bin\winpty-agent.exe`; not checked) for an MSYS2 program and quotes
+its arguments by MSYS2's rules, so a backslash in a value can arrive doubled there; pass the value with `--env` to such
+a program.
 
 ## zsh
 

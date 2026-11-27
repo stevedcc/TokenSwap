@@ -117,6 +117,7 @@ public static class MsysTarget
     /// <see cref="QuoteArguments"/> can't pass exactly, or null. <paramref name="childVariable"/> reads the child's
     /// environment (names ignoring case). In order, the first that finds anything: R1, <c>MSYS</c> changes the glob
     /// option (MSYS2's spellings, amendment 14: <c>noglob</c>, <c>-glob</c>, <c>glob:</c>, <c>glob=</c>, ...) and an
+    /// argument holds <c>\</c> or <c>"</c>, and then (brief T62) <c>MSYS</c> holds a double quote it never closes and an
     /// argument holds <c>\</c> or <c>"</c>; R2, the locale (the first non-empty of <c>LC_ALL</c>, <c>LC_CTYPE</c>,
     /// <c>LANG</c>) is set and is not <c>C</c>, <c>POSIX</c> or a UTF-8 charset, and an argument holds a character above
     /// U+007F; R3, an argument holds a character from U+F000 to U+F0FF (older runtimes turn them into ASCII); R4, an
@@ -141,10 +142,14 @@ public static class MsysTarget
         bool Any(Func<char, bool> found) => arguments.Any(a => a.Any(found));
 
         static bool GlobCharacter(char c) => c is '\\' or '"';
-        if (ChangesGlobOption(childVariable("MSYS")) && Any(GlobCharacter))
+        if (Any(GlobCharacter) && ChangesGlobOption(childVariable("MSYS")))
             return "Refused: MSYS changes the glob option and an argument holds a backslash or double quote; with that option " +
                    "Git Bash (MSYS2) reads backslashes and double quotes in its arguments differently, so tswap can't pass " +
                    $"{What(GlobCharacter)} exactly. Remove the glob option from MSYS for this command, or pass {EnvironmentWay}";
+        if (Any(GlobCharacter) && HasUnclosedQuote(childVariable("MSYS")))
+            return "Refused: MSYS holds a double quote that is never closed, after which Git Bash (MSYS2) reads past the end of " +
+                   "MSYS and may turn the glob option off, and an argument holds a backslash or double quote, so tswap can't pass " +
+                   $"{What(GlobCharacter)} exactly. Close the quote in MSYS for this command, or pass {EnvironmentWay}";
 
         static bool NonAscii(char c) => c > '\u007F';
         if (!IsUtf8Locale(childVariable) && Any(NonAscii))
@@ -157,8 +162,12 @@ public static class MsysTarget
             return $"Refused: {What(PrivateUse)} holds a character from U+F000 to U+F0FF, which older MSYS2 runtimes turn into " +
                    "ASCII such as a quote or a space before reading the command line. Pass " + EnvironmentWay;
 
-        // Brief T55 amendment 13 (spike round 3): MSYS2 cuts a quoted word after 8,186 characters (UTF-8 locales) or
-        // 8,191 bytes (LANG=C) without an error; 8,000 UTF-8 bytes is under both in every locale R2 lets through.
+        // Brief T55 amendment 13 (spike round 3), brief T62: MSYS2 cuts a quoted word after 8,186 characters (UTF-8
+        // locales) or 8,191 bytes (LANG=C) without an error. glob.cc: MAXPATHLEN is 8192 and the copy loops
+        // `while (bufend - bufnext >= MB_CUR_MAX)`, so it keeps 8192 - MB_CUR_MAX characters (8,186 with MB_CUR_MAX 6, 8,191
+        // in C); dcrt0.cc runs globify only while globbing is on (and only for a word with a glob or quoting character).
+        // 8,000 UTF-8 bytes is under both in every locale R2 lets through. R4 refuses whatever MSYS says, which
+        // over-refuses when globbing is off (fail closed).
         static bool TooLong(string argument) => Encoding.UTF8.GetByteCount(argument) > MaxArgumentBytes;
         if (arguments.Any(TooLong))
             return $"Refused: {WhatOf(t => t.ArgIndex - 1 < arguments.Count && TooLong(arguments[t.ArgIndex - 1]))} is longer " +
@@ -168,50 +177,112 @@ public static class MsysTarget
         return null;
     }
 
-    // Brief T55 amendments 14 and 16 (spike round 3, msys runtime 3.6.10; MiMo round 2 I1): whether MSYS turns globbing
-    // off, fail closed. MSYS is split at spaces and tabs, and each word at every '"' into pieces: msys2-runtime's strbrk
-    // also ends a token at the closing quote of a quoted run, even mid-word, so every contiguous run of pieces, joined
-    // without the quotes (p1, p1p2, ..., p2, p2p3, ..., the whole word), is a token it could produce, and each is judged
-    // without modelling where strbrk cuts. A run loses any run of leading "no" and "-" prefixes (ignoring case); what is
-    // left must be "glob", optionally followed by ':' or '=' and a value. The run changes the option when a prefix was
-    // stripped (noglob, -glob) or the separator is there with an empty value (glob:, glob=, the run glob: of
-    // glob:"":x). A non-empty value with no prefix (glob:ignorecase, "glob:ignorecase") leaves globbing on. Accepted
-    // over-refusals: nonoglob, --glob, no-glob, "no"glob and glob:"x" leave globbing on but count as changed.
-    private static bool ChangesGlobOption(string? msys) =>
-        msys is not null && msys.Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries).Any(WordChangesGlobOption);
+    // Brief T55 amendments 14 and 16 (spike round 3, msys runtime 3.6.10; MiMo round 2 I1), brief T62 (#427): whether
+    // MSYS turns globbing off, fail closed. What msys2-runtime does (branch msys2-3.6.12, 50c44b7c03c8,
+    // winsup/cygwin/environ.cc):
+    // - strbrk (:141-177) skips spaces and tabs. A token whose first '"' comes before its first space or tab is quoted:
+    //   the opening '"' is removed, and the token ends at the next '"' not preceded by '\'; a '\"' inside is unescaped,
+    //   so a quoted token can span spaces. The text after the closing '"' starts the next token.
+    // - parse_options (:218-224) strips at most one "no" or one '-' prefix, then splits at the first '=', or else the
+    //   first ':'.
+    // The model here is wider than that rule: MSYS is split at spaces and tabs, and each word at every '"' into pieces;
+    // every contiguous run of pieces, joined without the quotes, is judged. A run loses any run of leading "no" and '-'
+    // prefixes (ignoring case); what is left must be "glob", optionally followed by ':' or '=' and a value. The run
+    // changes the option when a prefix was stripped (noglob, -glob) or the separator is there with an empty value
+    // (glob:, glob=, the run glob: of glob:"":x). A non-empty value with no prefix (glob:ignorecase, "glob:ignorecase")
+    // leaves globbing on. Every token strbrk produces that changes the option begins with such a run that changes it
+    // too (the run up to the separator, in one space-separated word, starting at the word's start or after a '"' and
+    // ending at a '"' or the word's end, or reaching the separator), so the model never misses one; the converse does
+    // not hold. Accepted over-refusals: nonoglob, --glob, no-glob, "no"glob and glob:"x" leave globbing on but count as
+    // changed.
+    // The scan is linear (brief T62): s is the word without its quotes, and boundary[i] marks 0, s.Length and every
+    // position where a '"' stood. P[x] (prefix[x]) is the length of the greedy run of "no" and '-' units at x. A run
+    // s[a..b] (a and b boundaries) changes the option exactly when, with g = a + P[a] and s[g..g+4] "glob" and e = g +
+    // 4, either P[a] > 0 and (boundary[e] or s[e] is ':' or '='), or P[a] == 0, s[e] is ':' or '=' and boundary[e + 1]:
+    // greedy stripping is deterministic, "glob" starts with neither 'n' nor '-', and a prefixed run with a separator
+    // can always be extended to the word's end, so only a run's start matters. step (tests only) is called once per
+    // position visited.
+    private static bool ChangesGlobOption(string? msys) => ChangesGlobOption(msys, null);
 
-    private static bool WordChangesGlobOption(string word)
+    internal static bool ChangesGlobOption(string? msys, Action? step) =>
+        msys is not null && msys.Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries).Any(w => WordChangesGlobOption(w, step));
+
+    private static bool WordChangesGlobOption(string word, Action? step)
     {
-        var pieces = word.Split('"');
-        for (var first = 0; first < pieces.Length; first++)
-        for (var last = first; last < pieces.Length; last++)
-            if (RunChangesGlobOption(string.Concat(pieces[first..(last + 1)])))
+        var text = new StringBuilder(word.Length);
+        var boundary = new bool[word.Length + 1];
+        boundary[0] = true;
+        foreach (var c in word)
+        {
+            if (c == '"')
+                boundary[text.Length] = true;
+            else
+                text.Append(c);
+        }
+        var s = text.ToString();
+        boundary[s.Length] = true;
+
+        var prefix = new int[s.Length + 1];
+        for (var x = s.Length; x >= 0; x--)
+        {
+            step?.Invoke();
+            prefix[x] = x == s.Length ? 0
+                : s[x] == '-' ? 1 + prefix[x + 1]
+                : x + 2 <= s.Length && s.AsSpan(x, 2).Equals("no", StringComparison.OrdinalIgnoreCase) ? 2 + prefix[x + 2]
+                : 0;
+        }
+
+        bool Separator(int i) => i < s.Length && s[i] is ':' or '=';
+        for (var a = 0; a <= s.Length; a++)
+        {
+            if (!boundary[a])
+                continue;
+            step?.Invoke();
+            var g = a + prefix[a];
+            if (g + 4 > s.Length || !s.AsSpan(g, 4).Equals("glob", StringComparison.OrdinalIgnoreCase))
+                continue;
+            var e = g + 4;
+            if (prefix[a] > 0 ? boundary[e] || Separator(e) : Separator(e) && boundary[e + 1])
                 return true;
+        }
         return false;
     }
 
-    private static bool RunChangesGlobOption(string run)
+    /// <summary>
+    /// Brief T62 (#427): whether <paramref name="msys"/> holds a double quote that msys2-runtime's <c>strbrk</c> never
+    /// finds closed (a port of its quote handling, linear). Spaces and tabs are skipped; a token whose first <c>"</c>
+    /// comes before its first space or tab is quoted, and its quote is closed by the next <c>"</c> not preceded by
+    /// <c>\</c>. Unclosed, <c>strbrk</c> reads past the end of the copy (<c>buf = sep + 1</c> with <c>sep</c> the NUL), so
+    /// what it reads next is undefined. No parity count: <c>"a\"</c> has two quotes and is unclosed, <c>"a\"b"</c> three
+    /// and is closed.
+    /// </summary>
+    internal static bool HasUnclosedQuote(string? msys)
     {
-        var rest = run.AsSpan();
-        var prefixed = false;
+        if (msys is null)
+            return false;
+        var i = 0;
         while (true)
         {
-            if (rest.StartsWith("no", StringComparison.OrdinalIgnoreCase))
-                rest = rest[2..];
-            else if (rest.StartsWith('-'))
-                rest = rest[1..];
-            else
-                break;
-            prefixed = true;
+            while (i < msys.Length && msys[i] is ' ' or '\t')
+                i++;
+            if (i == msys.Length)
+                return false;
+            var next = msys.AsSpan(i).IndexOfAny('"', ' ', '\t');
+            if (next < 0)
+                return false;
+            var q = i + next;
+            if (msys[q] != '"')
+            {
+                i = q + 1;
+                continue;
+            }
+            var close = msys.IndexOf('"', q + 1);
+            while (close >= 0 && msys[close - 1] == '\\')
+                close = msys.IndexOf('"', close + 1);
+            if (close < 0)
+                return true;
+            i = close + 1;
         }
-        if (!rest.StartsWith("glob", StringComparison.OrdinalIgnoreCase))
-            return false;
-        rest = rest[4..];
-        if (rest.IsEmpty)
-            return prefixed;
-        if (rest[0] is not (':' or '='))
-            return false;
-        return prefixed || rest.Length == 1;
     }
 
     // The runtime's locale: the first non-empty of LC_ALL, LC_CTYPE, LANG; unset, C and POSIX convert as UTF-8. A

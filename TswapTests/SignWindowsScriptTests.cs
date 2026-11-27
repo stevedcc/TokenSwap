@@ -10,8 +10,11 @@ namespace TswapTests;
 /// <c>contrib/packaging/sign-windows.sh</c> (issue #368, brief T44): release.yml's sign-windows job posts a signing
 /// request on the private issue, waits for the owner's 6-digit code, deletes it, masks it and signs with ssign. Run
 /// here against a fake <c>gh</c> (serves <c>comments.json</c>, answers a POST with the next id) and a fake ssign (prints
-/// its token, records its argv and environment); both append to one ordered log, <c>calls.log</c>. Never the network,
-/// Certum or GitHub; every value below is an inert marker. bash and jq, so these skip on Windows and without jq.
+/// its token, records its argv and environment) and a fake <c>sleep</c>, always installed, that logs its argument and
+/// returns at once; all three append to one ordered log, <c>calls.log</c>. Two switch files change the fake <c>gh</c>:
+/// <c>get-fails</c> holds N, and the next N GETs fail after printing a truncated page; with <c>post-fails</c> present,
+/// every POST fails with <c>gh: HTTP 502</c>. Never the network, Certum or GitHub; every value below is an inert marker.
+/// bash and jq, so these skip on Windows and without jq.
 /// </summary>
 public sealed class SignWindowsScriptTests : IDisposable
 {
@@ -433,6 +436,8 @@ public sealed class SignWindowsScriptTests : IDisposable
         Assert.Empty(Sleeps());
         Assert.Empty(SsignRuns());
         Assert.Empty(Deleted());
+        Assert.Empty(Posted());
+        AssertNoSecretsLeaked(run);
     }
 
     [JqUnixTheory]

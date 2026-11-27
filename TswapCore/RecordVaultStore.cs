@@ -879,7 +879,7 @@ public sealed class RecordVaultStore : IFileVaultStore
                         if (RecordWrites.Next(current, held, recordId, write.Name, () => SameValue(write.Name, entry, v.Value, keys), v.Always,
                                 v.Restored, v.Created, v.ImportedBurnAt, v.ImportedBurnReason, origin, NextStamp,
                                 version => (SecretRecordCodec.SealValue(recordId, version, v.Value, key), Fingerprinter.Compute(v.Value, keys)),
-                                v.Fields, v.Who, v.CheckFieldCaps)
+                                v.Fields, v.Who, v.CheckFieldCaps, TswapCore.Totp.ValueKinds.Classify(v.Value))
                             is { } next)
                             (metadata, sections) = next;
                         break;
@@ -1441,6 +1441,9 @@ public sealed class RecordVaultStore : IFileVaultStore
             return false;
         if (state.Type == RecordType.Tombstone)
             return true;
+        // Brief T58: a ValueKinds extension that disagrees with a retained value's kind is rewritten (marked).
+        if (!ReferenceEquals(ValueKindsFromValues(state), state.Extensions))
+            return false;
         using var keys = FingerprintKeys.Derive(vaultKey);
         return CurrentSet(state.Fingerprints, state.Value) && (state.Previous is null || CurrentSet(state.Previous.Fingerprints, state.Previous.Value));
 
@@ -1562,7 +1565,9 @@ public sealed class RecordVaultStore : IFileVaultStore
             {
                 // Ruling 6: unknown extensions survive every rewrite. Issue #311: a new life gets a fresh
                 // Fields anchor (Since = this version), then the edits, stamped after the version.
-                Extensions = FieldEdits.ForWrite(state?.Extensions ?? [], live ? null : version, edits, who, nextStamp, name, checkFieldCaps),
+                Extensions = TswapCore.Totp.ValueKinds.ForNewVersion(
+                    FieldEdits.ForWrite(state?.Extensions ?? [], live ? null : version, edits, who, nextStamp, name, checkFieldCaps),
+                    version, TswapCore.Totp.ValueKinds.Classify(value), live ? state!.Version : null),
                 Sealed = sealedPrevious,
             };
         }
@@ -1630,11 +1635,14 @@ public sealed class RecordVaultStore : IFileVaultStore
                 burns.Add(new BurnEntry(version, burn, secret.BurnReason));
             }
             var recordId = FilenameHasher.ComputeRecordId(namesKey, name);
-            // Issue #311: the lineage anchor every created record carries (its target is always format 3).
+            var value = Encoding.UTF8.GetBytes(secret.Value);
+            // Issue #311: the lineage anchor every created record carries (its target is always format 3). Brief T58: a new
+            // version sealed from its plaintext, so it gets its ValueKinds entry.
             writes.Add((FilenameHasher.ToFilename(recordId), RecordMerge.Normalize(new SecretRecord(
-                recordId, Stamp.Zero, RecordType.Value, version, name, UnixMs(secret.Created), Encoding.UTF8.GetBytes(secret.Value), burns)
+                recordId, Stamp.Zero, RecordType.Value, version, name, UnixMs(secret.Created), value, burns)
             {
-                Extensions = FieldsCodec.With([], new FieldSet(version, [])),
+                Extensions = TswapCore.Totp.ValueKinds.ForNewVersion(FieldsCodec.With([], new FieldSet(version, [])), version,
+                    TswapCore.Totp.ValueKinds.Classify(value), replaced: null),
             })));
         }
         WriteRecords(writes, key, loaded);
@@ -2079,8 +2087,16 @@ public sealed class RecordVaultStore : IFileVaultStore
             Fingerprints = For(record.Value, record.Fingerprints),
             Previous = previous,
             Sealed = sealedSections.Count == 0 ? null : sealedSections,
+            // Brief T58: only a reindex (which holds every value) fills in ValueKinds entries for carried versions; any other
+            // write leaves the extension as it made it.
+            Extensions = recomputeOlderSets ? ValueKindsFromValues(record) : record.Extensions,
         };
     }
+
+    /// <summary>Brief T58: <paramref name="record"/>'s extensions with a <c>ValueKinds</c> entry for each retained value, from the value.</summary>
+    private static IReadOnlyList<RecordExtension> ValueKindsFromValues(SecretRecord record) =>
+        TswapCore.Totp.ValueKinds.FromValues(record.Extensions, (record.Version, record.Value),
+            record.Previous is { } p ? (p.Version, p.Value) : null);
 
     /// <summary>
     /// Brief T36 (#347): the notice when narrowing changed something; <paramref name="paths"/> are what it changed.

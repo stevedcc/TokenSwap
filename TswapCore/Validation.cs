@@ -5,19 +5,27 @@ namespace TswapCore;
 public static class Validation
 {
     // Fix round 1, B: '{{name:previous}}' names the value the last rotation replaced. ':' is not a
-    // name character (ValidNameRegex), so the suffix can't collide with a secret name.
-    public static readonly Regex TokenRegex = new(@"\{\{([a-zA-Z0-9_-]+(?::previous)?)\}\}");
+    // name character (ValidNameRegex), so the suffix can't collide with a secret name. Brief T58 (#374):
+    // '{{name:totp}}' names the current code of a TOTP seed. One suffix at most.
+    public static readonly Regex TokenRegex = new(@"\{\{([a-zA-Z0-9_-]+(?::previous|:totp)?)\}\}");
 
     // Fix round 3: any other '{{name:suffix}}' is a typo, never passed through as literal text.
     private static readonly Regex SuffixedTokenRegex = new(@"\{\{([a-zA-Z0-9_-]+:[^{}]*)\}\}");
 
-    /// <summary>Throws for a <c>{{name:suffix}}</c> token whose suffix is not <c>previous</c>, naming it.</summary>
+    /// <summary>
+    /// Throws for a <c>{{name:suffix}}</c> token whose suffix is not <c>previous</c> or <c>totp</c> (one suffix
+    /// at most: <c>{{name:previous:totp}}</c> is unknown), naming it.
+    /// </summary>
     public static void ThrowIfUnknownTokenSuffix(string command)
     {
         foreach (Match m in SuffixedTokenRegex.Matches(command))
-            if (!m.Groups[1].Value.EndsWith(":previous", StringComparison.Ordinal) || m.Groups[1].Value.Count(ch => ch == ':') != 1)
+        {
+            var inner = m.Groups[1].Value;
+            if (inner.Count(ch => ch == ':') != 1
+                || !(inner.EndsWith(SecretsDb.PreviousSuffix, StringComparison.Ordinal) || inner.EndsWith(SecretsDb.TotpSuffix, StringComparison.Ordinal)))
                 throw new TswapException(
-                    $"Unknown token '{{{{{m.Groups[1].Value}}}}}': the only suffix is ':previous' (the value the last rotation replaced).");
+                    $"Unknown token '{{{{{inner}}}}}': the suffixes are ':previous' (the value the last rotation replaced) and ':totp' (the current code of a TOTP seed).");
+        }
     }
 
     // A '{{…}}' without braces inside that starts with a secret name followed by a dot. Anything else with a dot
@@ -43,7 +51,7 @@ public static class Validation
             if (inner.Count(ch => ch == '.') == 1 && ValidNameRegex.IsMatch(name) && IsFieldName(field))
                 throw new TswapException(FieldTokenMessage(shown, name));
             throw new TswapException(
-                $"'{shown}' is not a valid token: a token is {{{{NAME}}}} or {{{{NAME:previous}}}}, " +
+                $"'{shown}' is not a valid token: a token is {{{{NAME}}}}, {{{{NAME:previous}}}} or {{{{NAME:totp}}}}, " +
                 "and fields aren't substituted into commands.");
         }
     }
@@ -165,7 +173,7 @@ public static class Validation
     public static readonly Regex FileTokenRegex = new(@"\{\{@([^{}]+)\}\}");
 
     // Both token kinds, for the one substitution pass over the command as typed.
-    private static readonly Regex AnyTokenRegex = new(@"\{\{(?:@([^{}]+)|([a-zA-Z0-9_-]+(?::previous)?))\}\}");
+    private static readonly Regex AnyTokenRegex = new(@"\{\{(?:@([^{}]+)|([a-zA-Z0-9_-]+(?::previous|:totp)?))\}\}");
 
     /// <summary>The distinct paths of the <c>{{@path}}</c> tokens in <paramref name="command"/>, in order.</summary>
     public static IReadOnlyList<string> ExtractFileTokens(string command) =>

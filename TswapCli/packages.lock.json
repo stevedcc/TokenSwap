@@ -144,6 +144,11 @@
           "Microsoft.Extensions.Configuration.Binder": "10.0.14"
         }
       },
+      "Otp.NET": {
+        "type": "Transitive",
+        "resolved": "1.4.1",
+        "contentHash": "UXjZ80T6BfVACJWmEcz4UFZ93hwX3STKojKvVpPk3qUhubjnLwIiZMsI4Hh91HhYxC0JlatNdNrVK2wkv4O9/Q=="
+      },
       "Yubico.Core": {
         "type": "Transitive",
         "resolved": "1.18.1",
@@ -179,6 +184,7 @@
         "dependencies": {
           "BouncyCastle.Cryptography": "[2.7.0, 2.7.0]",
           "Konscious.Security.Cryptography.Argon2": "[1.3.1, 1.3.1]",
+          "Otp.NET": "[1.4.1, 1.4.1]",
           "Yubico.YubiKey": "[1.18.1, 1.18.1]"
         }
       }

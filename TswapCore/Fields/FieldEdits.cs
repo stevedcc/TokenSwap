@@ -109,7 +109,10 @@ public static class FieldEdits
         return ReferenceEquals(after, before) ? extensions : FieldsCodec.With(extensions, after);
     }
 
-    /// <summary>The extension list a tombstone keeps: every type but <c>Fields</c> (spec "Writes", delete).</summary>
+    /// <summary>
+    /// The extension list a tombstone keeps: every type but <c>Fields</c> (spec "Writes", delete) and, brief T58,
+    /// <c>ValueKinds</c> (a tombstone has no value to mark).
+    /// </summary>
     internal static IReadOnlyList<RecordExtension> ForTombstone(IReadOnlyList<RecordExtension> extensions) =>
-        FieldsCodec.With(extensions, null);
+        TswapCore.Totp.ValueKinds.With(FieldsCodec.With(extensions, null), []);
 }
