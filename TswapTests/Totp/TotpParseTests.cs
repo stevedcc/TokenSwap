@@ -129,6 +129,31 @@ public partial class TotpParseTests
         Assert.Equal(ValueKind.OtpAuthUnusable, TotpCodes.Classify(value));
     }
 
+    // Controller ruling (code review round 1): any raw space outside the secret is refused (RFC 3986 allows none).
+    private const string SpaceText =
+        "a space is not allowed in an otpauth URI; store the URI alone, with any space in the label or issuer written as %20";
+
+    public static TheoryData<string, string, string> RawSpaces() => new()
+    {
+        { "notes after &issuer=Acme", "otpauth://totp/Example:alice?secret=" + Sha1Seed + "&issuer=Acme  notes", SpaceText },
+        { "a raw space in the label", "otpauth://totp/Acme Co:alice?secret=" + Sha1Seed + "&issuer=Acme", SpaceText },
+        { "a raw space in the issuer", "otpauth://totp/Acme:alice?secret=" + Sha1Seed + "&issuer=Acme Co", SpaceText },
+        { "spaces in the secret and the issuer", "otpauth://totp/X?secret=GEZD GNBV&issuer=Acme Co", SpaceText },
+    };
+
+    [Theory]
+    [MemberData(nameof(RawSpaces))]
+    public void RawSpaceOutsideTheSecret_IsRefused(string row, string value, string reason)
+    {
+        var ex = Assert.Throws<TotpSeedException>(() => TotpSeed.FromUri(value));
+        Assert.True(reason == ex.Message, $"{row}: expected '{reason}', got '{ex.Message}'");
+        Assert.Equal(ValueKind.OtpAuthUnusable, TotpCodes.Classify(value));
+    }
+
+    [Fact]
+    public void SpaceInTheLabel_WrittenAsPercent20_GivesTheCode() =>
+        Assert.Equal("050471", CodeOf("otpauth://totp/Acme%20Co:alice?secret=" + Sha1Seed + "&issuer=Acme%20Co"));
+
     [Theory]
     [InlineData("\n")]
     [InlineData("\r\n")]

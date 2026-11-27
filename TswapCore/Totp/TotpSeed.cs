@@ -22,6 +22,8 @@ public enum TotpAlgorithm
 public sealed class TotpSeed : IDisposable
 {
     internal const string R0 = "the value holds an otpauth URI among other text; store the URI alone";
+    internal const string R0Space =
+        "a space is not allowed in an otpauth URI; store the URI alone, with any space in the label or issuer written as %20";
     internal const string R1 = "the URI doesn't start with otpauth://";
     internal const string R2 = "HOTP (counter-based) URIs aren't supported";
     internal const string R3 = "the URI's type isn't totp";
@@ -94,6 +96,9 @@ public sealed class TotpSeed : IDisposable
         // the first URI's code is never given from it.
         if (text.Any(char.IsControl) || text.IndexOf("otpauth:", 1, StringComparison.OrdinalIgnoreCase) >= 0)
             throw new TotpSeedException(R0);
+        // Controller ruling (code review round 1): RFC 3986 allows no raw space. One in the secret's value keeps R14 (its
+        // own text, checked with the values); one anywhere else is R0's space text.
+        if (OutsideTheSecret(text).Contains(' ')) throw new TotpSeedException(R0Space);
         if (!text.StartsWith("otpauth://", StringComparison.OrdinalIgnoreCase)) throw new TotpSeedException(R1);
 
         var rest = text["otpauth://".Length..];
@@ -146,6 +151,17 @@ public sealed class TotpSeed : IDisposable
 
     // Code review round 1: the six spellings in ASCII only, case ignored ordinally (no culture or invariant upper-casing,
     // which would map U+017F to 'S').
+    /// <summary><paramref name="text"/> with the raw values of its <c>secret</c> parameters left out.</summary>
+    private static string OutsideTheSecret(string text)
+    {
+        var queryStart = text.IndexOf('?');
+        if (queryStart < 0)
+            return text;
+        var pieces = text[(queryStart + 1)..].Split('&')
+            .Select(p => p.StartsWith("secret=", StringComparison.Ordinal) ? "secret=" : p);
+        return text[..(queryStart + 1)] + string.Join('&', pieces);
+    }
+
     private static TotpAlgorithm ParseAlgorithm(string text)
     {
         bool Is(string spelling) => System.Text.Ascii.EqualsIgnoreCase(text, spelling);
