@@ -64,6 +64,16 @@
   </ItemGroup>
 
   <!--
+    Brief T58 (#374, TOTP codes from a stored seed): Otp.NET (kspearrin/Otp.NET, MIT, no dependencies) computes RFC
+    4226/6238 codes (HMAC-SHA1/256/512, dynamic truncation) and decodes the canonical Base32 text that tswap's own parse
+    (Totp/TotpSeed.cs) hands it; it is never given a raw URI and its clock-reading overloads are never called. Pinned
+    to an exact version (brackets); TswapTests/Totp/OtpNetContractTests.cs is the upgrade guard.
+  -->
+  <ItemGroup>
+    <PackageReference Include="Otp.NET" Version="[1.4.1]" />
+  </ItemGroup>
+
+  <!--
     Secure Enclave backend (macOS only): Vault/Interop/swift/TswapSecureEnclave.swift is a
     thin CryptoKit shim, compiled here into a dylib and copied next to the managed output —
     AppleSecureEnclaveInterop.cs P/Invokes into it. See that file's header comment for why a
