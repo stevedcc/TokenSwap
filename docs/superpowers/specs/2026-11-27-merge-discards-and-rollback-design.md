@@ -2,9 +2,8 @@
 
 Issues: https://github.com/stevedcc/TokenSwap/issues/312 and https://github.com/stevedcc/TokenSwap/issues/197.
 Date: 2026-11-27. Base: origin/main e86f028. Branch: `design/records-033`.
-Status: **draft for the owner's review**. Nothing is built. Marked **(my call)** where the designer decided and
-**(owner)** where an owner rule or decision settles it; the open questions are at the end, each with a recommended
-default. Every claim about the code cites `file:line` at e86f028. Brief T58 (TOTP, #374, branch `brief/t58` at
+Status: **decided 2026-11-27** (owner decisions at the end). Nothing is built. Marked **(my call)** where the designer
+decided and **(owner)** where an owner rule or decision settles it. Every claim about the code cites `file:line` at e86f028. Brief T58 (TOTP, #374, branch `brief/t58` at
 7cae0bd, `docs/briefs/t58-totp-codes.md`) is not merged yet; where this design depends on it, it says so.
 
 ## Intent and why
@@ -161,7 +160,7 @@ The rule, for one merge of copies `I₁ … Iₙ` with winner `W` (the copy with
 | the same, B on 0.3.2 (no lineage) | D2: `v1` < `v2` = `W`'s previous: nothing discarded |
 | A and B create the same name independently | both first values; the loser is discarded (a real value conflict) |
 | A deletes after seeing `v1`; B still holds `v1` | the delete put `v1` in the lineage: nothing discarded |
-| A deletes; B rotates concurrently; the delete wins | B's value is discarded (owner question 1: kept on the tombstone) |
+| A deletes; B rotates concurrently; the delete wins | B's value is discarded (owner decision 1: kept on the tombstone) |
 | A, B, C rotate from `v0` | two discarded entries |
 | a discarded entry cleared, restored or acknowledged on another machine, then a stale copy arrives | clear and restore put its stamp in the lineage, so it is not discarded again; an acknowledgement travels with the entry |
 
@@ -229,7 +228,7 @@ discardedCount    1   0..255, then per entry, ascending by stamp:
    `asOf` = `Stamp.Zero` (not exact) and `exactFrom` = §1.1's D2 bound, so a later merge uses the same bound.
 4. The extension is written whenever there is anything to say (a superseded stamp or an entry); otherwise left out.
 5. A tombstone winner keeps the extension (unlike `Fields`): its lineage stops a stale copy's value from being
-   reported as discarded, and (owner question 1) its discarded entries.
+   reported as discarded, and (owner decision 1) its discarded entries.
 
 Properties (tested): the same copies in any order give the same bytes; merging a result again with any of its
 inputs changes nothing; three copies merged pairwise in every order give the same result as all at once **when every
@@ -249,7 +248,7 @@ only drops the oldest stamps; the effect is that a copy more than 32 rotations s
 | Write | Lineage | Discarded entries |
 |---|---|---|
 | a new value version (`create`, `ingest`, `add`, `rotate`, `ingest --rotate`, `import`, `restore`) | the dropped old previous version joins `S`; `asOf` = the new version. If the lineage was not exact (`asOf` ≠ the old version), `exactFrom` = the old previous version, or the old version when there was none | unchanged |
-| a new life over a tombstone | the tombstone's `S` and entries are kept; `asOf` = the new version; `exactFrom` = the tombstone's version when its lineage wasn't exact | kept (owner question 1) |
+| a new life over a tombstone | the tombstone's `S` and entries are kept; `asOf` = the new version; `exactFrom` = the tombstone's version when its lineage wasn't exact | kept (owner decision 1) |
 | `burn`, `field set`/`unset` | unchanged | unchanged |
 | `delete` (sudo) | current, previous and every entry's stamp join `S`; `asOf` = the tombstone version | **dropped**: `delete` prints `It also dropped 1 value set aside by a merge (see 'tswap conflicts' before deleting).` |
 | `conflicts --ack` (§1.8) | unchanged | the flag and acknowledgement set |
@@ -330,7 +329,7 @@ Acknowledged entries print nothing except in `tswap conflicts`. The warnings car
 
 ```
 tswap conflicts [NAME] [--json]                         no sudo; metadata only, decrypts no value
-tswap conflicts --ack NAME [--stamp S] [--by LABEL]     no sudo (owner question 2); a metadata-only write
+tswap conflicts --ack NAME [--stamp S] [--by LABEL]     no sudo (owner decision 2); a metadata-only write
 sudo tswap conflicts --clear NAME [--stamp S]           sudo; drops the value(s)
 ```
 
@@ -396,7 +395,7 @@ Masking: every entry's fingerprint set joins the index that `run`, `redact`, `to
 service prints is masked, labelled `[REDACTED: x:discarded]`. A 0.3.x machine doesn't mask it (§1.6).
 
 Export: the export format carries current values, burns and fields (`TswapCore/Models.cs`, `Secret` docs). Owner
-question 3; default: an export leaves entries out and `export` warns `Warning: 1 secret has a value a merge set aside
+decision 3: an export leaves entries out and `export` warns, naming the secrets, `Warning: 1 secret has a value a merge set aside
 (sync-conflict-test); this export doesn't include it. Restore or clear it first if it matters.`
 
 ## Part 2 (#197): notice records and slots that go back
@@ -626,7 +625,7 @@ with a parity test over random states like `RecordWrites_MatchNextRecord_OnRando
 | an entry in one copy, its stamp in another copy's lineage (cleared there) | no entry |
 | two copies' entries of one stamp with different plaintext (full) / different sections and base fingerprints (metadata) | `RecordConflictException` |
 | A deletes after seeing `v1`; B holds `v1` | tombstone, no entry |
-| A deletes; B rotates concurrently; delete later | tombstone with B's value as an entry (owner question 1 default) |
+| A deletes; B rotates concurrently; delete later | tombstone with B's value as an entry (owner decision 1) |
 | A and B create the same name | one entry |
 | 33 rotations on one machine, then a merge with a copy 33 behind | that copy's value is an entry (the cap's documented effect) |
 | 256 entries | `RecordConflictException` |
@@ -728,16 +727,13 @@ keyring check, unlock text and `restore-slots`; `accept-rollback` and docs.
 Before each release, a one-off check with the v0.3.2 binary on a copy of a vault the new build wrote (`names`, `run`,
 a rotate, a merge of a conflict copy), recorded in the PR, as T54 did.
 
-## Owner questions
+## Decisions (owner, 2026-11-27, were the open questions)
 
-1. **A value that loses to a concurrent delete.** Machine A deletes a secret while machine B rotates it; the delete
-   wins. **Default: keep B's value on the tombstone as a discarded value** (warned, listed, `restore --discarded`
-   brings the secret back, `conflicts --clear` drops it): the service may already use it, and data safety comes
-   first. The alternative is to drop it with a one-time warning, which respects the delete but loses the value.
-2. **`tswap conflicts --ack` without sudo.** **Default: no sudo.** It destroys and reveals nothing, only quietens the
-   warning on every machine, and records the machine, time and `--by` label; tswap doesn't restrict what agents do,
-   and the skill text tells agents to leave it to the user. Dropping a value (`--clear`) and restoring one need sudo.
-   The alternative (sudo for `--ack` too) keeps the warning until a person deals with it.
-3. **Export and discarded values.** **Default: an export leaves them out and warns**, so exports stay importable by
-   0.3.2. The alternative is a new export format version that carries them, which older tswap refuses
-   (`ExportCrypto` refuses unknown versions).
+1. **A value that loses to a concurrent delete is kept on the tombstone as a discarded value (owner).** It is warned
+   about and listed by `tswap conflicts`; `sudo tswap restore NAME --discarded` brings the secret back and
+   `sudo tswap conflicts --clear NAME` drops it.
+2. **`tswap conflicts --ack` takes no sudo (owner).** It destroys and reveals nothing, only quietens the warning on
+   every machine, and records the machine, time and `--by` label. Dropping a value (`--clear`) and restoring one
+   (`restore --discarded`) need sudo.
+3. **Export leaves discarded values out and warns, naming the secrets (owner).** Exports stay importable by 0.3.2;
+   the warning is the one in §1.10.
