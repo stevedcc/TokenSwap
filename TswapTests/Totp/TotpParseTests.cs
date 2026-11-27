@@ -131,7 +131,7 @@ public partial class TotpParseTests
 
     // Controller ruling (code review round 1): any raw space outside the secret is refused (RFC 3986 allows none).
     private const string SpaceText =
-        "a space is not allowed in an otpauth URI; store the URI alone, with any space in the label or issuer written as %20";
+        "white space is not allowed in an otpauth URI; store the URI alone, with any white space in the label or issuer percent-encoded (a space as %20)";
 
     public static TheoryData<string, string, string> RawSpaces() => new()
     {

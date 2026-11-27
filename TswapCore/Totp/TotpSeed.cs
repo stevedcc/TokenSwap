@@ -23,7 +23,7 @@ public sealed class TotpSeed : IDisposable
 {
     internal const string R0 = "the value holds an otpauth URI among other text; store the URI alone";
     internal const string R0Space =
-        "a space is not allowed in an otpauth URI; store the URI alone, with any space in the label or issuer written as %20";
+        "white space is not allowed in an otpauth URI; store the URI alone, with any white space in the label or issuer percent-encoded (a space as %20)";
     internal const string R1 = "the URI doesn't start with otpauth://";
     internal const string R2 = "HOTP (counter-based) URIs aren't supported";
     internal const string R3 = "the URI's type isn't totp";

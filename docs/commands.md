@@ -632,7 +632,7 @@ a code or a value would be given without sudo, and is never passed on as itself.
 mentions a URI among other text (a labelled paste, a note), and a URI followed by more: after trimming white space at
 both ends, a value with a control character anywhere (a line break, a tab), a second `otpauth:` or raw white space outside
 the `secret` value (a space, a no-break space, any Unicode space or line separator; RFC 3986 allows none) is refused, so a replacement URI or notes pasted after the first URI never
-give the first URI's code. Write a space in the label or issuer as `%20`; a space in the secret gets its own refusal
+give the first URI's code. Percent-encode any white space in the label or issuer (a space as `%20`); a space in the secret gets its own refusal
 (below). **Store the URI alone.** A bare Base32 seed is never
 recognised, since any random value may be Base32.
 
