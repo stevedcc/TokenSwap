@@ -1794,7 +1794,7 @@ public class ReleasePackagingTests : IDisposable
     public void SignWindows_PinsSsignBySha()
     {
         var job = Job(Workflow("release.yml"), "sign-windows");
-        var cargo = Assert.Single(job.Split('\n'), line => line.Contains("cargo install", StringComparison.Ordinal) && !line.TrimStart().StartsWith('#'));
+        var cargo = SsignCargoLine();
 
         Assert.Contains(" --locked ", cargo);
         Assert.Contains(" --git https://github.com/Le-Syl21/ssign ", cargo);
@@ -1823,7 +1823,10 @@ public class ReleasePackagingTests : IDisposable
         return renovate[start..end];
     }
 
-    /// <summary>The ssign manager's <c>matchStrings</c> entry, as the .NET regex Renovate runs (JSON5's <c>\\</c> is one <c>\</c>).</summary>
+    /// <summary>
+    /// The ssign manager's <c>matchStrings</c> entry: the regex Renovate runs, compiled here as a .NET <c>Regex</c>
+    /// (JSON5's <c>\\</c> is one <c>\</c>).
+    /// </summary>
     private static System.Text.RegularExpressions.Regex SsignManagerRegex()
     {
         var line = Assert.Single(SsignManagerText().Split('\n'),
@@ -1916,6 +1919,27 @@ public class ReleasePackagingTests : IDisposable
         Assert.DoesNotContain("matchPackageNames", renovate[(renovate.IndexOf(last, StringComparison.Ordinal) + last.Length)..]);
     }
 
+    /// <summary>
+    /// Brief T62 Task 6: the security-critical rule (never automerged, the last packageRules entry) names the key,
+    /// crypto, PTY and CBOR packages and, since T58, Otp.NET (it computes the TOTP codes from a stored seed).
+    /// </summary>
+    [Fact]
+    public void Renovate_SecurityCriticalRule_NamesItsPackages_AndNeverAutomerges()
+    {
+        var rule = RenovatePackageRules()[^1];
+        var start = rule.IndexOf("\n      matchPackageNames: [\n", StringComparison.Ordinal);
+        Assert.True(start >= 0, $"the last packageRules entry has no multi-line matchPackageNames:\n{rule}");
+        var end = rule.IndexOf("\n      ],\n", start, StringComparison.Ordinal);
+        Assert.True(end > start, "the security-critical rule's matchPackageNames is not closed");
+        var names = rule[(start + "\n      matchPackageNames: [\n".Length)..end].Split('\n').Select(l => l.Trim()).ToList();
+
+        Assert.Equal(["'Yubico.YubiKey',", "'BouncyCastle.Cryptography',", "'Konscious.Security.Cryptography.Argon2',", "'RedactingPty',",
+            "'System.Formats.Cbor',", "'Otp.NET',"], names);
+        Assert.Contains("\n      groupName: 'security-critical packages',\n", rule);
+        Assert.Contains("\n      matchDatasources: ['nuget'],\n", rule);
+        Assert.Contains("\n      automerge: false,\n", rule);
+    }
+
     [Fact]
     public void SignWindows_SecretsOnlyInTheirSteps()
     {
@@ -1955,12 +1979,49 @@ public class ReleasePackagingTests : IDisposable
         }
     }
 
+    /// <summary>
+    /// Brief T62 Task 4 (#430): a <c>uses:</c> line for <paramref name="action"/> at <paramref name="major"/>: today's
+    /// form (<c>@v4</c>) or Renovate's pin (<c>@&lt;40 lowercase hex&gt; # v4</c>, the comment possibly a fuller version of
+    /// the same major). Everything else is false (a branch, another tag form, a short or uppercase SHA, a SHA without a
+    /// comment or with another major, a quoted value, a trailing comment on the tag form, another action, an action
+    /// path, <c>docker://</c>, <c>./</c>, a commented-out line), so a test needing v4 fails on it. Follow-up (GLM M9):
+    /// once Renovate's pin has landed, require the SHA form, so a revert to a floating tag fails.
+    /// </summary>
+    internal static bool UsesAction(string line, string action, int major) =>
+        System.Text.RegularExpressions.Regex.IsMatch(line,
+            $@"^\s*(?:-\s+)?uses: {System.Text.RegularExpressions.Regex.Escape(action)}@(?:v{major}|[0-9a-f]{{40}} # v{major}(?:\.\d+){{0,2}})$",
+            System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    [Theory]
+    [InlineData("      - uses: actions/checkout@v4", true)]
+    [InlineData("        uses: actions/checkout@v4", true)]
+    [InlineData("        uses: actions/checkout@0123456789abcdef0123456789abcdef01234567 # v4", true)]
+    [InlineData("        uses: actions/checkout@0123456789abcdef0123456789abcdef01234567 # v4.2", true)]
+    [InlineData("        uses: actions/checkout@0123456789abcdef0123456789abcdef01234567 # v4.2.2", true)]
+    [InlineData("        uses: actions/checkout@0123456789abcdef0123456789abcdef01234567 # v5", false)]
+    [InlineData("        uses: actions/checkout@v5", false)]
+    [InlineData("        uses: actions/checkout@main", false)]
+    [InlineData("        uses: actions/checkout@v4.2.2", false)]
+    [InlineData("        uses: actions/checkout@v4 # pinned", false)]
+    [InlineData("        uses: actions/checkout@0123456", false)]
+    [InlineData("        uses: actions/checkout@0123456789ABCDEF0123456789ABCDEF01234567 # v4", false)]
+    [InlineData("        uses: actions/checkout@0123456789abcdef0123456789abcdef01234567", false)]
+    [InlineData("        uses: actions/checkout@0123456789abcdef0123456789abcdef01234567# v4", false)]
+    [InlineData("        uses: 'actions/checkout@v4'", false)]
+    [InlineData("        uses: actions/checkout-x@v4", false)]
+    [InlineData("        uses: actions/checkout/sub@v4", false)]
+    [InlineData("        # uses: actions/checkout@v4", false)]
+    [InlineData("        uses: docker://alpine:3", false)]
+    public void UsesAction_AcceptsTheTagAndRenovatesPin_Only(string line, bool expected) =>
+        Assert.Equal(expected, UsesAction(line, "actions/checkout", 4));
+
     [Fact]
     public void SignWindows_ReplacesTheArtifact()
     {
         var steps = Steps(Job(Workflow("release.yml"), "sign-windows"));
-        var download = Assert.Single(steps, step => step.Contains("uses: actions/download-artifact@v4\n", StringComparison.Ordinal));
-        var upload = Assert.Single(steps, step => step.Contains("uses: actions/upload-artifact@v4\n", StringComparison.Ordinal));
+        // Brief T62 Task 4 (#430; assertion change sanctioned by the owner, 2026-11-27): the tag or Renovate's SHA pin.
+        var download = Assert.Single(steps, step => step.Split('\n').Any(line => UsesAction(line, "actions/download-artifact", 4)));
+        var upload = Assert.Single(steps, step => step.Split('\n').Any(line => UsesAction(line, "actions/upload-artifact", 4)));
         var repack = Assert.Single(steps, step => step.Contains("zip -j -X ", StringComparison.Ordinal));
 
         Assert.Contains("          name: tswap-win-x64\n", download);
@@ -2049,7 +2110,26 @@ public class ReleasePackagingTests : IDisposable
         var stepsAt = job.IndexOf("\n    steps:\n", StringComparison.Ordinal);
         Assert.True(stepsAt >= 0, "verify-windows has no steps:");
         var steps = job[stepsAt..];
-        var positions = order.Select(text => (text, at: steps.IndexOf(text, StringComparison.Ordinal))).ToList();
+        // Brief T62 Task 4 (#430; assertion change sanctioned by the owner, 2026-11-27): the two uses: entries are found
+        // as the start of the first line UsesAction accepts (the tag or Renovate's SHA pin); the others by IndexOf.
+        int LineStart(string action)
+        {
+            var at = 0;
+            foreach (var line in steps.Split('\n'))
+            {
+                if (UsesAction(line, action, 4))
+                    return at;
+                at += line.Length + 1;
+            }
+            return -1;
+        }
+        int At(string text) => text switch
+        {
+            "uses: actions/checkout@v4" => LineStart("actions/checkout"),
+            "uses: actions/download-artifact@v4" => LineStart("actions/download-artifact"),
+            _ => steps.IndexOf(text, StringComparison.Ordinal),
+        };
+        var positions = order.Select(text => (text, at: At(text))).ToList();
         Assert.All(positions, p => Assert.True(p.at >= 0, $"verify-windows lacks {p.text}"));
         Assert.Equal(positions.Select(p => p.text), positions.OrderBy(p => p.at).Select(p => p.text));
         foreach (var line in ExpectedVersionStep)
