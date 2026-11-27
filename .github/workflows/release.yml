@@ -434,8 +434,14 @@ jobs:
   sign-windows:
     name: Sign win-x64
     needs: [build]
-    if: always() && github.event_name != 'pull_request' && github.repository == 'stevedcc/TokenSwap' && needs.build.result == 'success'
+    # A cancelled run must not keep waiting for the owner's code. With always() a sign-windows job that had not started
+    # yet starts after the cancel and waits for a code, because GitHub's documentation says always() is true even when
+    # the run is cancelled; !cancelled() is the alternative it recommends. Written in ${{ }}: YAML reads a plain scalar
+    # that starts with ! as a tag. The needs.build.result check carries the success test.
+    if: ${{ !cancelled() && github.event_name != 'pull_request' && github.repository == 'stevedcc/TokenSwap' && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
+    # Observed to cover runner time only: on three real runs the approval wait showed outside the job's length
+    # (GitHub's docs don't say where the timer starts).
     timeout-minutes: 30
     permissions:
       contents: read
@@ -537,7 +543,7 @@ jobs:
   verify-windows:
     name: Verify win-x64 signature
     needs: [sign-windows]
-    if: always() && github.event_name != 'pull_request' && github.repository == 'stevedcc/TokenSwap' && needs.sign-windows.result == 'success'
+    if: ${{ !cancelled() && github.event_name != 'pull_request' && github.repository == 'stevedcc/TokenSwap' && needs.sign-windows.result == 'success' }}
     runs-on: windows-latest
     permissions:
       contents: read

@@ -1048,6 +1048,35 @@ public class ReleasePackagingTests : IDisposable
         Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => AssertPullRequestsStayUnsigned(release));
     }
 
+    /// <summary>
+    /// Break-it-once, kept: sign-windows without its pull-request guard is caught. Only sign-windows can be named:
+    /// verify-windows has no environment, secret or write permission, so the check skips it.
+    /// </summary>
+    [Fact]
+    public void Workflows_PullRequestCheck_CatchesTheSigningJobsOnAPullRequest()
+    {
+        var release = Workflow("release.yml").Replace(
+            "    if: ${{ !cancelled() && github.event_name != 'pull_request' && ", "    if: ${{ !cancelled() && ");
+
+        var problem = Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => AssertPullRequestsStayUnsigned(release));
+        Assert.Contains("sign-windows", problem.Message);
+        Assert.DoesNotContain("verify-windows", problem.Message);
+    }
+
+    /// <summary>A bare <c>if: !</c> line: YAML reads a plain scalar that starts with ! as a tag.</summary>
+    private static bool HasBareBangIf(string workflow) =>
+        System.Text.RegularExpressions.Regex.IsMatch(workflow, @"(?m)^\s+(- )?if:\s*!");
+
+    [Fact]
+    public void Workflows_IfConditions_NeverStartWithABang()
+    {
+        Assert.True(HasBareBangIf("    if: !cancelled()\n"), "the check misses a bare if: !");
+        Assert.True(HasBareBangIf("      - if: !cancelled()\n"), "the check misses a bare - if: !");
+        Assert.False(HasBareBangIf("    if: ${{ !cancelled() }}\n"), "the check flags the ${{ }} form");
+        foreach (var name in new[] { "release.yml", "ci.yml" })
+            Assert.False(HasBareBangIf(Workflow(name)), $"{name} has an if: that starts with !, which YAML reads as a tag");
+    }
+
     /// <summary>Break-it-once, kept: bump-version (contents: write) with its push guard dropped is caught.</summary>
     [Fact]
     public void Workflows_PullRequestCheck_CatchesBumpVersionOnAPullRequest()
@@ -1727,9 +1756,9 @@ public class ReleasePackagingTests : IDisposable
     // ---- Issue #368: Windows signing. ----
 
     private const string SignWindowsCondition =
-        "    if: always() && github.event_name != 'pull_request' && github.repository == 'stevedcc/TokenSwap' && needs.build.result == 'success'\n";
+        "    if: ${{ !cancelled() && github.event_name != 'pull_request' && github.repository == 'stevedcc/TokenSwap' && needs.build.result == 'success' }}\n";
     private const string VerifyWindowsCondition =
-        "    if: always() && github.event_name != 'pull_request' && github.repository == 'stevedcc/TokenSwap' && needs.sign-windows.result == 'success'\n";
+        "    if: ${{ !cancelled() && github.event_name != 'pull_request' && github.repository == 'stevedcc/TokenSwap' && needs.sign-windows.result == 'success' }}\n";
     private const string AttestWaitsForVerifyWindows =
         " && (needs.verify-windows.result == 'success' || (github.repository != 'stevedcc/TokenSwap' && needs.verify-windows.result == 'skipped'))";
 
@@ -1961,12 +1990,44 @@ public class ReleasePackagingTests : IDisposable
         Assert.Contains("      EXPECTED_THUMBPRINT: 0117383ED6ABD3650EEA4365C9565D19AD147877\n", job);
         Assert.Contains("      # Certum Open Source Developer Steven Crawford, valid to 2027-11-20: renew with the certificate\n", job);
         Assert.Contains("https://github.com/stevedcc/TokenSwap/issues/368#issuecomment-7043611776", job);
-        Assert.Contains("Get-AuthenticodeSignature", job);
-        Assert.Contains("$sig.Status -ne 'Valid'", job);
-        Assert.Contains("$sig.SignerCertificate.Thumbprint -cne $env:EXPECTED_THUMBPRINT", job);
-        Assert.Contains("TimeStamperCertificate", job);
-        Assert.Contains("verify /pa /v", job);
-        Assert.Contains("--version", job);
+        // #381 item 3: the tools in the steps, not anywhere in the job (its env: comment names signtool's verify too).
+        var stepsAt = job.IndexOf("\n    steps:\n", StringComparison.Ordinal);
+        Assert.True(stepsAt >= 0, "verify-windows has no steps:");
+        var steps = job[stepsAt..];
+        Assert.Contains("Get-AuthenticodeSignature", steps);
+        Assert.Contains("$sig.Status -ne 'Valid'", steps);
+        Assert.Contains("$sig.SignerCertificate.Thumbprint -cne $env:EXPECTED_THUMBPRINT", steps);
+        Assert.Contains("TimeStamperCertificate", steps);
+        Assert.Contains("verify /pa /v", steps);
+        Assert.Contains("(Join-Path $check 'tswap.exe') --version", steps);
+    }
+
+    /// <summary>
+    /// #381 item 4: a cancelled run never starts the signing jobs, so it never waits for the owner's code. GitHub's
+    /// <c>always()</c> is true even when the run is cancelled; <c>!cancelled()</c> is the alternative it recommends.
+    /// </summary>
+    [Fact]
+    public void SignWindows_NeverRunsAfterACancel()
+    {
+        var release = Workflow("release.yml");
+        foreach (var name in new[] { "sign-windows", "verify-windows" })
+        {
+            var condition = Job(release, name).Split('\n').Single(line => line.StartsWith("    if: ", StringComparison.Ordinal));
+            Assert.DoesNotContain("always()", condition);
+            Assert.StartsWith("    if: ${{ !cancelled() && ", condition);
+        }
+    }
+
+    /// <summary>#381 item 5: the hash the Unpack step prints is the hash of the file the request names.</summary>
+    [Fact]
+    public void SignWindows_UnpackPrintsTheHashTheRequestNames()
+    {
+        var steps = Steps(Job(Workflow("release.yml"), "sign-windows"));
+        var unpack = Assert.Single(steps, step => step.StartsWith("      - name: Unpack tswap.exe\n", StringComparison.Ordinal));
+        var request = Assert.Single(steps, step => step.Contains("sign-windows.sh request ", StringComparison.Ordinal));
+
+        Assert.Contains("echo \"tswap.exe SHA-256: $(sha256sum \"$RUNNER_TEMP/win/tswap.exe\" | cut -d ' ' -f 1)\"\n", unpack);
+        Assert.Contains("sign-windows.sh request \"$RUNNER_TEMP/win/tswap.exe\")", request);
     }
 
     /// <summary>C2: verify-windows checks out, works out the expected version as build does, then checks what it downloaded.</summary>
