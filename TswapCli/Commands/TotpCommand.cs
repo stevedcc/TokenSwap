@@ -46,7 +46,11 @@ public sealed class TotpCommand : ICliCommand
         }
     }
 
-    /// <summary>The stderr line: <c>Valid for 17 more seconds (a new code every 30 seconds).</c></summary>
+    /// <summary>
+    /// The stderr line: <c>Valid for 17 more seconds (a new code every 30 seconds).</c>; a period of 1 reads
+    /// <c>every second</c> (controller ruling on the brief's text).
+    /// </summary>
     internal static string ValidityLine(TotpCode code) =>
-        $"Valid for {code.RemainingSeconds} more {(code.RemainingSeconds == 1 ? "second" : "seconds")} (a new code every {code.Period} seconds).";
+        $"Valid for {code.RemainingSeconds} more {(code.RemainingSeconds == 1 ? "second" : "seconds")} " +
+        $"(a new code every {(code.Period == 1 ? "second" : $"{code.Period} seconds")}).";
 }

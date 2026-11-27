@@ -129,6 +129,26 @@ public sealed class TotpCommandTests : IDisposable
         Assert.DoesNotContain("hunter2", outText + err);
     }
 
+    /// <summary>Controller ruling (T58 concern 6): a period of 1 reads "every second", any other "every N seconds".</summary>
+    [Theory]
+    [InlineData(1, 1, "Valid for 1 more second (a new code every second).")]
+    [InlineData(30, 1, "Valid for 1 more second (a new code every 30 seconds).")]
+    [InlineData(30, 29, "Valid for 29 more seconds (a new code every 30 seconds).")]
+    public void ValidityLine_NamesThePeriod_SingularForOneSecond(int period, int remaining, string expected) =>
+        Assert.Equal(expected, TswapCli.Commands.TotpCommand.ValidityLine(new TswapCore.Totp.TotpCode("000000", remaining, period)));
+
+    [Fact]
+    public void Period1_PrintsEverySecond()
+    {
+        _m.Ok(Sha1Uri + "&period=1", "ingest", "t");
+
+        var (exit, outText, err) = Totp("t", 1111111111);
+
+        Assert.True(exit == 0, err);
+        Assert.Matches("^[0-9]{6}\n$", outText);
+        Assert.Contains("Valid for 1 more second (a new code every second).", Lines(err));
+    }
+
     [Fact]
     public void DecryptsExactlyOneValueSection()
     {

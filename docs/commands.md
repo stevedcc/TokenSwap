@@ -650,7 +650,7 @@ one period: codes belong in arguments or `--env`, at the moment they are used. `
 
 **`tswap totp <name>`** (no sudo) prints the code alone on stdout, so `code=$(tswap totp x)` captures exactly the code,
 and on stderr how long it stays valid: `Valid for 17 more seconds (a new code every 30 seconds).`, with the seed's own
-period. It works for a URI and for a bare seed, and refuses what `run` refuses.
+period (`every second` for a period of 1). It works for a URI and for a bare seed, and refuses what `run` refuses.
 
 **What the parse accepts.** From the [Key Uri Format](https://github.com/google/google-authenticator/wiki/Key-Uri-Format),
 RFC 3986 and RFC 4648 (section 6), on the value trimmed of white space at both ends:
