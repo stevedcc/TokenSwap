@@ -5,6 +5,16 @@ Issue: https://github.com/stevedcc/TokenSwap/issues/312. Milestone 0.3.3. Design
 (Part 1, §1.4a, Tests "T60", "Briefs", owner Decisions). This brief is Part 1 of that design; Part 2 (#197, the floors) is
 brief T61, which runs after this one. A later design amendment is diffed against 39fd371.
 
+**Amendment (design rounds 8-9, at 2f1ed12).** R12's "also the previous value" form is gone: an entry whose stamp is
+the previous version is silent (design round 8 model 2). The silence rule is the design's OR of three (stamp in
+`S(M)`, stamp `W`'s previous, value equal to a retained one), and a silent entry is listed by `conflicts` but never
+counted as open nor shown as `"conflict": true` (design round 9, M-5; Task 4). The merged `ValueLineage` takes
+`Fields`' position rule (R13, design M-6). Any newer-format input switches the whole merge to the whole-list rule for
+`0x0103` (R8, design M-7). The Writes row for `burn`/`field set` over a record with no extension already expects no
+`0x0103` (R7, design I-3). The design's other round 8 changes (the kind byte dropped, earlier-life entries, the `field
+adopt` refusal, `T` carried by every write, refused writes on a newer-format lineage, tied winners, `burn` exempt from
+the entry cap) are in the diff 39fd371..2f1ed12 and are not yet folded into this brief's body.
+
 **Base.** This brief builds on T58 (TOTP, PR #433, branch `brief/t58` at a0836c2): its record extension `0x0101`
 (`ValueKinds`), `CommandValues` and its token grammar. **The base is `origin/main` once T58 has merged** (today main is
 dcc4c04, which `brief/t58` contains). Line numbers below are at `brief/t58` a0836c2; for files T58 doesn't touch they
@@ -126,9 +136,11 @@ These are decided here; each is marked where it is used.
   `asOf` and `exactFrom` all `Stamp.Zero` behaves exactly as no extension (inexact, so the bound is D2's, §1.1), so a
   write leaves it out. This is what `burn` and field writes create on a record that had none (§1.5) and what a merge
   of extension-less copies gives; leaving it out keeps those writes byte-identical to today.
-- **R8, a newer-format lineage** (format byte > 1) on any copy: that record's merge uses no lineage rule for
-  `0x0103` (the whole-list rule, as for an unknown type), sets nothing aside, and this build writes no `0x0103` of its
-  own on it. Warned once per record per command (Task 4).
+- **R8, a newer-format lineage** (format byte > 1) on **any** input of a merge, whichever input has the larger write
+  stamp: the whole merge uses no lineage rule for `0x0103` (the whole-list rule, as for an unknown type: the chosen
+  list's `0x0103` bytes, whatever their format), sets nothing aside, and this build writes no `0x0103` of its own on
+  it. A format 1 chosen list may then drop the newer copy's retirements; T61's R4 backstops floored entries (design
+  §1.4 rule 7). Warned once per record per command (Task 4).
 - **R9, JSON nulls.** `CliJsonContext` omits nulls (`CliJson.cs:33`); the design's `conflicts --json` shows `null`s. The
   conflicts records mark those properties `[property: JsonIgnore(Condition = JsonIgnoreCondition.Never)]` so the shape
   is stable.
@@ -136,8 +148,13 @@ These are decided here; each is marked where it is used.
   different states); the header line is the name, plus ` (deleted)` for a tombstone.
 - **R11, the cap text** leaves out "(on a rolled-back record, accept it first)": that command is T61's, which adds it.
 - **R12, which warning form.** "was replaced by" when no retained version lies between the entry and the current
-  version (no previous, or the previous is older than the entry); "also the previous value" when the entry's stamp is
-  the previous version; "set aside by a merge; the current value is …" otherwise. Decided from metadata.
+  version (no previous, or the previous is older than the entry); "set aside by a merge; the current value is …"
+  otherwise. An entry whose stamp is the previous version is silent (design round 8 model 2, which overrides this
+  ruling's former "also the previous value" form). Decided from metadata.
+- **R13, the merged `ValueLineage`'s position** (design §1.4 rule 6) follows `Fields`' rule in `MergeExtensions`
+  (`RecordMerge.cs:315-346`): the place it has in the chosen list (the whole list of the input with the largest write
+  stamp, `Fields` and `ValueLineage` left out for the tie order), at the end when that list has none; when both are
+  appended, `Fields` first, then `ValueLineage`.
 
 ## Task 1: `ValueLineage` and its codec (extension `0x0103`)
 
@@ -433,7 +450,7 @@ burn on `restore --discarded` (the burned-entry row fails).
 
 ```csharp
 public enum DiscardedState { Open, OpenHere, Acknowledged, Forgotten }
-public sealed record DiscardedView(DiscardedValue Entry, DiscardedState State, string? SameAs); // "current" | "previous" | null
+public sealed record DiscardedView(DiscardedValue Entry, DiscardedState State, string? SameAs); // "current" | "previous" | "superseded" | null
 public static class ConflictDisplay
 {
     public static IReadOnlyList<DiscardedView> Of(RecordMetadata record, byte[] thisOrigin); // [] for none or a newer format
@@ -442,8 +459,11 @@ public static class ConflictDisplay
 ```
 `Forgotten` when `Entry.Version <= lineage.Forgotten` (whatever its acknowledgements); else `Acknowledged` when there is
 an acknowledgement and (the entry's origin isn't `thisOrigin`, or one acknowledgement's origin is); `OpenHere` when
-acknowledged elsewhere but not here on the writer's machine; else `Open`. `SameAs` when the entry's set and a retained
-version's set share base entries. `RecordVaultStore` gains `public byte[] OwnOriginId() => OriginId();` (`:2230`).
+acknowledged elsewhere but not here on the writer's machine; else `Open`. `SameAs` (the silence rule, design §1.1, an
+OR of three): `"previous"` when the entry's stamp is the record's previous version, or its set and the previous
+version's share base entries; `"current"` when its set and the current version's do; `"superseded"` when its stamp is
+in the merged `S`. A silent entry (`SameAs` set) is listed by `conflicts` but never counted in `N open conflict(s)` or
+`--json`'s `Open`, and never makes `names --json`'s `Conflict` true. `RecordVaultStore` gains `public byte[] OwnOriginId() => OriginId();` (`:2230`).
 
 **Texts and where** (new `TswapCli/ConflictWarnings.cs`; times `yyyy-MM-dd'T'HH:mm:ss'Z'` of the stamp's physical part
 via `Hlc.ToDisplayDate`, as `FieldCommand.cs:403`; machine = the first 8 hex of the origin, plus ` (this machine)`;
@@ -452,7 +472,6 @@ via `Hlc.ToDisplayDate`, as `FieldCommand.cs:403`; machine = the first 8 hex of 
   `HashSet<string> ConflictsWarned` on `CommandContext`), one line per entry for which `Warns`:
   - replaced (R12): `⚠ x: two machines changed its value at the same time. The value machine 5d918462 (this machine) wrote at 2026-11-14T16:20:16Z was replaced by the one machine c7cad1d5 wrote at 2026-11-14T16:20:20Z. tswap kept the replaced value. If a service was updated with it, see 'tswap conflicts x'.`
   - moved on: `… The value machine … wrote at … was set aside by a merge; the current value is the one machine … wrote at …. tswap kept the replaced value. If a service …`
-  - also previous: `… The value machine … wrote at … was set aside by a merge; it is also the previous value, so it is kept twice until a rotation drops the previous one. If a service …`
   - tombstone: `⚠ x: it was deleted while machine 5d918462 changed its value (at 2026-11-14T16:20:16Z). tswap kept that value. See 'tswap conflicts x'.`
 - `internal static void Summary(CommandContext ctx, IEnumerable<RecordMetadata> records)`:
   `⚠ 1 secret has a value a merge set aside: x. See 'tswap conflicts'.` / `⚠ 3 secrets have values a merge set aside: a, b (deleted), c. See 'tswap conflicts'.`;
@@ -496,8 +515,9 @@ Tests, `TswapTests/ConflictWarningTests.cs` (`FleetMachine` A and B sharing a fo
 | the same, `get sync-conflict-test` (sudo bypass) on A | the replaced form, A's origin with ` (this machine)`, both times |
 | the same with the copy kept as main and the newer as copy; and the reverse | the same warning (the fold, not the main file, decides) |
 | A and B rotate to the same value | no warning, no `[CONFLICT]` |
-| a same-value entry, then two rotations of the current value | it warns |
-| an entry that is also the previous value | the "also the previous value" text |
+| a same-value entry whose stamp is copy C's current value; C rotates twice before merging; merge | silent: its stamp is in `S(M)` |
+| the same, but the two rotations run on the merged record | it warns after the second rotation |
+| an entry that is also the previous value | silent; `conflicts` lists it ` (same value as the previous value)`; not counted as open; no `Conflict` in `names --json` |
 | B clears `a`; A's copy, still holding `a` current, folds on A | no conflict warning on A |
 | A's current `a` against B's entry acknowledged on B | open on A (warning shown), acknowledged on B (none) |
 | 9 acknowledgements of one entry, the 8 kept all from other machines | open on the writer's machine, acknowledged elsewhere |
@@ -506,6 +526,8 @@ Tests, `TswapTests/ConflictWarningTests.cs` (`FleetMachine` A and B sharing a fo
 | a tombstone with an entry, `names` | the summary names `x (deleted)` |
 | the fold of a conflict on a `run` | the full warning instead of the copy's `Note:`; a copy that lost nothing keeps its note, with the name |
 | a newer-format lineage | the R8 warning once |
+| a newer-format `0x0103` on the input with the **smaller** write stamp, format 1 on the other | the whole-list rule for the whole merge; nothing set aside; the R8 warning once |
+| merged `ValueLineage` position: the chosen list has `Fields` then `ValueLineage`; has neither | kept in place; appended `Fields` then `ValueLineage` (R13) |
 | an entry without a set, `redact` | refused as "not fully fingerprinted" |
 | the child of `run` prints an entry's value (not used as a token) | `[REDACTED: x:discarded]` |
 
@@ -572,7 +594,7 @@ false, `Description` `List values a merge set aside, without the values; --ack q
   `(acknowledged <time>, machine c7cad1d5, by owner)` (`, by …` only with a label; the newest acknowledgement),
   `(open: its retirement may have been forgotten)`; before it, in order: ` [TOTP]` or ` [OTPAUTH: unusable]` by kind,
   ` [BURNED 2026-11-15T09:12:00Z: <reason>]` (`: <reason>` only with one), ` [not fingerprinted]`,
-  ` (same value as the current value)` / `previous value`. A tombstone: header `x (deleted)`, no `current` line. Then
+  ` (same value as the current value)` / `previous value` / ` (replaced knowingly by a later value)` for `"superseded"`. A tombstone: header `x (deleted)`, no `current` line. Then
   `N open conflict(s).` (`1 open conflict.`, `2 open conflicts.`; open = `Warns`), then the four hint lines of the
   design §1.9 naming the secret when one is listed, `NAME` otherwise. None: `No value conflicts.` / `No value conflicts for 'x'.`;
   a name with no record, or a tombstone without entries: `Secret 'x' not found` (exit 1).
