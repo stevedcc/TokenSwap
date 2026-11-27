@@ -20,6 +20,12 @@ namespace TswapCore.Broker;
 /// never buffers the body. Matches are leftmost, longest form first, and replaced by
 /// <c>[REDACTED]</c>.
 /// </para>
+/// <para>
+/// Brief T63 (#417): each break in a form (<c>\r\n</c>, <c>\n</c> or a lone <c>\r</c>) matches any break in the
+/// output, in any mix, at least as broadly as <c>redact</c> and <c>run</c> match line endings
+/// (<see cref="MatchLength"/>). Every form's spelling with each break as <c>\r\n</c> is listed too, so the longest form
+/// is the longest possible match and the window stays the longest form's length minus one.
+/// </para>
 /// </summary>
 public sealed class BrokerRedactor
 {
@@ -37,7 +43,7 @@ public sealed class BrokerRedactor
     {
         _forms = forms;
         foreach (var f in forms)
-            _firstByte[f[0]] = true;
+            MarkFirstBytes(f, _firstByte);
         Window = forms.Length == 0 ? 0 : forms[0].Length - 1;
         _carry = new byte[Window];
     }
@@ -102,6 +108,10 @@ public sealed class BrokerRedactor
     /// <summary>
     /// The forms <see cref="ForSecret"/> lists for one spelling of the value, in the order they are first
     /// produced (no duplicates; not yet sorted longest first).
+    /// Brief T63 (#417): each break in a form (<c>\r\n</c>, <c>\n</c> or a lone <c>\r</c>) matches any break in the
+    /// output, in any mix, at least as broadly as <c>redact</c> and <c>run</c> match line endings. The list ends with the
+    /// CRLF spelling (every break written <c>\r\n</c>) of every form holding a one-byte break: never needed to match,
+    /// it makes the longest form the longest possible match (<see cref="MaxMatchLength"/>), so the window holds every match.
     /// </summary>
     internal static List<byte[]> FormsOf(ReadOnlySpan<byte> secret, string? basicUser)
     {
@@ -201,7 +211,104 @@ public sealed class BrokerRedactor
             AddText(json.Replace("/", "\\/"));
         }
 
+        // Brief T63 (#417): the CRLF spelling of every form with a one-byte break, so no match is longer than the
+        // longest form.
+        foreach (var f in forms.ToArray())
+        {
+            if (MaxMatchLength(f) != f.Length)
+                Add(CrLfSpelling(f));
+        }
+
         return forms;
+    }
+
+    /// <summary>Brief T63: the length of the line break at <paramref name="at"/> (2 for <c>\r\n</c>, 1 for a lone <c>\r</c> or a <c>\n</c>), or 0.</summary>
+    private static int BreakAt(ReadOnlySpan<byte> bytes, int at) => bytes[at] switch
+    {
+        (byte)'\r' => at + 1 < bytes.Length && bytes[at + 1] == (byte)'\n' ? 2 : 1,
+        (byte)'\n' => 1,
+        _ => 0,
+    };
+
+    /// <summary>Brief T63: <paramref name="form"/> with every line break written <c>\r\n</c>.</summary>
+    private static byte[] CrLfSpelling(ReadOnlySpan<byte> form)
+    {
+        var spelled = new byte[MaxMatchLength(form)];
+        var n = 0;
+        for (var i = 0; i < form.Length;)
+        {
+            if (BreakAt(form, i) is var b and > 0)
+            {
+                spelled[n++] = (byte)'\r';
+                spelled[n++] = (byte)'\n';
+                i += b;
+            }
+            else
+            {
+                spelled[n++] = form[i++];
+            }
+        }
+        return spelled;
+    }
+
+    /// <summary>
+    /// Brief T63 (#417): the data bytes <paramref name="form"/> matches at <paramref name="at"/>, or 0 when it doesn't
+    /// match there or runs past the end of <paramref name="data"/>. A line break of the form (<c>\r\n</c>, a lone
+    /// <c>\r</c>, or a <c>\n</c>) matches any line break of the data, consuming two or one bytes on each side as found
+    /// (a data <c>\r\n</c> is taken whole when both bytes are there; a <c>\r</c> at the data's end is a lone
+    /// <c>\r</c>); every other byte matches only itself.
+    /// </summary>
+    internal static int MatchLength(ReadOnlySpan<byte> form, ReadOnlySpan<byte> data, int at)
+    {
+        var d = at;
+        for (var f = 0; f < form.Length;)
+        {
+            if (d >= data.Length)
+                return 0;
+            if (BreakAt(form, f) is var fb and > 0)
+            {
+                if (BreakAt(data, d) is not (var db and > 0))
+                    return 0;
+                f += fb;
+                d += db;
+            }
+            else
+            {
+                if (data[d] != form[f])
+                    return 0;
+                f++;
+                d++;
+            }
+        }
+        return d - at;
+    }
+
+    /// <summary>Brief T63 (#417): the most data bytes <paramref name="form"/> can match: its length plus one per one-byte break.</summary>
+    internal static int MaxMatchLength(ReadOnlySpan<byte> form)
+    {
+        var length = form.Length;
+        for (var i = 0; i < form.Length;)
+        {
+            var b = BreakAt(form, i);
+            if (b == 1)
+                length++;
+            i += Math.Max(b, 1);
+        }
+        return length;
+    }
+
+    /// <summary>Brief T63 (#417): marks the bytes a match of <paramref name="form"/> can start with (both <c>\r</c> and <c>\n</c> for a form starting with a break).</summary>
+    internal static void MarkFirstBytes(ReadOnlySpan<byte> form, bool[] table)
+    {
+        if (BreakAt(form, 0) > 0)
+        {
+            table['\r'] = true;
+            table['\n'] = true;
+        }
+        else
+        {
+            table[form[0]] = true;
+        }
     }
 
     private static string LowerHexEscapes(string s) =>
@@ -239,12 +346,15 @@ public sealed class BrokerRedactor
         return -1;
     }
 
-    /// <summary>The length of the longest form at <paramref name="i"/> that fits in <paramref name="data"/>, or 0.</summary>
+    /// <summary>
+    /// The data bytes the first form (longest first) that matches at <paramref name="i"/> within <paramref name="data"/>
+    /// covers, or 0; brief T63: any line break matches any line break (<see cref="MatchLength"/>).
+    /// </summary>
     private int MatchAt(ReadOnlySpan<byte> data, int i)
     {
         foreach (var form in _forms)
-            if (i + form.Length <= data.Length && data.Slice(i, form.Length).SequenceEqual(form))
-                return form.Length;
+            if (MatchLength(form, data, i) is var length and > 0)
+                return length;
         return 0;
     }
 

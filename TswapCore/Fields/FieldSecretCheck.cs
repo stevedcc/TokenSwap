@@ -11,7 +11,8 @@ namespace TswapCore.Fields;
 /// secret, burned ones included; a tombstone has none, so a deleted secret's value is not checked).
 /// Values are normalised (<see cref="FieldRules.NormaliseValue"/>) here, before every scan, so a
 /// caller can't scan a spelling that differs from the one stored; the value as given is scanned too
-/// when it differs, since secret values are stored unnormalised. No message here names the secret that
+/// when it differs, since secret values are stored unnormalised. Each is also scanned with its line breaks
+/// written as LF, CRLF and CR (brief T63, #412), so a multi-line value is found whatever its breaks. No message here names the secret that
 /// matched; <see cref="Holders"/> lists them for <c>field adopt</c> alone, which runs under sudo (brief T56).
 /// </summary>
 public static class FieldSecretCheck
@@ -25,7 +26,8 @@ public static class FieldSecretCheck
 
     /// <summary>
     /// The refusal for field <paramref name="field"/> of secret <paramref name="name"/> when
-    /// <paramref name="value"/> (scanned in its NFC form and as given) contains a value of
+    /// <paramref name="value"/> (scanned in its NFC form and as given, each also with its line breaks written as LF,
+    /// CRLF and CR, brief T63, #412) contains a value of
     /// <paramref name="stored"/> or of <paramref name="sameWrite"/> (the value written in the same
     /// call, for <c>create</c>, <c>ingest</c>, <c>add</c>, <c>rotate</c>); otherwise null.
     /// </summary>
@@ -41,7 +43,8 @@ public static class FieldSecretCheck
 
     /// <summary>
     /// Every secret whose stored value <paramref name="value"/> contains (scanned as <see cref="Contains"/> scans:
-    /// NFC and as given), distinct by name, ordered by name (ordinal); <see cref="SecretHolder.PreviousOnly"/> when
+    /// in its NFC form and as given, each also with its line breaks written as LF, CRLF and CR, brief T63, #412),
+    /// distinct by name, ordered by name (ordinal); <see cref="SecretHolder.PreviousOnly"/> when
     /// every hit on that name is a previous value. Brief T56 (#395): only <c>field adopt</c>, which runs under sudo,
     /// names these; no value is in the result.
     /// </summary>
@@ -49,10 +52,7 @@ public static class FieldSecretCheck
     {
         ArgumentNullException.ThrowIfNull(stored);
         ArgumentNullException.ThrowIfNull(value);
-        var normalised = FieldRules.NormaliseValue(value);
-        IEnumerable<FingerprintHit> hits = stored.Scan(normalised);
-        if (!string.Equals(normalised, value, StringComparison.Ordinal))
-            hits = hits.Concat(stored.Scan(value));
+        var hits = Spellings(value).SelectMany(spelling => stored.Scan(spelling));
         return
         [
             .. hits
@@ -76,7 +76,8 @@ public static class FieldSecretCheck
 
     /// <summary>
     /// Every live field of every live secret in <paramref name="view"/> whose value (in its NFC form
-    /// or as stored) contains a value of <paramref name="newValue"/>, as <c>NAME.FIELD</c>, ordered by
+    /// or as stored, each also with its line breaks written as LF, CRLF and CR, brief T63, #412) contains a value of
+    /// <paramref name="newValue"/>, as <c>NAME.FIELD</c>, ordered by
     /// name, then field (ordinal): the value commands' warning names these, never the value. Reads
     /// metadata only: the view's loaded metadata, as <see cref="VaultView.BuildIndex"/> does (loaded
     /// with <see cref="FormatTwoRecords.Skip"/> when nothing is, so a record that still has a format 2
@@ -103,13 +104,31 @@ public static class FieldSecretCheck
 
     /// <summary>
     /// True when <paramref name="text"/> contains a value of <paramref name="index"/>, in its NFC
-    /// form (as a field is stored) or as given. Secret values are stored as given, not normalised, so
-    /// a value in decomposed form is only found in the same form.
+    /// form (as a field is stored) or as given, each also with its line breaks written as LF, CRLF and CR (brief T63,
+    /// #412). Secret values are stored as given, not normalised, so a value in decomposed form is only found in the same
+    /// form.
     /// </summary>
-    private static bool Contains(FingerprintIndex index, string text)
+    private static bool Contains(FingerprintIndex index, string text) =>
+        Spellings(text).Any(spelling => index.Scan(spelling).Count > 0);
+
+    /// <summary>
+    /// Brief T63 (#412): the spellings of <paramref name="text"/> that are scanned: its NFC form and the text as given
+    /// (when it differs), each as it is and with every line break (<c>\r\n</c>, a lone <c>\r</c>, a <c>\n</c>) written
+    /// as LF, CRLF and CR; distinct (ordinal). A stored value whose breaks are all one kind is found whatever mix the text
+    /// has.
+    /// </summary>
+    private static IEnumerable<string> Spellings(string text)
     {
         var normalised = FieldRules.NormaliseValue(text);
-        return index.Scan(normalised).Count > 0
-            || (!string.Equals(normalised, text, StringComparison.Ordinal) && index.Scan(text).Count > 0);
+        string[] forms = string.Equals(normalised, text, StringComparison.Ordinal) ? [normalised] : [normalised, text];
+        return forms
+            .SelectMany(static form => new[]
+            {
+                form,
+                LineEndingViews.WithLineBreaks(form, "\n"),
+                LineEndingViews.WithLineBreaks(form, "\r\n"),
+                LineEndingViews.WithLineBreaks(form, "\r"),
+            })
+            .Distinct(StringComparer.Ordinal);
     }
 }

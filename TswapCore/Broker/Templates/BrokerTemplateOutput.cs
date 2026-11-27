@@ -14,7 +14,9 @@ namespace TswapCore.Broker.Templates;
 /// the held-back window is dropped at the cut, never flushed, so no fragment of a secret that the
 /// cut separated from its end can leak.</item>
 /// </list>
-/// Nothing is buffered beyond the window (longest form − 1 bytes).
+/// Nothing is buffered beyond the window (longest form − 1 bytes). Brief T63 (#417): a line break in a form
+/// (<c>\r\n</c>, <c>\n</c> or a lone <c>\r</c>) matches any line break in the output, in any mix; the forms include
+/// their CRLF spellings, so the window still holds every match.
 /// </summary>
 public sealed class BrokerTemplateOutput
 {
@@ -43,7 +45,7 @@ public sealed class BrokerTemplateOutput
         }
         _forms = [.. forms.OrderByDescending(f => f.Length)];
         foreach (var f in _forms)
-            _firstByte[f[0]] = true;
+            BrokerRedactor.MarkFirstBytes(f, _firstByte);
         _window = _forms.Length == 0 ? 0 : _forms[0].Length - 1;
         _max = maxBytes;
         _emit = emit;
@@ -142,11 +144,15 @@ public sealed class BrokerTemplateOutput
         _carryKinds = [];
     }
 
+    /// <summary>
+    /// The data bytes the first form (longest first) that matches at <paramref name="i"/> covers, or 0; brief T63 (#417):
+    /// any line break matches any line break (<see cref="BrokerRedactor.MatchLength"/>).
+    /// </summary>
     private int MatchAt(ReadOnlySpan<byte> data, int i)
     {
         foreach (var form in _forms)
-            if (i + form.Length <= data.Length && data.Slice(i, form.Length).SequenceEqual(form))
-                return form.Length;
+            if (BrokerRedactor.MatchLength(form, data, i) is var length and > 0)
+                return length;
         return 0;
     }
 

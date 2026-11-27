@@ -78,6 +78,36 @@ internal static class LineEndingViews
         return m;
     }
 
+    /// <summary>
+    /// Brief T63 (#412): <paramref name="text"/> with every line break (<c>\r\n</c>, a lone <c>\r</c>, a bare
+    /// <c>\n</c>, in any mix) written as <paramref name="lineBreak"/>. For checks that compare whole spellings (the field
+    /// check), not for the views above, which keep their span maps and T50a's two endings.
+    /// </summary>
+    internal static string WithLineBreaks(string text, string lineBreak)
+    {
+        if (text.AsSpan().IndexOfAny('\r', '\n') < 0)
+            return text;
+        var sb = new System.Text.StringBuilder(text.Length + lineBreak.Length);
+        for (var i = 0; i < text.Length; i++)
+        {
+            switch (text[i])
+            {
+                case '\r':
+                    if (i + 1 < text.Length && text[i + 1] == '\n')
+                        i++;
+                    sb.Append(lineBreak);
+                    break;
+                case '\n':
+                    sb.Append(lineBreak);
+                    break;
+                default:
+                    sb.Append(text[i]);
+                    break;
+            }
+        }
+        return sb.ToString();
+    }
+
     private static int NextLf(ReadOnlySpan<char> text, int from)
     {
         var next = text[(from + 1)..].IndexOf('\n');

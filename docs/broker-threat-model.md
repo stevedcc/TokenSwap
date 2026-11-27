@@ -37,6 +37,8 @@ first):
 - the shapes common tools print the value alone in: its base64 wrapped at 76 columns (GNU
   `base64`; LF and CRLF) and at 64 (`openssl base64`), hex with a space between bytes (`od -An
   -tx1`, `xxd -g1`, within one line, upper and lower case) and plain hex wrapped at 60 (`xxd -p`).
+- since 0.3.3, each line break in any of these (`\r\n`, `\n` or a lone `\r`) matches any line break
+  in the output, in any mix.
 
 **The encoded forms (percent, JSON) are built from the value as UTF-8 text.** A secret that isn't
 valid UTF-8 is redacted in its raw, hex and base64 forms; a byte-accurate percent or JSON escape
@@ -49,8 +51,9 @@ a line). Anything else that re-encodes the value (compression, encryption, rever
 too; that is what "best-effort" means.
 
 The redactor holds back a sliding window of (longest form − 1) bytes between chunks and flushes
-it at the end; it never buffers a body. That window is roughly 100 to 200 bytes (the wrapped base64
-form of a long value is the longest), so a stream of small
+it at the end; it never buffers a body. That window is roughly 100 to 200 bytes (the spaced-hex
+form of a long value is the longest; each form's spelling with every line break as `\r\n` is listed
+as a form), so a stream of small
 pieces (server-sent events from a model API, a progress feed) reaches the client up to that many
 bytes late: each piece arrives once more data follows it, or at the end. Response headers are
 never held back. A response with any `Content-Encoding` other than

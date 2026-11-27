@@ -90,8 +90,8 @@ public sealed class SecretMatcher(FingerprintIndex index, IReadOnlySet<string> b
     /// <summary>
     /// <c>tocomment</c>: every recognised value (with its quotes and an existing marker) replaced by
     /// <c>""  # tswap: name</c>, line by line, where it is a whole value <c>apply</c> fills back (brief T50b), and
-    /// the base64-looking continuation lines of a replaced value removed. Returns the content (LF) and every
-    /// changed line.
+    /// the base64-looking continuation lines of a replaced value removed, or commented out when it holds a stored value
+    /// (brief T63, #419). Returns the content (LF) and every changed line.
     /// </summary>
     public (string Content, IReadOnlyList<LineDiff> Changes) ToComment(string content)
     {
@@ -128,6 +128,12 @@ public sealed class SecretMatcher(FingerprintIndex index, IReadOnlySet<string> b
     /// block T20 adopted, otherwise left (reported over its lines unless a replacement overlaps it) while its lines go
     /// through the line path.
     /// </para>
+    /// <para>
+    /// The base64-looking continuation lines of a replaced value are removed, or commented out when it holds a stored
+    /// value (brief T63, #419): <c># </c> after the line's indentation, a <see cref="CommentedLineDiff"/> and a
+    /// <see cref="SkippedReason.ContinuationLine"/> per token; in block-scalar content such a line stays as it is
+    /// (<see cref="SkippedReason.InBlockScalar"/>).
+    /// </para>
     /// </summary>
     public ToCommentReport ToCommentReport(string content)
     {
@@ -150,6 +156,9 @@ public sealed class SecretMatcher(FingerprintIndex index, IReadOnlySet<string> b
         SortedSet<string> replacedNames = new(StringComparer.Ordinal);
         HashSet<int> linesToRemove = [];
         HashSet<int> mergedLines = [];
+        // Brief T63 (#419): continuation lines kept because they hold a stored value (commented out, or as they are in
+        // block content); already reported, so the main loop leaves them alone.
+        HashSet<int> keptContinuations = [];
         for (var i = 0; i < lines.Length; i++)
         {
             var multi = startingAt.GetValueOrDefault(i);
@@ -161,6 +170,8 @@ public sealed class SecretMatcher(FingerprintIndex index, IReadOnlySet<string> b
                     left.Add((multi, BlockReason(multi, blockContent)));
                 continue;
             }
+            if (keptContinuations.Contains(i))
+                continue;
             var original = lines[i];
             if (multi is not null)
             {
@@ -236,6 +247,24 @@ public sealed class SecretMatcher(FingerprintIndex index, IReadOnlySet<string> b
                 // Brief T22: a content line holding an encoded occurrence stays (and is reported in its turn).
                 if (blockContent[j] && SelectToComment(lines[j]) is var (t, r) && EncodedTokens([.. t.Values, .. r]) is [_, ..])
                     break;
+                // Brief T63 (#419): a line holding a stored value (any variant, any position) is never removed: in block
+                // content it stays as it is (and ends the run); otherwise it is commented out and the run goes on, so
+                // later filler lines of the same plain scalar still go and the file still parses.
+                if (TokensIn(lines[j]) is [_, ..] held)
+                {
+                    keptContinuations.Add(j);
+                    if (blockContent[j])
+                    {
+                        skipped.AddRange(held.Select(token => new SkippedValue(j + 1, j + 1, token, SkippedReason.InBlockScalar)));
+                        break;
+                    }
+                    var at = Indentation.LeadingWhitespace(lines[j]);
+                    var commented = lines[j][..at] + "# " + lines[j][at..];
+                    diffs.Add(new CommentedLineDiff(j + 1, lines[j], commented));
+                    lines[j] = commented;
+                    skipped.AddRange(held.Select(token => new SkippedValue(j + 1, j + 1, token, SkippedReason.ContinuationLine)));
+                    continue;
+                }
                 linesToRemove.Add(j);
                 diffs.Add(new LineDiff(j + 1, lines[j], ""));
             }
@@ -251,6 +280,14 @@ public sealed class SecretMatcher(FingerprintIndex index, IReadOnlySet<string> b
         return new ToCommentReport(string.Join('\n', lines.Where((_, i) => !linesToRemove.Contains(i))), diffs, unreplaced,
             ordered, [.. replacedNames]);
     }
+
+    /// <summary>
+    /// Brief T63 (#419): the distinct tokens (<c>name</c> or <c>name:previous</c>) of every hit on <paramref name="line"/>:
+    /// every variant kind, burned ones too, no token-boundary or whole-value rule. One line holds no line break, so its raw
+    /// scan is all its views.
+    /// </summary>
+    private List<string> TokensIn(string line) =>
+        [.. index.Scan(line).Select(static hit => hit.IsPrevious ? hit.Name + SecretsDb.PreviousSuffix : hit.Name).Distinct(StringComparer.Ordinal)];
 
     /// <summary>
     /// Brief T50b: the rejected spans to report: not overlapped by a taken one, and one per occurrence (a rejected span
