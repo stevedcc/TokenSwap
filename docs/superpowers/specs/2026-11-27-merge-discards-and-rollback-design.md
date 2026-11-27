@@ -418,6 +418,14 @@ list from the T60 and T61 writers (`~/RiderProjects/tswap-wt/tools/design-record
    the stale `--verbose` mentions are gone (T61 R-3); §2.9 names `docs/security-model.md` only (there is no backup
    section in `docs/setup.md`); the 65-entries row has `burn` written; the clean `names --json` row is T60's.
 
+## Amendments (round 11)
+
+Edits only, from the T60 and T61 brief reviews (`~/RiderProjects/tswap-wt/tools/design-records-pending-fixes.md`,
+after round 10): the `S`-cap rows corrected (65 rotations give no entry, A's `S` = {`x`, `v1`…`v63`} still holding `x`;
+66 give the entry; the old "63 and 62, under the cap" row reached the caps and becomes 30 + 30, no entry in any
+order); a row that the 64 KiB cap still binds `burn`; §1.4 rule 3 states the tied-winner `asOf` when none is exact
+(T60 R15); Appendix A's `delete` line for an R2 record, which can't lead to `delete` (the record is gone).
+
 ## Intent and why
 
 Both issues are about the per-record store losing data **without saying so clearly**.
@@ -732,7 +740,9 @@ discardedCount    1   0..255 decoded; 64 is a write cap (T60 R6), then per entry
      plaintext with holdings whose plaintext is in hand; against an entry it is a holding without a set (T60 R2).
 3. `asOf` and `exactFrom`: the winner's, unchanged, when the winner has the extension; `Stamp.Zero` for both when
    it has none. Copies tied at the winning version (`RecordMerge.cs:119-120` takes `tied[0]`) are taken as a set: the
-   lineage is exact if any tied copy's is exact at `W.Version`, and `exactFrom` is the smallest (round 8, Claude 2). **A merge never refreshes `asOf`** (amendment 3): only a value write or delete by this release does
+   lineage is exact if any tied copy's is exact at `W.Version`, `exactFrom` then the smallest among the exact ones;
+   with none exact, `asOf` and `exactFrom` are the smallest among the tied copies' lineages (both `Stamp.Zero` when
+   none has one) (round 8, Claude 2; round 11, T60 R15). **A merge never refreshes `asOf`** (amendment 3): only a value write or delete by this release does
    (§1.5). So exactness is decided at each merge from the winner alone: exact iff the winner has the extension
    **and** `asOf == W.Version`. "Has the extension" is not enough: 0.3.x keeps the extension byte for byte on its own
    value writes (`RecordWrites.NewVersion`, `TswapCore/Keyring/RecordWrites.cs:93` through `FieldEdits.ForWrite`; v0.3.0
@@ -852,7 +862,7 @@ current `a`, written after a burn; `Z` = a copy where a person ran `--clear`: `T
 | `X'`, `Y`, `Z` | all at once and the six orders | the same: no entry `a`; identical bytes |
 | `X`, `Y` (no clear) | all at once and both orders | entry `a` kept (claim 2: demotion doesn't remove it; `Y`'s `a` is in `R` and isn't created twice) |
 | `X'`, `Y` (no clear) | all at once and both orders | entry `a` kept (`S` never removes an entry) |
-| past the `S` cap (MiMo r6): A rotated 65 times from `x` (its `S` still holds `x`), B rotated 64 more after syncing A (its `S` doesn't), H frozen at `x` | all at once; ((A, H), B) | all at once: entry `x` (as the "copy 65 behind" row); ((A, H), B): no entry, the first step's `S` excluded `x`. The precondition is not met: the documented order-dependent miss |
+| past the `S` cap (MiMo r6): A rotated 65 times from `x` (its `S` still holds `x`), B rotated 64 more after syncing A (its `S` doesn't), H frozen at `x` | all at once; ((A, H), B) | all at once: entry `x` (as the "copy 66 behind" row); ((A, H), B): no entry, the first step's `S` excluded `x`. The precondition is not met: the documented order-dependent miss |
 
 **Worked through: GLM's round 2 C-1 shapes.** A rotates to `a` offline; B rotates to `c`, folds A's copy (entry `a`);
 C syncs with B (C may acknowledge `a`); then B runs `--clear` (`T` ∋ `a`) or `delete` (a tombstone that retires `a`
@@ -1555,9 +1565,10 @@ with a parity test over random states like `RecordWrites_MatchNextRecord_OnRando
 | A deletes after seeing `v1`; B holds `v1` | tombstone, no entry |
 | A deletes; B rotates concurrently; delete later | tombstone with B's value as an entry (owner decision 1) |
 | A and B create the same name | one entry |
-| 65 rotations on one machine, then a merge with a copy 65 behind | that copy's value is an entry (the cap's documented effect, an accepted exception in the anti-goals) |
+| 65 rotations on one machine, then a merge with a copy 65 behind | no entry: A's `S` = {`x`, `v1`…`v63`} still holds `x` (round 11) |
+| 66 rotations on one machine, then a merge with a copy 66 behind | that copy's value is an entry: `x` fell out of the 64-stamp `S` (the cap's documented effect, an accepted exception in the anti-goals) |
 | MiMo's r6 three-copy construction past the `S` cap (A 65 rotations from `x`, B 64 more, H frozen at `x`): all at once, and ((A, H), B) | all at once: entry `x`; ((A, H), B): no entry. Pins the documented order-dependent miss (round 7 amendment 1) |
-| the same with 63 and 62 rotations (under the cap): all at once and both orders | entry `x` in every order |
+| under the cap: A 30 rotations from `x`, B 30 more after syncing A, H frozen at `x`: all at once and every pairwise order | no entry in any order (`x` in `S` at every step; round 11) |
 | 65 retirements on one record, then a stale copy whose entry of the first retired stamp is acknowledged | the entry back, shown open at or below `forgotten`, the §1.8 warning shown (round 7 amendment 2) |
 | `forgotten` after the same 65 retirements merged pairwise in every order and all at once | equal |
 | a silent entry `e` (its stamp is copy `C`'s current value, equal in value to the merged current); **`C`** rotates twice before merging; merge | still silent: `e` is in `C`'s `S`, so in `S(M)` (round 8 model 2) |
@@ -1576,6 +1587,7 @@ with a parity test over random states like `RecordWrites_MatchNextRecord_OnRando
 | a newer-format lineage on one copy, through both merge paths and through a rotate, a burn and a field set (MiMo r7 I-3 (b)) | merge: whole-list, nothing set aside, the warning once; rotate refused with the newer-lineage text; burn and field set keep it byte for byte |
 | the 65th `--clear` on one record (a write capping `T`) | `forgotten` raised by the write (MiMo r7 I-3 (c)) |
 | `burn` on a record holding 65 entries in memory | written (exempt from the entry cap, MiMo M-8) |
+| `burn` on a record whose entries pass 64 KiB | refused with the cap text: the 64 KiB still binds `burn` (round 11) |
 | an all-zero lineage after `burn` on a record with none | no extension written (T60 R7) |
 | `--by` of 64 characters and more than 255 UTF-8 bytes | refused with the byte text (T60 R5) |
 | 65 entries | the record readable; a write refused with the cap text; `conflicts --clear` and `restore --discarded` work |
@@ -1877,8 +1889,10 @@ first name, exit 1, nothing written:
   warning above), so writing it could undo a change made elsewhere, such as a delete or a burn. Repair it first: 'sudo
   tswap vault merge <a newer copy>', or 'sudo tswap vault accept-rollback <name>' to accept that it is gone. Nothing was
   written.`
-- for `delete`, before `Nothing was written.`: `To delete it anyway, accept its current state first: 'sudo tswap vault
-  accept-rollback <name> && sudo tswap delete <name>'.`
+- for `delete` on an `Older` record, before `Nothing was written.`: `To delete it anyway, accept its current state
+  first: 'sudo tswap vault accept-rollback <name> && sudo tswap delete <name>'.` On a `Missing` record (R2) there is
+  nothing left to delete: `It is already gone from the vault folder: accept that with 'sudo tswap vault
+  accept-rollback <name>'; there is nothing to delete.` (round 11)
 - when the record is also at the entry cap, before `Nothing was written.`: `Because it also holds as many set-aside
   values as a record can store, repair it in this order: 'sudo tswap vault accept-rollback <name>', then 'sudo tswap
   conflicts --clear <name>', then 'sudo tswap vault merge <a newer copy>' if one exists.` The same sentence is
