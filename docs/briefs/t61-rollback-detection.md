@@ -1,8 +1,8 @@
 # Brief T61: notice records and keyring slots rolled back to an older copy (#197)
 
 Issue: https://github.com/stevedcc/TokenSwap/issues/197. Milestone 0.3.3. Design: Part 2 of
-`docs/superpowers/specs/2026-11-27-merge-discards-and-rollback-design.md` at **2f1ed12** (branch `design/records-033`;
-still under review, GLM round 3 pending: if the design moves after 2f1ed12, stop and ask which wins). Its body is
+`docs/superpowers/specs/2026-11-27-merge-discards-and-rollback-design.md` at **6262c2f** (branch `design/records-033`;
+if the design moves after 6262c2f, stop and ask which wins). Its body is
 authoritative where this brief is silent; this brief wins where it rules on something the design leaves open (the
 rulings are marked **R-n**).
 
@@ -77,6 +77,17 @@ and list it.
 - T60's test helpers for a "0.3.2-shaped" write (the extension dropped, or kept byte for byte with a stale `asOf`).
 
 If T60 as merged names any of these differently, use T60's names; if one is missing, stop and report.
+
+## Amendments (design round 10, 6262c2f)
+
+- A `seen-records` file whose content names another vault id than its file name is damaged (the damaged-file warning,
+  no floor): the JSON gains `"Vault"`, the 16 hex of the file name, and a mismatch gives the reason `it names another
+  vault (<16 hex>)` (Task 1, its rows).
+- A sync tool deleting a conflicted copy that had raised the floor, with no newer main file, is R1 until repaired by
+  `vault merge` or `accept-rollback`, not by waiting (design §2.4, DeepSeek M-6): a row in Task 2.
+- R-16 to R-18 are now the design's own (§2.5, §2.6, Tests); the design's Appendix A holds every text of this brief,
+  including the cap repair-order sentence, the reindex refusal, the `--file` usage error, R-17's accept line and the
+  "each other machine" sentence. The design no longer names `docs/setup.md`.
 
 ## Amendments (design rounds 8-9)
 
@@ -281,7 +292,7 @@ internal sealed class SeenState(string configDir, DirectoryOwnerMatcher owner, T
 ```
 
 The JSON (`System.Text.Json` through a source-generated context declared in this file, `SeenStateJsonContext`):
-`{"Format":1,"Records":{"<file>":{"Write":"…","Version":"…","Burn":"…","Deleted":true,"Discarded":[{"Stamp":"…","Burned":true}],"Retired":["…"]}}}`
+`{"Format":1,"Vault":"<16 hex>","Records":{"<file>":{"Write":"…","Version":"…","Burn":"…","Deleted":true,"Discarded":[{"Stamp":"…","Burned":true}],"Retired":["…"]}}}`
 (design §2.3); `Deleted`, `Burn`, `Discarded`, `Burned` and `Retired` omitted when false, null or empty. Written
 compact, keys in ordinal order, `Discarded` and `Retired` ascending by stamp, so equal floors give equal bytes. A stamp is `<ms>.<logical>@<32 hex>`: write it with
 `Hlc.ToString()` (`Hlc.cs:56-57`), `@`, `Convert.ToHexStringLower(origin)` (or T60's full-form formatter if it added
@@ -289,7 +300,8 @@ one: the same text).
 
 **Reading is strict, and anything else is "damaged"** (parser-first: this is our own format, read only by this code):
 options `AllowDuplicateProperties = false`, `UnmappedMemberHandling = Disallow`, case-sensitive names, no comments or
-trailing commas (the defaults). `Format` must be the number 1. A `Records` key must be exactly 64 characters of
+trailing commas (the defaults). `Format` must be the number 1, and `Vault` must equal the file name's 16 hex (a
+mismatch: `it names another vault (<16 hex>)`). A `Records` key must be exactly 64 characters of
 `[0-9a-f]`. A stamp must match `^[0-9]{1,19}\.[0-9]{1,10}@[0-9a-f]{32}$` with the milliseconds fitting a `long` and the
 logical part a `uint`. Two `Discarded` entries of one stamp, a stamp twice in `Retired`, a stamp in both lists, or
 `Write`/`Version` missing, are damaged. If
@@ -301,7 +313,8 @@ Texts (stderr, each at most once per command and file):
 - damaged: `Warning: <path> can't be read (<reason>); this machine starts tracking record versions again from now.`
   (for `seen-keyring`: `…; this machine starts tracking the keyring's slots again from now.`), reasons: `it is not
   valid JSON`, `its Format is <n>, not 1`, `record <file>'s <field> is not a stamp`, `a key is not a record file
-  name`, `it isn't a keyring this tswap reads (<codec message>)`, `it holds another vault's keyring`. Then a fresh
+  name`, `it isn't a keyring this tswap reads (<codec message>)`, `it holds another vault's keyring`, `it names another
+  vault (<16 hex>)`. Then a fresh
   baseline: the damaged file is overwritten at the next save.
 - notice (R-7): `Notice: this machine starts tracking record versions for this vault now; a record that was rolled
   back before now can't be detected.`
@@ -489,7 +502,8 @@ Tests (`RollbackDetectionTests`: `FleetMachine` A, B, C sharing or copying one v
 | a rolled-back record at 64 entries: `vault merge` (adds one), `conflicts --clear`; then `accept-rollback`, `--clear`, `vault merge` | the first two refused (cap, rollback), both with the order sentence; the sequence works |
 | `vault reindex` with an R1 record | the reindex refusal naming its file; nothing written |
 | a command on an unchanged vault | `seen-records` bytes and mtime unchanged |
-| `seen-records` missing; another vault id's file only; not JSON | baseline, no text / baseline, no text / the damaged warning; nothing refused |
+| `seen-records` missing; another vault id's file only; content naming another vault id; not JSON | baseline, no text / baseline, no text / the damaged warning, no floor / the damaged warning; nothing refused |
+| a sync tool deletes a conflicted copy that had raised the floor; no newer main arrives | R1 stays after waiting; `vault merge` of the writer's folder or `accept-rollback` clears it |
 | missing `seen-records`, `config.json` with `LastHlc` and no `VaultId` | the notice once; `VaultId` written; the next command prints nothing |
 | P1 (a store with `BeforeSeenSave`) loads metadata; the seam writes a floor with a larger `Write` and a smaller pair, then P1 saves | `Write` the larger; the pair whole from the larger version |
 | floor `(v10, burn t2)`; on disk `(v10, burn t1)` written in the seam | burn `t1` |
@@ -729,8 +743,7 @@ warns).
   `seen-records-*` reveals hashed record names with burn and conflict times to whoever reads the config folder;
   `seen-keyring-*` is a complete copy of the vault's keyring (0600, owner only), so a backup of the config folder holds
   the vault's wrapped key material. A resurrected deleted secret is still handed out by `run`, `get` and the broker,
-  with the warning. (The design also names `docs/setup.md`'s backup guidance; setup.md has none, so the sentence goes
-  here only.)
+  with the warning. (Only here: `docs/setup.md` has no backup section, and the design no longer names it.)
 - `AGENTS.md`: both commands in the "Requires sudo" list (`:123`).
 - `TswapCore/Prompt.cs`: under "Commands you must NEVER use" (`:79-97`): `- \`sudo %CMD% vault accept-rollback <name>\`
   - Keeps a rolled-back record as it is (human use only; ask the user)` and `- \`sudo %CMD% vault restore-slots\` -
