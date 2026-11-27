@@ -16,8 +16,9 @@ which test failed), `./runtests.sh --unit` after each task, the full `./runtests
 `ykman`, `sudo`, real YubiKeys or `~/.config/tswap`. Commits end with
 `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`, explicit-path commits, no push, merge or rebase; stop and
 report when the brief can't be built as written. **No existing test's assertion changes except the two Task 4 names**
-(`SignWindows_ReplacesTheArtifact`, `VerifyWindows_StepsInOrder`: #430 asks for exactly that change, and the
-controller sanctions it). Tasks 3 and 5 add assertions to existing tests and change none; if any other existing test
+(`SignWindows_ReplacesTheArtifact`, `VerifyWindows_StepsInOrder`: #430 asks for exactly that change). **That change is
+pending owner sanction, and Task 4 waits for it**: build Tasks 1, 2, 3 and 5 first, and start Task 4 only when the
+controller passes on the owner's yes. Tasks 3 and 5 add assertions to existing tests and change none; if any other existing test
 fails on an assertion, stop and list it.
 
 **One task per issue; each commit closes its issue** (`Closes #n` in the message), so each task carries its own docs.
@@ -47,7 +48,7 @@ it).
 ## What is wrong (evidence)
 
 - **#425.** See the table. On item 3: .NET 11.0.100 with `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1` returns
-  `"José".Normalize(FormD)` unchanged (length 4, checked by the brief writer), so such a machine computes no form
+  `"Jos\u00e9".Normalize(FormD)` unchanged (length 4, checked by the brief writer), so such a machine computes no form
   variant itself. But `redact`, `tocomment`, `run`'s masking of the vault (`FingerprintStreamMatcher`,
   `RunCommand.cs:311`) and the field check scan the **stored** fingerprint sets, and a set an ICU machine wrote holds
   the NFC and NFD entries; only what it computes from a value (a set it writes, `run`'s own tokens through
@@ -101,9 +102,9 @@ it).
 
   | Test | Setup | Outcome |
   |---|---|---|
-  | `PrepareV3_AnOrdinaryWrite_RecomputesAVersionTwoSetWithoutItsFormEntries` | a `SecretRecord` with value `café-value` whose `Fingerprints` is the base-only v2 set; `RecordVaultStore.PrepareV3(record, keys, recomputeOlderSets: false)` | result's `Fingerprints` equals `Fingerprints(_key, UTF8("café-value"))` (the full set) |
+  | `PrepareV3_AnOrdinaryWrite_RecomputesAVersionTwoSetWithoutItsFormEntries` | a `SecretRecord` with value `caf\u00e9-value` whose `Fingerprints` is the base-only v2 set; `RecordVaultStore.PrepareV3(record, keys, recomputeOlderSets: false)` | result's `Fingerprints` equals `Fingerprints(_key, Encoding.UTF8.GetBytes("caf\u00e9-value"))` (the full set) |
   | same test, an ASCII value `ascii-value` with its own (already full) set | same call | the set comes back unchanged (`Assert.Same`) |
-  | `Merge_AVersionTwoSetWithoutItsFormEntries_IsRecomputedHere` | `WriteMarker(_m)`; `_m` ingests `c` = `café-value`; `CopyVault(_m, _other)`; `_other` runs `ingest --rotate c` with `café-other`; on `_other`, rewrite `c`'s record with a base-only set for the current value (as the existing test does, `SecretRecordCodec.Encode(..., 3)`), standing in for a machine without ICU; then `_m` runs `vault merge <other vault>` | exit 0; `_m`'s record `c` has value `café-other` and `Fingerprints` equal to `Fingerprints(_key, UTF8("café-other"))` |
+  | `Merge_AVersionTwoSetWithoutItsFormEntries_IsRecomputedHere` | `WriteMarker(_m)`; `_m` ingests `c` = `caf\u00e9-value`; `CopyVault(_m, _other)`; `_other` runs `ingest --rotate c` with `caf\u00e9-other`; on `_other`, rewrite `c`'s record with a base-only set for the current value (as the existing test does, `SecretRecordCodec.Encode(..., 3)`), standing in for a machine without ICU; then `_m` runs `vault merge <other vault>` | exit 0; `_m`'s record `c` has value `caf\u00e9-other` and `Fingerprints` equal to `Fingerprints(_key, Encoding.UTF8.GetBytes("caf\u00e9-other"))` |
 
   Key test: the merge row. Break it once: in `PrepareV3`, gate the `LacksFormsOf` clause on `recomputeOlderSets`. Both
   the merge row and the first `PrepareV3` row must fail. If the merge row passes, the merge rebuilt the set some
@@ -256,11 +257,22 @@ In `DependencyPinningTests` only:
 - **Labels** (GLM M3):
   - Rename the row `export -n CI / printf -v CI` to `CI unexported or overwritten (export -n, +x, printf -v)`.
   - The class summary's row list names `+x`, `env -S`, and long options by any unambiguous prefix.
-  - The residual list keeps "shell quoting" (`--chdir "/My Dir"` and `bash -c "env -i"` stay residual).
+  - The residual list keeps "shell quoting" and names what it covers here: shell-quoted options (`env "-i" x`,
+    `--chdir "/My Dir"`, `bash -c "env -i"`) and shell line continuations (`env \` then `-i x` on the next line).
+    Both really empty the environment and stay residual.
+  - It adds one over-refusal line (fail closed): value-attached clusters (`env -ai x`, `env -Ci x`, where the `i` is
+    the value), `env -- -i x`, and an assignment before `-i` (`env FOO=1 -i x`: GNU env's `shortopts` start with
+    `+`, so getopt stops at the first `NAME=VALUE` and `-i` is the program). The `-0` rows (`env -0 -i x`) hit too,
+    although env refuses `-0` with a command.
+  - `EnvIgnoreEnvironment_FindsEachForm`'s summary becomes "Each spelling of `env`'s options this scan knows, one line
+    each."
 
 Break-it-once, one per assertion (GLM M2):
 
-- label every line `lock-files` in `JobOfEachLine`: only the new single-row assertion and the other-job sum fail;
+- in `ForceEvaluateOutsideLockFilesJob` only, treat every line as in `lock-files` (replace `jobs[line - 1]` with
+  `"lock-files"`; `JobOfEachLine` itself unchanged): the new single-row assertion and the other-job sum fail, and
+  nothing else. (Changing `JobOfEachLine` instead would also fail `LockFilesJob_ReResolvesAndComparesOnLinuxX64`'s
+  once-each assertion, since `JobLines(…, "lock-files")` would then hold every line of ci.yml.)
 - move `exit 1` after `fi` in a scratch copy of the job text: the adjacency assertion fails;
 - add a second `setup-dotnet` step to `lock-files`: the once-each assertion fails;
 - give `build-test-publish` a second `checkout` version: `BuildUses` fails;
@@ -293,7 +305,7 @@ and later digest updates may write a fuller version in the comment (as `actions/
   SHA without a comment or with another major, a quoted value, a trailing comment on the tag form, another action, an
   action path, `docker://`, `./`, and a commented-out line.
 
-Use it in the two tests (sanctioned; see the rules paragraph):
+Use it in the two tests (pending owner sanction; see the rules paragraph):
 
 - `SignWindows_ReplacesTheArtifact`: the two `Assert.Single(steps, …)` predicates become
   `step.Split('\n').Any(line => UsesAction(line, "actions/download-artifact", 4))` (and `upload-artifact`).
@@ -315,8 +327,11 @@ Use it in the two tests (sanctioned; see the rules paragraph):
 **The real check (key).** In the worktree, apply Renovate's rewrite to both workflows:
 `sed -E -i 's#(uses: [^ @]+)@(v[0-9]+)$#\1@0123456789abcdef0123456789abcdef01234567 \# \2#'
 .github/workflows/ci.yml .github/workflows/release.yml`. Then run `ReleasePackagingTests` and
-`DependencyPinningTests`: all pass. Restore the files (`git checkout -- .github/workflows`). Record the command and
-the totals in the commit message.
+`DependencyPinningTests`, then the whole unit suite (`./runtests.sh --unit`), all on the rewritten workflows: all pass.
+With the rewrite applied, also grep the whole test tree once (`grep -rnE 'uses:|@v[0-9]' TswapTests --include=*.cs`)
+and check that every hit is one this task handles, a prefix match (`softprops/action-gh-release@`, `actions/attest@`),
+the exact attest pin, or forbidden-form sample data in `DependencyPinningTests`. Restore the files
+(`git checkout -- .github/workflows`). Record the commands, the grep result and the totals in the commit message.
 
 - Break it once: with the rewritten workflows, make `UsesAction` accept only `@v{major}`. The two tests must fail.
 - If any other test fails on the rewritten workflows, fix it the same way if it is an exact `uses:` match. Otherwise
@@ -359,3 +374,19 @@ this merges.
 
 In your report, give one 0.3.3 release-note line per issue (#425, #427, #429, #430, #432), or "none" where the
 change is test-only.
+
+## Amendment history
+
+- **Round 1 (MiMo r1, ready to implement; controller rulings).**
+  - M1: Task 3's first break-it-once is scoped to `ForceEvaluateOutsideLockFilesJob`. The blunt `JobOfEachLine`
+    mutation would also fail the once-each assertion.
+  - M2: shell-quoted options and line continuations are named as residuals. The over-refusals (`-ai`, `-Ci`,
+    `env --`, an assignment before `-i`, `-0`) are named, and the theory summary is softened.
+  - M3: Task 4's real check also runs the whole unit suite and greps the test tree on the rewritten workflows.
+  - M4: the test bytes are written as `Encoding.UTF8.GetBytes`.
+  - Rulings:
+    - The #430 matcher widening is pending owner sanction, and Task 4 waits for it.
+    - The unclosed-quote R1 refusal stays.
+    - `|| true` after jq is #432's break (the controller notes it on the issue).
+    - The #426 brief adds its docs note.
+    - The owner approves Renovate's "Pin dependencies" item.
