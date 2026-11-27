@@ -14,7 +14,7 @@ with writes that would update a newer-format lineage refused; no kind byte (R3 m
 
 **Design round 10 (6262c2f), folded below:** the upgrade step, numbered, in the docs and the release-note lines; the
 caps' lifetime arithmetic in the docs; the `--clear` text and docs say a machine still holding the value as its current
-value loses it too (owner to confirm, design Decisions 4); a bare Base32 seed handed out as text, the v0.3.0
+value loses it too (confirmed by the owner on 2026-11-27, design Decisions 4); a bare Base32 seed handed out as text, the v0.3.0
 earlier-life leak, the export warning naming the lineage, `S` alone and format 2, the `names` metadata cost; the v0.3.2
 release check kept.
 
