@@ -1,8 +1,9 @@
 # Brief T61: notice records and keyring slots rolled back to an older copy (#197)
 
 Issue: https://github.com/stevedcc/TokenSwap/issues/197. Milestone 0.3.3. Design: Part 2 of
-`docs/superpowers/specs/2026-11-27-merge-discards-and-rollback-design.md` at **6262c2f** (branch `design/records-033`;
-if the design moves after 6262c2f, stop and ask which wins). Its body is
+`docs/superpowers/specs/2026-11-27-merge-discards-and-rollback-design.md` at **a286f1a** (branch `design/records-033`;
+it differs from 6262c2f, which rounds 8-10 below cite, only in Decisions item 4, confirmed by the owner; GLM round 3
+may still change it: if the design moves after a286f1a, stop and ask which wins). Its body is
 authoritative where this brief is silent; this brief wins where it rules on something the design leaves open (the
 rulings are marked **R-n**).
 
@@ -90,18 +91,32 @@ config folder, `MigrateToRecordsTests.cs:107-116` and `SecureEnclaveTouchChoiceT
   KiB). Drop some first with 'sudo tswap conflicts --clear x'. Nothing was written.` T61 adds the parenthetical: on a
   record whose check is `Older`, it inserts ` (on a rolled-back record, accept it first)` after the `--clear` command
   and appends the order sentence (Task 2).
-- **T60's 0.3.2-shaped write helper, named in T60's Interfaces block** (a test helper that writes a record as 0.3.2
-  would: the `0x0103` extension dropped, or kept byte for byte with a stale `AsOf`, and a 0.3.2-shaped fold that keeps
-  only the extension list of the copy with the largest write stamp). Every "0.3.2-shaped" row below uses it. **If
-  T60 as merged doesn't provide it, stop and report**; don't write one here.
+- **T60's 0.3.2-shaped test helpers** (T60 brief at 0a4d63a, "Interfaces T61 relies on"): `internal static class
+  Older032` in `TswapTests/Older032.cs`, which keeps `0x0101` and `0x0103` byte for byte and merges them by the
+  whole-list rule, as v0.3.2 does:
+  - `ValueWrite(SecretRecord? state, byte[] recordId, string name, byte[] value, Stamp version, DateTime created)`
+    (Write = version);
+  - `Burn(SecretRecord state, Stamp burn, string? reason)` (Write = burn);
+  - `Delete(SecretRecord state, Stamp version)` (drops only `Fields`);
+  - `MergeAll(IReadOnlyList<SecretRecord> inputs)` and `MergeAllMetadata(…)`, through T60's production option
+    `RecordMerge.MergeAll(inputs, LineageRule.WholeList)` (`internal enum LineageRule { Apply, WholeList }`);
+  - `Plant(FleetMachine machine, byte[] vaultKey, SecretRecord record, string? conflictSuffix = null)` (format 3, as the
+    main file or as `<hash><conflictSuffix>`).
+
+  The state to start from is `RecordVaultTestSupport.ReadRecord(machine, vaultKey, name)`
+  (`TswapTests/RecordVaultTestSupport.cs:71`). The helpers have no "write" step of their own, so a test that plays a
+  0.3.2 machine's **fold** does what v0.3.2's `WriteAll` does by hand: `merged with { Write = <a new stamp above every
+  input> }`, `Plant` it as the main file, and `File.Delete` the conflicted copies it folded. Every "0.3.2-shaped" row
+  below is built this way (the "How" column of Task 2's table says which calls). **If T60 as merged lacks any of
+  these members, stop and report**; don't write one here.
 
 If T60 as merged names any of these differently, use T60's names; if one is missing, stop and report.
 
 ## Amendments (brief round 2: MiMo r1, DeepSeek r1)
 
 - **Base** (controller): main after T60; merge origin/main before starting; synced at 686f1fe.
-- **I-1** (MiMo): the 0.3.2-shaped helpers are cited by role, as T60's deliverable in its Interfaces block, with a
-  stop-and-report if T60 lacks them (exact names to follow from T60's round 2).
+- **I-1** (MiMo): the 0.3.2-shaped helpers are now cited by name, from T60 at 0a4d63a (`Older032`, with T60's
+  `LineageRule`), with a stop-and-report if T60 as merged lacks them; each 0.3.2-shaped row says how it is built.
 - **I-2** (MiMo, verified at 686f1fe): the `ForgetSeenState` sanction is withdrawn; none of its four tests hand-writes an
   older record over a seen one (the evidence is quoted where the sanction was).
 - Taken: MiMo M-1 (`DiscardedValue.Burn != null`), M-2 (`MaxEntries`/`MaxEntryBytes`), M-3 (the rollback variant of
@@ -606,6 +621,26 @@ Tests (`RollbackDetectionTests`: `FleetMachine` A, B, C sharing or copying one v
 | `run` of another secret | no warning about `x` |
 | a `run` with `{{x}}` on an R1 record after `names` printed the summary | the full R1 text once |
 | every new text on a vault of inert markers | no marker, seed or URI on either stream, in any form `Redaction.Variants` lists |
+
+How the 0.3.2-shaped rows are built (`Older032`, T60 at 0a4d63a; `R(m, x)` = `RecordVaultTestSupport.ReadRecord(m,
+vaultKey, "x")`; "fold and write" = `Older032.MergeAll([...]) with { Write = <a new stamp of machine O, above every
+input> }`, `Older032.Plant(m, vaultKey, merged)`, then `File.Delete` each conflicted copy it folded; machine O is a
+0.3.2 machine with an origin of its own):
+
+| Row | Built with |
+|---|---|
+| an entry dropped by a 0.3.2-shaped merge | A's main holds entry `a` (written by this release); O's stale copy `s` (a state from before the conflict, no `0x0103`) is written again as `Older032.Burn(s, <stamp above A's write>)`; fold and write `[R(A, x), that copy]`: the whole-list rule takes O's list, so `a` is gone |
+| `conflicts --clear` on A, then a 0.3.2-shaped merge drops the lineage | the same fold and write after the clear; O's list has neither `a` nor `T` |
+| C acknowledged an entry; the record 0.3.2-shaped merged without it | the same, with C's floor holding the acknowledged entry |
+| a retired stamp brought back by a 0.3.2-shaped merge | B cleared `a` (B's main: `T` ∋ `a`); C's copy, which never saw the clear, still holds entry `a`; C plays O: `Older032.Burn(R(C, x), <stamp above B's write>)`; fold and write `[R(B, x), that copy]`: the result holds entry `a` and no `T` (T60's row "a clear on B … a 0.3.2-shaped merge keeps C's extension list" is the same build) |
+| a fold on A sets `a` aside in memory; a 0.3.2-shaped fold writes the merged state | the main file and its conflicted copy (A's `a`, B's `b`, neither with an entry) on disk; `names` on A (the in-memory fold); then fold and write `[main, copy]` as O |
+| the same, but A burns the record first | A's `burn x` persists entry `a`; then O's stale copy written again with `Older032.Burn` above A's write; fold and write `[R(A, x), that copy]` |
+
+Every row above can be built with `Older032` as T60 names it. Two things the helpers don't do, which the tests do by
+hand as stated: the new write stamp of a fold (v0.3.2's `WriteAll` restamps; `MergeAll` returns the inputs' largest)
+and the removal of the folded copies. No T61 row needs a 0.3.2 **format 2** write (the round 9 "drops the extension,
+entries and `T` together" case is documented in Task 5, not tested); if one is wanted, it needs a helper T60 doesn't
+list.
 
 Break-it-once: compare the main file instead of the merged state (the conflict row warns); treat a missing file with
 no copies as unchanged (the R2 rows are silent); let R4 accept a stamp through `S` instead of the retired list (the
