@@ -69,20 +69,39 @@ and list it.
   malformed lineage makes the record unreadable (T60), so T61 never sees one.
 - T60's write staging in `VaultWriter` for `conflicts --ack`, `conflicts --clear` and `restore --discarded`, and its
   `{{x:discarded}}` resolution with `ISecretLookup.IsBurnedToken` in `VaultView.cs`.
-- T60's entry-cap refusal (design §1.4: `Refused: 'x' holds more values a merge set aside than a record can store (64,
-  or 64 KiB). Drop some first with 'sudo tswap conflicts --clear x' (on a rolled-back record, accept it first). Nothing
-  was written.`) and its cap predicate.
+- T60's entry-cap refusal and its cap predicate. Per the design's round 8 ruling on T60's R11, T60 writes it without
+  the rollback parenthetical: `Refused: 'x' holds more values a merge set aside than a record can store (64, or 64
+  KiB). Drop some first with 'sudo tswap conflicts --clear x'. Nothing was written.` T61 adds the parenthetical: on a
+  record whose check is `Older`, it inserts ` (on a rolled-back record, accept it first)` after the `--clear` command
+  and appends the order sentence (Task 2).
 - T60's test helpers for a "0.3.2-shaped" write (the extension dropped, or kept byte for byte with a stale `asOf`).
 
 If T60 as merged names any of these differently, use T60's names; if one is missing, stop and report.
 
 ## Amendments (design rounds 8-9)
 
-- The `restore-slots` vault-id step is dropped (design round 8 model 8): Task 3's steps are renumbered, its row now
-  expects the "no record of slots" text, and a malformed `VaultId` is treated as absent everywhere. Every text here
-  matches the design's Appendix A as of 2f1ed12: R4 loses the "import of an export" cause (design round 8, Claude 4),
-  gains the "retired value back" text (the floor's `Retired` list, design §2.3, §2.4), and `restore-slots` handles a
-  `keyring` the codec refuses (design round 9, M-9).
+The design at 2f1ed12 folds R-1 to R-15 below in as its own rulings and changes the model. All of it is in the body
+below; this list says where.
+
+- The `restore-slots` vault-id step is dropped (round 8 model 8): Task 3's steps are renumbered, its row now expects
+  the "no record of slots" text, and a malformed `VaultId` is treated as absent everywhere. Every text here matches
+  the design's Appendix A: R4 loses the "import of an export" cause (round 8, Claude 4) and gains the "retired value
+  back" text; `restore-slots` handles a `keyring` the codec refuses (round 9, M-9).
+- **The floor takes only persisted entries** (round 8 model 1): `Discarded` and `Retired` rise only from entries and
+  retirements held in an authenticated file (a main file or a conflicted copy as loaded, or what this machine
+  commits), never from a fold's in-memory result (Task 1 `PersistedLineage`, Task 2).
+- **A floor `Retired` list, never pruned** (round 8 model 5): the stamps this machine saw in a record's `T` in an
+  authenticated file. An entry the record retires and no longer holds moves from `Discarded` to `Retired`; R4 warns
+  when a `Retired` stamp is an entry again, whoever merged it (Task 1).
+- **The floor pair is `(Version, Deleted, Burn)`** (R-1, now the design's §2.3).
+- **R1 is checked again at save** for the records a write commits, against the floor re-read then (round 8, Claude 8),
+  and **an R3 record raises nothing**, not even from its copies (round 8, Claude 5) (Task 2).
+- **Elevation words** (round 8, MiMo M-5): R-16 below.
+- **`KeyringSlotId` null** (round 8, Claude 13): the "differs" texts gain one sentence, and a lost own slot then shows
+  today's unwrap failure (Task 3).
+- **Documented limits** (Task 5): the mixed-version entry loss (round 9 amendment 1: anti-goals, §1.6, §2.8), the
+  plain-value rollback-then-stale-write case and the deleted copy whose fold failed (round 9, M-8), the burn
+  exception's lost incident record (round 8, Claude 7), R4 past the `T` cap (round 8, Claude 10).
 
 ## Rulings (where the design is open or contradicts the code)
 
@@ -132,7 +151,23 @@ If T60 as merged names any of these differently, use T60's names; if one is miss
 - **R-14, five tasks, not four.** The Briefs section's fourth task ("`accept-rollback` and docs") is split so the docs
   task is last and alone.
 - **R-15, R4 ignores `forgotten`.** A floor entry whose retirement was later pushed out of `T` by 64 more retirements,
-  on a machine that never saw the record in between, warns (the safe side). Not tested beyond the R4 rows.
+  on a machine that never saw the record in between, warns as gone (the safe side; design §2.4). Not tested beyond the
+  R4 rows.
+- **R-16, elevation words.** Every `'sudo tswap …'` in the texts below follows T58 amendment 8 (design §2.5): on
+  Windows it reads `'tswap …' (from an elevated command prompt)`. Texts built in Core decide that with
+  `OperatingSystem.IsWindows()` through one helper, `SeenFloor.Sudo(string command, bool windows)`, and tests pass both
+  values. The command word stays the literal `tswap` in Core-built texts: the store is created in
+  `VaultStores.Open` (`TswapCore/VaultStores.cs:16-22`) with no prefix, and the store's existing texts already name
+  `tswap` (`RecordVaultStore.cs:1479`). Texts built in `VaultCommand.cs` use `ctx.Prefix` (the design wants `ctx.Prefix`
+  everywhere; plumbing it into the store would touch `CliHost`/`VaultStores`, outside the file list).
+- **R-17, `accept-rollback` and a retired value back.** Accepting sets `Discarded` to the current persisted entries
+  and removes from `Retired` the stamps that are current entries again (the person keeps them); `Retired` is
+  otherwise never pruned. The design is silent on how the "retired value back" R4 is accepted.
+- **R-18, the clear-then-restore rows.** The design's rows "(b) clear; the pre-clear file put back … R4 silent,
+  because the floor entry was pruned" and "`conflicts --clear` on M; the record file put back from before the clear; a
+  stale machine writes over it" predate round 8 model 5. On the machine that saw the clear, the stamp is now in the
+  floor's `Retired`, so both rows also give R4's "retired value back" text. Machines that never saw the clear stay
+  silent (the documented limit).
 
 ## Task 1: the floor model and the two files
 
@@ -140,45 +175,62 @@ If T60 as merged names any of these differently, use T60's names; if one is miss
 
 ```csharp
 public sealed record FloorEntry(Stamp Stamp, bool Burned);
-/// What this machine saw of one record: the floor (§2.3).
-public sealed record RecordFloor(Stamp Write, Stamp Version, bool Deleted, Stamp? Burn, IReadOnlyList<FloorEntry> Discarded);
-/// One record's merged state (main file and usable copies), as authenticated in one operation.
+/// What this machine saw of one record: the floor (§2.3). Discarded and Retired never share a stamp.
+public sealed record RecordFloor(Stamp Write, Stamp Version, bool Deleted, Stamp? Burn,
+    IReadOnlyList<FloorEntry> Discarded, IReadOnlyList<Stamp> Retired);
+/// One record's merged state (main file and usable copies) as one operation authenticated it: what R1 and R4 check.
 public sealed record SeenRecord(string Name, Stamp Write, Stamp Version, bool Deleted, Stamp? Burn,
     IReadOnlyList<FloorEntry> Entries, IReadOnlySet<Stamp> Retired);
-public enum Rollback { None, Older /* R1 */, Missing /* R2 */ }
-public sealed record FloorCheck(Rollback Rollback, IReadOnlyList<FloorEntry> EntriesGone, IReadOnlyList<FloorEntry> BurnsGone)
+/// The entries and retirements held in the record's authenticated files: what the floor may rise from (round 8 model 1).
+public sealed record PersistedLineage(IReadOnlyList<FloorEntry> Entries, IReadOnlySet<Stamp> Retired)
 {
-    public bool Flagged => Rollback != Rollback.None || EntriesGone.Count > 0 || BurnsGone.Count > 0;
+    public static PersistedLineage Of(IEnumerable<RecordMetadata> files);   // union by stamp, Burned OR-ed; T a union
+    public static PersistedLineage Of(IEnumerable<SecretRecord> files);
+}
+public enum Rollback { None, Older /* R1 */, Missing /* R2 */ }
+public sealed record FloorCheck(Rollback Rollback, IReadOnlyList<FloorEntry> EntriesGone, IReadOnlyList<FloorEntry> BurnsGone,
+    IReadOnlyList<FloorEntry> RetiredBack)
+{
+    public bool Flagged => Rollback != Rollback.None || EntriesGone.Count > 0 || BurnsGone.Count > 0 || RetiredBack.Count > 0;
 }
 public static class SeenFloor
 {
     public static SeenRecord Observe(RecordMetadata merged);
     public static SeenRecord Observe(SecretRecord merged);
     public static FloorCheck Check(RecordFloor? floor, SeenRecord? merged);   // merged null: no file at all
-    public static RecordFloor Raise(RecordFloor? floor, SeenRecord seen);
-    public static RecordFloor Accept(SeenRecord current);
+    public static RecordFloor Raise(RecordFloor? floor, SeenRecord merged, PersistedLineage persisted);
+    public static RecordFloor Accept(RecordFloor? floor, SeenRecord current, PersistedLineage persisted);
+    public static string Sudo(string command, bool windows);                  // R-16
 }
 ```
 
 - `Observe`: `Deleted` = tombstone; `Burn` = the burn stamp of the `Burns` entry whose `Version` equals the record's
   version (`CanonicalBurns` keeps one, the earliest, `RecordMerge.cs:32-48`), null for a tombstone or none; `Entries`
-  and `Retired` from T60's lineage (empty without it), `Burned` = entry flag bit 1.
+  and `Retired` from T60's lineage of the merged state (empty without it), `Burned` = entry flag bit 1.
+- `PersistedLineage.Of` takes the record's **authenticated input files** only: `LoadedRecord.Inputs`
+  (`RecordVaultStore.cs:484-488`) on the full path, the per-file decoded metadata `OpenFromMetadata` and `LoadMetadata`
+  collect (`inputs`, `:734`, `:1733`), or the states `WriteAll` wrote. Never the merged result: a fold's new candidate exists
+  only in memory until a write persists it.
 - `Check` (F = floor, M = merged): F null → `None`, nothing else. M null → `Missing`. **R1** `Older` when `M.Write <
   F.Write`, or `M.Version < F.Version`, or `M.Version == F.Version` and `F.Burn` set and `M.Burn` null. **R4**, also on
-  an R1 record: `EntriesGone` = floor entries whose stamp is neither in `M.Entries` nor in `M.Retired`; `BurnsGone` =
-  floor entries with `Burned` whose stamp is in `M.Entries` without `Burned`.
-- `Raise`: `Write` the larger. The pair: F null or `seen.Version > F.Version` → `(seen.Version, seen.Deleted,
-  seen.Burn)` whole; equal versions → F's version and `Deleted`, `Burn` the earlier of the two non-null burns;
-  `seen.Version < F.Version` → F's pair unchanged. `Discarded`: the union by stamp of F's and `seen.Entries`, `Burned`
-  OR-ed; then every stamp in `seen.Retired` that is not in `seen.Entries` is removed (the pruning; it is also how a
-  `conflicts --clear` or `restore --discarded` on this machine drops the stamp, since both retire it, §1.5). Entries
-  ascending by stamp.
-- `Accept(current)` = `(current.Write, current.Version, current.Deleted, current.Burn, current.Entries)`.
+  an R1 record: `EntriesGone` = `F.Discarded` stamps neither in `M.Entries` nor in `M.Retired`; `BurnsGone` =
+  `F.Discarded` entries with `Burned` whose stamp is in `M.Entries` without `Burned`; `RetiredBack` = `M.Entries`
+  whose stamp is in `F.Retired` (whoever merged it).
+- `Raise`: `Write` the larger of F's and `merged.Write`. The pair from `merged`: F null or `merged.Version > F.Version`
+  → `(merged.Version, merged.Deleted, merged.Burn)` whole; equal versions → F's version and `Deleted`, `Burn` the
+  earlier of the two non-null burns; `merged.Version < F.Version` → F's pair unchanged. `Retired` = F's ∪
+  `persisted.Retired`, never shrunk. `Discarded` = the union by stamp of F's and `persisted.Entries`, `Burned` OR-ed,
+  minus every stamp now in `Retired` (an entry the record retires moves to `Retired`; that is also how a
+  `conflicts --clear` or `restore --discarded` on this machine drops it, §1.5). Lists ascending by stamp.
+- `Accept` = `(current.Write, current.Version, current.Deleted, current.Burn, persisted.Entries, F.Retired ∪
+  persisted.Retired minus the stamps in persisted.Entries)` (R-17).
 
 Tests (`SeenFloorTests`, stamps built from fixed HLCs and two origins A and B; `v10` etc. are version stamps, `t1 < t2`
 burn stamps):
 
-| Floor | Merged | `Check` | `Raise(floor, merged)` |
+Rows give one state for both `merged` and `persisted` unless they name them apart.
+
+| Floor | Merged | `Check` | `Raise(floor, merged, persisted)` |
 |---|---|---|---|
 | null | `(w5, v5)` | None | `(w5, v5)` |
 | `(w5, v5)` | null | Missing | n/a |
@@ -189,14 +241,24 @@ burn stamps):
 | `(w8, v10, burn t2)` | `(w9, v10, burn t1)` | None | burn `t1` |
 | `(w8, v10, burn t1)` | `(w9, v10, burn t2)` | None | burn `t1` |
 | `(w8, v8, Deleted)` | `(w9, v5)` live | Older | n/a |
-| entries `{a, b burned}` | entries `{a}`, retired `{b}` | None | entries `{a}` (b pruned) |
+| entries `{a, b burned}` | entries `{a}`, retired `{b}` | None | `Discarded {a}`, `Retired {b}` (b moved) |
 | entries `{a}` | no entries, no retired | EntriesGone `{a}` | entries `{a}` kept |
 | entries `{a burned}` | entries `{a}` not burned | BurnsGone `{a}` | `{a burned}` (OR) |
 | entries `{a}` | entries `{a, c}` | None | `{a, c}` |
+| `Retired {a}` | entries `{a}` (an older merge or a put-back file) | RetiredBack `{a}` | `Retired {a}`, `Discarded` without `a` |
+| `Retired {a}` | no entries, retired `{}` (a 0.3.2-shaped merge dropped `T`) | None | `Retired {a}` kept (never pruned) |
+| null | merged entries `{a}`; persisted entries `{}` (a fold's in-memory candidate) | None | `Discarded {}` |
+| entries `{}` | merged entries `{a}`; persisted `{a}` (the fold written) | None | `Discarded {a}` |
 | `(w8, v8)`, entries `{a}` | `(w7, v8)`, no entries | Older and EntriesGone | n/a |
+| `Retired {a}`, entries `{b}` | `Accept`: current entries `{a, b}` | n/a | `Accept` gives `Discarded {a, b}`, `Retired {}` |
+
+`Sudo("vault merge <a newer copy>", false)` is `'sudo tswap vault merge <a newer copy>'`; with `true`, `'tswap vault
+merge <a newer copy>' (from an elevated command prompt)`.
 
 Break-it-once: raise `Burn` independently of `Version` (take the earliest burn whatever the version); the
-`(v10, burn t1)` → `(v12, no burn)` row must fail. Drop the version clause of R1; the `(w9, v5)` row must fail.
+`(v10, burn t1)` → `(v12, no burn)` row must fail. Drop the version clause of R1; the `(w9, v5)` row must fail. Raise
+`Discarded` from `merged.Entries` instead of `persisted.Entries`; the in-memory-candidate row must fail. Prune
+`Retired` when the record's `T` no longer holds a stamp; the "dropped `T`" row must fail.
 
 ### `TswapCore/SeenState.cs` (new): the two files
 
@@ -219,9 +281,9 @@ internal sealed class SeenState(string configDir, DirectoryOwnerMatcher owner, T
 ```
 
 The JSON (`System.Text.Json` through a source-generated context declared in this file, `SeenStateJsonContext`):
-`{"Format":1,"Records":{"<file>":{"Write":"…","Version":"…","Deleted":true,"Burn":"…","Discarded":[{"Stamp":"…","Burned":true}]}}}`;
-`Deleted`, `Burn`, `Discarded` and `Burned` omitted when false, null or empty. Written compact, keys in ordinal order,
-`Discarded` ascending by stamp, so equal floors give equal bytes. A stamp is `<ms>.<logical>@<32 hex>`: write it with
+`{"Format":1,"Records":{"<file>":{"Write":"…","Version":"…","Burn":"…","Deleted":true,"Discarded":[{"Stamp":"…","Burned":true}],"Retired":["…"]}}}`
+(design §2.3); `Deleted`, `Burn`, `Discarded`, `Burned` and `Retired` omitted when false, null or empty. Written
+compact, keys in ordinal order, `Discarded` and `Retired` ascending by stamp, so equal floors give equal bytes. A stamp is `<ms>.<logical>@<32 hex>`: write it with
 `Hlc.ToString()` (`Hlc.cs:56-57`), `@`, `Convert.ToHexStringLower(origin)` (or T60's full-form formatter if it added
 one: the same text).
 
@@ -229,7 +291,8 @@ one: the same text).
 options `AllowDuplicateProperties = false`, `UnmappedMemberHandling = Disallow`, case-sensitive names, no comments or
 trailing commas (the defaults). `Format` must be the number 1. A `Records` key must be exactly 64 characters of
 `[0-9a-f]`. A stamp must match `^[0-9]{1,19}\.[0-9]{1,10}@[0-9a-f]{32}$` with the milliseconds fitting a `long` and the
-logical part a `uint`. Two `Discarded` entries of one stamp, or `Write`/`Version` missing, are damaged. If
+logical part a `uint`. Two `Discarded` entries of one stamp, a stamp twice in `Retired`, a stamp in both lists, or
+`Write`/`Version` missing, are damaged. If
 `AllowDuplicateProperties` isn't available in this SDK, stop and report. `seen-keyring` is damaged when
 `KeyringCodec.Decode` (`TswapCore/Keyring/Keyring.cs:217`) throws, or when its vault id, format version or `K`
 differs from the folder keyring's or from its own file name's prefix.
@@ -255,12 +318,13 @@ Tests (`SeenStateTests`, files in a temp config folder; `MachineConfigVaultIdTes
 |---|---|
 | floors saved, read back | equal floors; file name `seen-records-<16 lower hex>.json`, keyring `seen-keyring-<16 lower hex>` (no upper-case letter) |
 | saved twice with equal floors | second save writes nothing (bytes and mtime unchanged) |
-| file not JSON / `Format` 2 / a stamp with upper-case hex / a stamp `-5.0@…` / a duplicate key / an unknown property / a key of 63 hex | Damaged, the matching reason, empty floors |
+| file not JSON / `Format` 2 / a stamp with upper-case hex / a stamp `-5.0@…` / a duplicate key / an unknown property / a key of 63 hex / a stamp in both `Discarded` and `Retired` | Damaged, the matching reason, empty floors |
+| a floor with `Retired` only (no `Discarded`), saved and read back | equal; `Discarded` omitted from the bytes |
 | no file | Missing, no text |
 | `SaveRecords` whose `apply` is given what another writer put on disk between read and save | `apply` sees the disk's floors (the re-read) |
 | `seen-keyring` with another vault id; with bytes the codec refuses | Damaged with its reason |
 | `SaveKeyring` with slots X; then another writer adds Y on disk; save Z | file holds X, Y, Z |
-| the `Write` seam throws | the old file intact; the write-failure warning; the next read gets the old floors |
+| the `Write` seam throws, for `seen-records` and for `seen-keyring` | each old file intact; the write-failure warning; the next read gets the old contents |
 | a file chmodded 0644, then a save (`UnixFact`) | 0600 |
 | `init` of a record vault; `slot accept` (as `SlotAcceptRecordVaultTests`) ; `migrate --to-records` | `config.json` has the keyring's `VaultId` |
 
@@ -282,20 +346,32 @@ needs it before any keyring read calls `ReadKeyring()` first.
 Each **store operation** creates one private `SeenSession`: it reads `seen-records` once at its start (no copy is kept
 between operations, so the broker's long-lived store, `BrokerSecrets.cs:66-128`, reads it per operation), collects what
 the operation authenticated, and saves **once** at its end through `SeenState.SaveRecords`, applying `SeenFloor.Raise`
-per authenticated record **against the floors on disk at save time**, never writing back anything read earlier. A
-record whose `Check` gave `Older` or `Missing` gets no raise; an R4 finding doesn't stop it. Nothing rose: nothing is
-written. The operations:
+per authenticated record **against the floors on disk at save time**, never writing back anything read earlier. Each
+raise gets the merged state (for `Write` and the pair) and the record's `PersistedLineage` (for `Discarded` and
+`Retired`): the authenticated input files, never the fold's in-memory result. A record whose `Check` gave `Older` or
+`Missing` gets no raise; an R4 finding doesn't stop it. **An R3 record raises nothing**, not even from the copies that
+authenticated before its merge failed (`FoldConflictCopies`' `RecordConflictException` branch, `:1257-1266`; the
+metadata path's `:786-797`; an `UnreadableRecordException` from an open). Nothing rose: nothing is written. The
+operations:
 
 | Operation | Checks and raises from |
 |---|---|
-| `LoadRecords` (`LoadSecrets`, `Reindex`, `MergeRecords`' own load) | every merged `LoadedRecord.State`; R2 for floor names absent from the scan |
-| `LoadMetadata` | every merged record it lists (R-6); R2 as above |
-| `OpenSecret` for a read (`:586`, also `ReadSecretValue`, `VaultView`'s opens) | that record; R2 when the floor has its file name and there is no file |
+| `LoadRecords` (`LoadSecrets`, `Reindex`, `MergeRecords`' own load) | every merged `LoadedRecord.State`, its `Inputs` as persisted; R2 for floor names absent from the scan |
+| `LoadMetadata` | every merged record it lists (R-6), its per-file `inputs` as persisted; R2 as above |
+| `OpenSecret` for a read (`:586`, also `ReadSecretValue`, `VaultView`'s opens) | that record and its files; R2 when the floor has its file name and there is no file |
 | a write session: `BeginWrite` … `CommitWrites` | each `OpenForWrite`, then every record `WriteAll` wrote; saved at the end of `CommitWrites` (in a `finally`), or by a new `internal void EndWrite(WriteSession)` that `VaultWriter.Dispose` calls when nothing was committed |
 | `MergeRecords`, `Reindex` after `LoadRecords` | the records `WriteAll` wrote, one more save |
 
-`WriteAll` (`:1981-2047`) adds what it wrote to the operation's `SeenSession` (from its returned metadata) and, when
-the config has no `VaultId`, writes it with `LastHlc` (`:2043-2045`). A `vault merge` refused by the stale-write guard
+`WriteAll` (`:1981-2047`) adds what it wrote to the operation's `SeenSession` (from its returned metadata: the written
+state is both the merged state and its persisted lineage) and, when the config has no `VaultId`, writes it with
+`LastHlc` (`:2043-2045`).
+
+**R1 is checked again at save** (design §2.3, round 8 Claude 8): `CommitWrites`, after its records are built and
+before `WriteAll` writes the first one (beside `WriteAll`'s guard, `CheckUnchanged`, `:1989`), re-reads `seen-records` and runs
+`SeenFloor.Check` on each record it is about to write, against the state that record was opened as (null for a name
+with no file). An `Older` or `Missing` result throws the refusal below for the ordinally first such name, nothing
+written. `BurnWrite` is exempt as at staging; `MergeRecords` is never checked (it is the repair). `Reindex` checks
+the same way before its writes. A `vault merge` refused by the stale-write guard
 (`CheckUnchanged`, `:2183-2194`) writes nothing, so only this folder's load raised anything. The raise of a written
 record is checked like any other: a merge that wrote a state still older than the floor leaves it flagged; one that
 only moved the write stamp past it clears the flag (§2.5).
@@ -303,8 +379,9 @@ only moved the write stamp past it clears the flag (§2.5).
 On a **missing** `seen-records` file the operation checks nothing (a baseline) and prints the notice only per R-7; on a
 **damaged** one, the damaged warning and a baseline.
 
-Two test seams on the store: `internal Action? BeforeSeenSave { get; set; }` (runs before the save's re-read) and
-`SeenState.Write` (through `internal SeenState? Seen`).
+Three test seams on the store: `internal Action? BeforeSeenSave { get; set; }` (runs before the save's re-read),
+`internal Action? BeforeSaveCheck { get; set; }` (runs before the save-time R1 check of a commit) and `SeenState.Write`
+(through `internal SeenState? Seen`).
 
 ### The warnings (stderr; each record at most once per store instance, which is per command in the CLI)
 
@@ -430,12 +507,26 @@ Tests (`RollbackDetectionTests`: `FleetMachine` A, B, C sharing or copying one v
 | a machine a year ahead writes; its copy is then lost | R1 with the future time, and the year-ahead warning |
 | an R4 warning, then a newer write of the record | `Write` and the pair still rise |
 | `accept-rollback x` on a record with an R4 warning | R4 silent |
-| a floor entry whose stamp is in the record's retired list | pruned at the next save |
+| a floor entry whose stamp is in the record's retired list | moved from `Discarded` to `Retired` at the next save |
 | each write command, `delete` included, on a fixture vault | no main record file disappears (R2's premise) |
-| clear; A's later copy (written after a burn) merges | no entry re-forms; R4 silent |
-| clear; the pre-clear file put back, its copies gone | the entry back as that file held it; R1 (write stamp); R4 silent (the limit) |
+| clear; A's later copy (written after a burn) merges | no entry re-forms; R4 silent (`a` is retired, which a person did) |
+| clear on A; the pre-clear file put back, its copies gone; `names` on A | the entry back as that file held it; R1 (write stamp); R4's "retired value back" text (R-18) |
+| the same on B, which never saw the clear | R1 only if B's floor saw the clear's write; no R4 (the limit, §2.4) |
 | clear; the pre-clear file put back while a copy carrying `T` survives | no entry |
-| `--clear` on M; the pre-clear file put back; a stale machine writes over it | no R1 (the limit); the entry back open (warning) or acknowledged (silent) as the file held it |
+| `--clear` on A; the pre-clear file put back; a stale machine writes over it | no R1 (the limit); the entry back open (warning) or acknowledged (silent) as the file held it; on A also R4's "retired value back" (R-18) |
+| a retired stamp brought back by a 0.3.2-shaped merge that keeps an older copy's extension (`T` without the stamp, the entry present) | R4 "retired value back" on every machine that saw the retirement in a file; writes work |
+| Claude r7 C-1's three machines: B folds (A, B) in memory (entry `a`, nothing written); C writes its own fold without `a`; B reads C's main file | no R4 on B: `a` was never floored (round 8 model 1) |
+| the same with B **writing** its fold before C's main arrives | `a` floored; R4 only if a later merge drops it without a retirement |
+| a fold on A sets `a` aside in memory (never written); a 0.3.2-shaped fold of the same copies writes the merged state | on A: no entry, no R4, no `[CONFLICT]` (the documented loss, round 9 amendment 1) |
+| the same, but A burns the record first (entry `a` persisted), then the 0.3.2-shaped fold | R4 "is gone" on A |
+| an R3 record (copies that can't be merged) whose copy authenticated | nothing raised; after the user removes the damaged copy, no R1 |
+| someone deletes the newer conflicted copy of a record whose fold had failed (R3) | no R1: undetected (round 9, M-8; documented) |
+| P1 opens `x` for a write; `BeforeSaveCheck` raises `x`'s floor through P2 (another machine's newer file folded on this machine) and then puts the older file back; P1 commits | the `Older` refusal at save; nothing written |
+| R2 with a conflicted copy present and no main file | R3 (the unreadable text), not R2 |
+| R1's "older delete": the floor saw a value, the put-back file holds an older delete | "now it holds an older delete" |
+| the upgrade notice with `config.json` holding `LastHlc` and a `VaultId` | no notice |
+| a plain value put back older, then rotated on by a machine above the floor | R1 until that rotation, then silent: the newer value is gone (the documented limit, §2.4) |
+| every Core-built text with `windows: true` | `'tswap …' (from an elevated command prompt)` in place of each `'sudo tswap …'` |
 | the same for a delete, then a stale machine writes a newer value | no R1 (the limit) |
 | `run` of another secret | no warning about `x` |
 | a `run` with `{{x}}` on an R1 record after `names` printed the summary | the full R1 text once |
@@ -445,7 +536,10 @@ Break-it-once: compare the main file instead of the merged state (the conflict r
 no copies as unchanged (the R2 rows are silent); let R4 accept a stamp through `S` instead of the retired list (the
 clear-then-0.3.2-merge row warns, the dropped-entry row is silent); let a write go on over R1 (the `rotate`-refused row
 fails); keep the floors read at the start and write them back at save (the P1/P2 rows lose the accept); raise floors
-in a detached store (the `vault merge <other>` row finds a file).
+in a detached store (the `vault merge <other>` row finds a file); raise `Discarded` from the merged state instead of
+the files (Claude's three-machine row warns); drop the save-time R1 check (the P1-commits row writes); raise from an
+R3 record's authenticated copy (the R3 row gives R1 after the copy is removed); drop the `RetiredBack` check (the
+0.3.2-shaped `T`-dropping row is silent).
 
 ## Task 3: the keyring check, the unlock texts and `restore-slots`
 
@@ -486,10 +580,16 @@ non-detached store sets it (the seen copy it just compared; null when missing or
     vault restore-slots'.`
 - when the own slot is present, no slot opened, and `Seen` holds that id with other bytes: `This machine's slot <id8> in
   the keyring in <vault folder> differs from the one this machine saw: the keyring was damaged or tampered with.
-  config.json is fine. Move <vault folder>/keyring aside, copy <seen-keyring path> in its place, and compare the two.`
+  config.json is fine. Move <vault folder>/keyring aside, copy <seen-keyring path> in its place, and compare the two.
+  Then run 'sudo tswap vault restore-slots' on each other machine, so slots added since this machine last read the
+  keyring come back too.` (the last sentence: design §2.7, round 8 Claude 13; `restore-slots` prints the same
+  instruction when the slot it skips is this machine's own).
 
 Without `KeyringFolder` (a classic vault, whose keyring is in `config.json`) the texts stay as they are.
-`OwnerSwitchException` is never replaced.
+`OwnerSwitchException` is never replaced. With `Config.KeyringSlotId` null (`FindOwnMachineSlot` takes the first
+machine slot, `VaultUnlocker.cs:1141-1142`; `migrate` from a plain XOR vault writes it null, `TswapCli/RecordMigration.cs:140`)
+a lost own slot shows as today's unwrap failure against another machine's slot, not these texts; `restore-slots`
+still puts it back.
 
 ### `sudo tswap vault restore-slots [--yes]` (`VaultCommand.cs`)
 
@@ -528,7 +628,8 @@ does):
 | `keyring` replaced by a copy without the router's own slot; `names` on the router | the "though this machine saw it" text; no "Config is corrupted" |
 | then `sudo vault restore-slots --yes` on the router, `_keys.PluggedIn = []` | exit 0; the router unlocks again; the desktop's slot back too; `_keys.Challenges` empty (no unlock) |
 | own slot lost and no `seen-keyring` | the "may have been replaced" text naming the keyring |
-| own slot present with other bytes than `seen-keyring`'s | the "differs" unlock text; `restore-slots` skips it and prints the same instruction |
+| own slot present with other bytes than `seen-keyring`'s | the "differs" unlock text with the `restore-slots`-on-each-other-machine sentence; `restore-slots` skips it and prints the same instruction |
+| `KeyringSlotId` null (a vault migrated from a plain XOR vault), its slot lost | the unwrap failure as today; `restore-slots --yes` puts it back |
 | a slot with the same id and other bytes (not own) | the "differs" warning; not added to `seen-keyring`; the other new slots added |
 | `restore-slots` with nothing missing | `Nothing to put back.`; the keyring's bytes unchanged |
 | `restore-slots` with no file for the keyring's vault id | the "no record of slots" text; nothing written |
@@ -556,7 +657,8 @@ record's file name: 64 lower-case hex digits, as the warning prints it.` It unlo
 `public IReadOnlyList<AcceptedRollback> AcceptRollback(byte[] vaultKey, IReadOnlyCollection<string> names,
 IReadOnlyCollection<string> files, bool all)` that loads metadata (`FormatTwoRecords.Decode`) without printing the
 rollback warnings, hashes each name (`FilenameHasher.ComputeFilename`), and in **one** save (re-read at save, as Task
-2) sets each targeted flagged record's floor to `SeenFloor.Accept(current)` and removes each targeted R2 floor;
+2) sets each targeted flagged record's floor to `SeenFloor.Accept(floor, current, persisted)` (R-17) and removes each
+targeted R2 floor;
 unflagged records it authenticated are raised as by any load. `AcceptedRollback(string FileName, string? Name,
 FloorCheck Check, RecordFloor Floor, SeenRecord? Current)`.
 
@@ -567,7 +669,9 @@ Output (stdout), per target, exit 0:
 - R2: `✓ Accepted that '<name>' is gone (record <64 hex>; this machine saw it on <t>).`, without a name `✓ Accepted
   that record <64 hex> is gone (this machine saw it on <t>).`
 - R4: `✓ Accepted that '<name>' no longer holds <n> value(s) a merge had set aside.` and `✓ Accepted that <n> value(s)
-  of '<name>' a merge had set aside are no longer marked burned.`
+  of '<name>' a merge had set aside are no longer marked burned.`; a retired value back (R-17): `✓ Accepted that
+  '<name>' holds <n> value(s) again that were dropped on purpose; drop them with 'sudo tswap conflicts --clear <name>'
+  if that is still wanted.`
 - nothing flagged: `Nothing to accept for '<name>': it isn't older than this machine saw.` (`--file`: `for record <64
   hex>`; `--all`: `Nothing to accept: no record is older than this machine saw.`); an unreadable record: `Nothing to
   accept for '<name>': its record can't be read (see the warning above).`
@@ -582,9 +686,12 @@ Tests (`AcceptRollbackTests`):
 | `accept-rollback` without sudo | refused ("requires"); `seen-records` unchanged |
 | `--file 3F2A…` (upper case), `--file` of 63 hex, `--all x` | usage errors, exit 1 |
 | `accept-rollback x` after a delete was rolled back | the "it was deleted" line; then `delete x` works |
+| `accept-rollback x` on a "retired value back" record | the R-17 line; R4 silent afterwards; `conflicts --clear x` then retires it again and R4 stays silent |
+| every `accept-rollback` and `restore-slots` text on Windows (`ctx.Os`) | `'<prefix> …' (from an elevated command prompt)`, the prefix from `ctx.Prefix` |
 
 Break-it-once: let `accept-rollback` run without sudo (its refusal row fails); accept only R1 under `--all` (the R2
-and R4 parts of the first row stay flagged).
+and R4 parts of the first row stay flagged); keep `Retired` unchanged in `Accept` (the "retired value back" row still
+warns).
 
 ## Task 5: docs and the agent prompt (last)
 
@@ -595,11 +702,30 @@ and R4 parts of the first row stay flagged).
   warnings, the refusal, the three repairs and the order for a record at the entry cap.
 - `docs/multi-machine.md`: a "When a file goes back" section after the merge rules: what is detected (§2.4's table, in
   prose), the "wait for the sync" case, `burn` and `vault merge` as the only writes on a flagged record, why `delete`
-  refuses, the repairs, and that each machine accepts for itself.
+  refuses, the repairs, and that each machine accepts for itself. Its documented limits, each in a sentence:
+  - a stale machine's newer re-creation of a deleted name, and a cleared value brought back by a put-back file that a
+    stale machine then writes over (no R1; a machine that saw the clear gets R4's "retired value back");
+  - **the plain-value case** (round 9, M-8): a file put back with an older value and then rotated on by a machine whose
+    stamps are above the floor ends R1's flag, and the newer value rolled away is gone with no entry and no warning;
+  - a deleted newer conflicted copy of a record whose fold had failed (R3) goes undetected, since R3 raises nothing;
+  - `burn` on a record whose current burn was rolled away satisfies R1, so the original burn's time and reason (the
+    incident record) are gone without a report (round 8, Claude 7);
+  - R4 warns as gone for an entry whose retirement left `T` by the 64-stamp cap before this machine saw it (round 8,
+    Claude 10).
+  
+  The "Mixed versions" paragraph (T60 writes it) gains the round 9 sentences (§1.6, §2.8, the anti-goals): R4 warns on
+  every machine that had the entry **in a file**; an entry no machine had written yet (set aside only in a fold's
+  memory) is lost without a later warning when an older tswap folds the copies, and a 0.3.x format 2 write drops the
+  extension, entries and `T` together; a set-aside value is kept once a machine running this release writes the
+  record, so in a folder with older machines run `tswap conflicts` after every machine is upgraded; an older tswap's
+  merge or format 2 write can bring back a value a person dropped, which this release then reports ("retired value
+  back").
 - `docs/security-model.md`: replace the "What is not detected yet" bullet (`:836-841`) and add a "Rolled-back files"
   section (§2.9): detected on machines that saw the newer state; not detected: a vault rolled back before a machine
-  first saw it, a stale machine's newer re-creation of a deleted name or a cleared value, a process running as the
-  vault's user that edits the config folder too, and a `seen-*` file lost, damaged or restored from a backup;
+  first saw it, a stale machine's newer re-creation of a deleted name or a cleared value, the plain-value
+  rollback-then-stale-write case, a process running as the vault's user that edits the config folder too, and a
+  `seen-*` file lost, damaged or restored from a backup; detection rests only on files this machine authenticated,
+  never on a merge's in-memory result;
   `seen-records-*` reveals hashed record names with burn and conflict times to whoever reads the config folder;
   `seen-keyring-*` is a complete copy of the vault's keyring (0600, owner only), so a backup of the config folder holds
   the vault's wrapped key material. A resurrected deleted secret is still handed out by `run`, `get` and the broker,
