@@ -13,7 +13,7 @@ public static class ToCommentProcessor
     // Optionally consume an existing tswap marker immediately following the value. This prevents
     // duplication when processing `tswap apply` output, which emits lines like:
     // key: "actual-secret"  # tswap: secret-name
-    private const string ExistingMarker = @"(?:\s*#\s*tswap\s*:\s*[a-zA-Z0-9_-]+(?::previous)?)?";
+    private const string ExistingMarker = @"(?:\s*#\s*tswap\s*:\s*[a-zA-Z0-9_-]+(?::previous|:totp)?)?";
 
     /// <summary>
     /// The value <paramref name="searchText"/> double-quoted, single-quoted, or unquoted, each as its

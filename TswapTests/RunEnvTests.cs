@@ -224,7 +224,7 @@ public sealed class RunEnvTests : IDisposable
 
     // ── refusals before the unlock: a machine with no vault ─────────────────────────
 
-    private const string Exactly = "must be exactly one {{name}} or {{name:previous}} token";
+    private const string Exactly = "must be exactly one {{name}}, {{name:previous}} or {{name:totp}} token";
 
     public static TheoryData<string, string[]> RefusedBeforeUnlock()
     {
@@ -238,7 +238,7 @@ public sealed class RunEnvTests : IDisposable
             { $"'--env X': the value {Exactly}, with nothing around it.", ["--env", "X=pre-{{k}}", "tool"] },
             { "'--env X': a {{@file}} token can't be an --env value (a file path isn't a secret): put it in the command.",
                 ["--env", "X={{@cfg.yaml}}", "tool"] },
-            { "Unknown token '{{x:bogus}}': the only suffix is ':previous' (the value the last rotation replaced).",
+            { "Unknown token '{{x:bogus}}': the suffixes are ':previous' (the value the last rotation replaced) and ':totp' (the current code of a TOTP seed).",
                 ["--env", "X={{x:bogus}}", "tool"] },
             { BadName("1BAD"), ["--env", "1BAD={{s}}", "tool"] },
             { BadName(longName), ["--env", $"{longName}={{{{s}}}}", "tool"] },

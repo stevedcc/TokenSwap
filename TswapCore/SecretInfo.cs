@@ -10,8 +10,13 @@ namespace TswapCore;
 /// <param name="History">Past burns (of value versions a newer value superseded), oldest first; empty when none.</param>
 /// <param name="HasPrevious">True when the record keeps the value a rotation replaced.</param>
 /// <param name="PreviousBurned">True when that previous value's version was burned.</param>
+/// <param name="Kind">
+/// Brief T58 (#374): the current value's kind as its <c>ValueKinds</c> extension marks it (display only; a record written
+/// before 0.3.3 is unmarked until <c>vault reindex</c> or its next write).
+/// </param>
 public sealed record SecretInfo(string Name, DateTime Created, DateTime Modified, DateTime? BurnedAt,
-    string? BurnReason, IReadOnlyList<PastBurn> History, bool HasPrevious, bool PreviousBurned)
+    string? BurnReason, IReadOnlyList<PastBurn> History, bool HasPrevious, bool PreviousBurned,
+    Totp.ValueKind Kind = Totp.ValueKind.None)
 {
     /// <summary>The secret <paramref name="metadata"/> describes, or null for a tombstone (no secret).</summary>
     public static SecretInfo? From(RecordMetadata metadata)
@@ -32,6 +37,7 @@ public sealed record SecretInfo(string Name, DateTime Created, DateTime Modified
             outstanding?.Reason,
             history,
             metadata.PreviousVersion is not null,
-            metadata.PreviousVersion is { } previous && metadata.Burns.Any(b => b.Version.Equals(previous)));
+            metadata.PreviousVersion is { } previous && metadata.Burns.Any(b => b.Version.Equals(previous)),
+            Totp.ValueKinds.Of(metadata));
     }
 }

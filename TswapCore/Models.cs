@@ -257,6 +257,9 @@ public record SecretsDb(Dictionary<string, Secret> Secrets) : ISecretLookup
     /// <summary>The suffix of a token or marker that names a secret's previous value.</summary>
     public const string PreviousSuffix = ":previous";
 
+    /// <summary>Brief T58 (#374): the suffix of a token or marker that asks for the current code of a TOTP seed.</summary>
+    public const string TotpSuffix = ":totp";
+
     /// <inheritdoc/>
     public bool Contains(string name) => Secrets.ContainsKey(name);
 
