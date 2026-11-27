@@ -81,6 +81,48 @@ round 1 where the two differ.
 9. **M6** taken: floor entries retired in the record are pruned at save; a lost or restored floor file is listed as
    undetected (§2.3, §2.9).
 
+## Amendments (round 3)
+
+Round 3 review by MiMo (`~/RiderProjects/tswap-wt/tools/design-records-r3-mimo.md`, "not ready to plan": one Critical,
+three Importants), with the controller's rulings. Folded into the text below and tagged where they land; they win
+over rounds 1 and 2 where they differ. Tie-breakers used: no value lost without a person deciding; a normal sync or
+rotation never warns or refuses; fail closed on values.
+
+1. **C-1, the floor's `(Version, Burn)` pairing (taken).** `Version` and `Burn` are one component: `Burn` is always the
+   outstanding burn of the floor's `Version`. When the seen version rises, the pair is replaced whole by the seen
+   state's; in an interleaved save the pair comes whole from the side with the larger version (§2.3). Round 2's
+   "per component, the larger" let a burn of `v10` survive a normal rotation to `v12` and fire a false R1 and a write
+   refusal. R1's third clause keeps "no burn **of that version**": MiMo's alternative "no burn with stamp `F.Burn`"
+   is refuted from the code, because two machines burning one version concurrently keep only the earliest burn
+   (`RecordMerge.cs:34-37`), so the later burner's own stamp disappears in a normal merge. Every earlier T61 row and
+   every C1 and I-2 sequence re-run against the corrected floor (§2.4); the burn-then-rotate row and its
+   break-it-once added; the interleaved row now states the pairing.
+2. **I-1, a `T` mark against a live current value (ruling: never removed).** `T` removes existing entries only; it
+   never excludes a copy's **current** value. A value that is still some copy's current value becomes an entry again
+   even after a clear on another machine, its stamp leaves the merged `T`, and the usual warning shows (§1.1, §1.4).
+   This replaces MiMo's proposed extra warning: with no loss there is nothing extra to warn about. `--clear`'s output
+   says a copy that still holds the value as its current one brings it back (§1.9). Rows added.
+3. **I-2, the `:discarded` lookup (taken).** `:discarded` is passed to the inner lookup as `x:discarded`, as `:previous`
+   is; nothing strips it (§1.10). Break-it-once added.
+4. **I-3, `seen-keyring` rules (taken, simplified).** Both files are now **per vault**: `seen-records-<16 hex of the
+   vault id>.json` and `seen-keyring-<16 hex>`. That removes the `VaultId` field and the "another vault" reset rule
+   altogether (a config pointed at another vault simply has no file yet), and `restore-slots` reads the file of the
+   folder keyring's own vault id, so it can't union another vault's slots. Missing and damaged get the same rules for
+   both files; §2.9 names both (§2.3, §2.7, §2.9). Rows added.
+5. **M-1** taken: the agreement check covers a stamp held as current, previous or an entry (§1.4).
+6. **M-2** taken: byte-equal sections merge; differing sections where one side has no set fail closed (§1.4).
+7. **M-3** taken: a write command whose fold would store a 256th entry is refused once per command, the copies kept;
+   "always work" is against the cap only; the cap text adds the rollback case (§1.4).
+8. **M-4** taken: a warning variant for an entry that is also the previous value; a row (§1.8).
+9. **M-5** taken: `restore-slots` adds slots the folder's keyring lacks by id and skips a differing same-id slot (§2.7).
+10. **M-6** taken: `accept-rollback NAME` also takes an R4-flagged name; `--all` sweeps R1, R2 and R4 (§2.6).
+11. **M-7** taken: the five missing rows added (Tests).
+12. **Simplified (MiMo §8.1):** "or its stamp is `W.Version`" is gone from the entry rule and from R4. It can't happen:
+    every copy that carries an entry has a version above the entry's stamp, and versions never decrease. An entry
+    leaves only through `T`.
+13. **Brief note (MiMo §5):** T58's `ValueKinds` drops entries of stamps no longer retained on a value write;
+    `ValueLineage`'s entries must not share that code (Briefs).
+
 ## Intent and why
 
 Both issues are about the per-record store losing data **without saying so clearly**.
@@ -238,11 +280,15 @@ The rule, for one merge of copies `I₁ … Iₙ` with winner `W` (the copy with
   (a concurrent rotation is newer than the pre-delete value that the loser's previous puts in `S`) and for first
   values (both sets empty: `B` is zero).
 - `T` (retired) = the union of every copy's retired list: stamps a person dropped (§1.5).
-- **Discarded** (round 2 amendment 1) = every existing discarded entry of any copy, **minus** those whose stamp is
-  in `T` or is `W.Version`; **plus** every copy's current value version `V` with `V > B` and `V ∉ R ∪ S ∪ T`, unless
+- **Discarded** (round 2 amendment 1, round 3 amendments 2 and 12) = every existing discarded entry of any copy,
+  **minus** those whose stamp is in `T`; **plus** every copy's current value version `V` with `V > B` and `V ∉ R ∪ S`,
+  **whether or not `V` is in `T`**: a value that is still some copy's current value is never lost to a mark, unless
   `V`'s value equals a value `W` retains (amendment 5: the same value written twice under two stamps loses nothing;
   compared by plaintext on the full path and by base fingerprint entries on the metadata path, and a candidate
   without a set counts as different).
+- A current value that comes back over a `T` mark leaves the merged `T`, so the next merge keeps it as an entry until
+  a person clears it again (once the copy that held it has merged, it is no copy's current value any more and the
+  clear holds).
 - `S` never removes an existing entry: it only bounds and excludes **new** candidates. An entry whose stamp is `W`'s
   **previous** version stays an entry (it still counts as discarded, with its warning) until a person drops it; the
   value is then held twice, as the previous value and as the entry, until the next rotation drops the previous.
@@ -258,7 +304,9 @@ The rule, for one merge of copies `I₁ … Iₙ` with winner `W` (the copy with
 | A deletes after seeing `v1`; B still holds `v1` | the delete put `v1` in the lineage: nothing discarded |
 | A deletes; B rotates concurrently; the delete wins | B's value is discarded (owner decision 1: kept on the tombstone) |
 | A, B, C rotate from `v0` | two discarded entries |
-| a discarded entry cleared, restored or acknowledged on another machine, then a stale copy arrives | clear and restore put its stamp in the retired list, so the entry goes and is not discarded again; an acknowledgement travels with the entry |
+| a discarded entry cleared, restored or acknowledged on another machine, then a stale copy holding it **as an entry** arrives | clear and restore put its stamp in the retired list, so the entry goes; an acknowledgement travels with the entry |
+| B folds (entry `a`) and clears it; A's copy, still holding `a` as its **current** value, then meets B's | `a` is an entry again (round 3 amendment 2), not in the merged `T`; the warning shows on both machines; a clear after A has merged holds |
+| `restore --discarded` of `a` on B; A still holds `a` as its current value | no entry: `a`'s value equals the restored current value (amendment 5) |
 | A and B rotate from `v0` (`a`, `b`); B folds (entry `a`); A rotates `a`→`c` before its folder merges; B rotates `b`→`d`; the copies meet | `W` = `d`, `R` = {`d`, `b`}, `S` ∋ `a` (A's previous): entry `a` **kept** (not retired), and `c` > `B`, ∉ `R ∪ S ∪ T`: entry `c` too (round 2 amendment 1) |
 | the same, but A's `c` is later than `d` | `W` = `c`, previous `a`: entry `a` kept although it is the previous value (demotion keeps it); B's current `d` is a new entry; `b`, B's own previous (B replaced it knowingly), is not |
 | A and B both rotate to the same value from `v0` | no entry: the loser's value equals the winner's (amendment 5) |
@@ -324,14 +372,18 @@ discardedCount    1   0..255, then per entry, ascending by stamp:
 `MergeAll` and `MergeAllMetadata` alike, with a parity test like the existing one:
 
 1. `S` = every copy's superseded set and previous version, minus `R`; kept to the 32 newest by stamp. `T` = the
-   union of every copy's retired list, the 32 newest. A merge **writes only explicit marks into `T`**: it never moves
+   union of every copy's retired list, the 32 newest, minus every stamp that is some copy's current value (round 3
+   amendment 2). A merge **writes only explicit marks into `T`**: it never moves
    a stamp from `S`, a previous version or anywhere else into `T` (round 2 amendment 1). A retired stamp that falls
    out of the cap lets a stale copy's entry come back (a warning, the value kept: the safe side).
-2. Discarded per §1.1. Per discarded stamp, over every copy that holds it (as its current value or as an entry):
+2. Discarded per §1.1. Per discarded stamp, over every copy that holds it (as its current value, its previous value
+   or an entry; round 3 amendment 5):
    - the plaintext must agree, as for retained versions today (`RecordMerge.cs:141-155` full path; on the
      metadata path equal sections or equal base fingerprint entries, `:243-258`). A disagreement is a
      `RecordConflictException`: the record is unreadable until the damaged copy is removed (today's rule for retained
-     versions, applied to the values this design now keeps);
+     versions, applied to the values this design now keeps). On the metadata path, byte-equal sections merge;
+     differing sections where either side has no set can't be shown equal and fail closed the same way (round 3
+     amendment 6);
    - section: the ordinally smallest (`:151-153`); fingerprints: joined as `JoinGroup` does (`:378-388`);
    - acknowledged if any copy acknowledged it, with the **earliest** acknowledgement (as two burns keep the earliest);
    - burned with the earliest burn found in any copy's burn list or entry; kind: the largest byte. A **new** entry's
@@ -350,8 +402,9 @@ discardedCount    1   0..255, then per entry, ascending by stamp:
    reported as discarded, and (owner decision 1) its discarded entries.
 
 Properties (tested): the same copies in any order give the same bytes; merging a result again with any of its
-inputs changes nothing; an entry leaves only through `T` or by becoming the current version, so no order of merges
-loses one. Pairwise merges can **keep more** entries than one merge of all the copies (a first step can set a value
+inputs changes nothing; an entry leaves only through `T`, so no order of merges loses one (an entry's stamp is always
+below the version of every copy that carries it, since it lost to that version or an earlier one; round 3
+amendment 12). Pairwise merges can **keep more** entries than one merge of all the copies (a first step can set a value
 aside that a third copy's `S` would have excluded, and `S` never removes it afterwards): the difference is always a
 warning about a kept value, never a lost one. With every copy's lineage exact and `exactFrom` zero, and no copy
 having superseded another's current value, the pairwise and all-at-once results are equal. With a lineage stale
@@ -360,8 +413,11 @@ from a 0.3.x write the result may miss what D2 misses (pinned in Tests).
 **Bounds.** A merge never trims discarded entries (as a merge never trims fields, fields spec Merge rule 7). More
 than 255 can't be encoded, but the record stays **readable** (the merged state holds them in memory); only a write
 that would store a 256th entry is refused: `Refused: 'x' holds 255 values a merge set aside, the most a record can
-store. Drop some first with 'sudo tswap conflicts --clear x'. Nothing was written.` `conflicts --clear` and
-`restore --discarded` always work, since they shrink the list (round 2 amendment 3, point 5). It takes 255
+store. Drop some first with 'sudo tswap conflicts --clear x' (on a rolled-back record, accept it first). Nothing was
+written.` A write command whose fold of conflicted copies would store a 256th entry is refused the same way, once per
+command; the copies are kept and the record stays readable. `conflicts --clear` and `restore --discarded` are never
+refused by the cap, since they shrink the list (round 2 amendment 3, point 5); like every write they are still
+refused on a rolled-back record (§2.5) (round 3 amendment 7). It takes 255
 concurrent rotations of one secret. The 32-stamp lineage cap
 only drops the oldest stamps; the effect is that a copy more than 32 rotations stale can be reported as a conflict
 (a warning, the value kept: the safe side).
@@ -446,7 +502,9 @@ the replaced value. If a service was updated with it, see 'tswap conflicts sync-
 shows it (`Hlc.cs:136`), with ` (this machine)` when it is this machine's origin. Times are the stamps' physical
 parts in UTC with `Z` (the fields rule, fields spec Constraints). The second half names the **current** value. When
 the current value has moved on since the conflict, it reads `… was set aside by a merge; the current value is the
-one machine c7cad1d5 wrote at …`. With several entries, one line each. On a tombstone: `⚠ x: it was deleted while
+one machine c7cad1d5 wrote at …`. An entry that is also the record's previous value reads `… was set aside by a
+merge; it is also the previous value, so it is kept twice until a rotation drops the previous one.` (round 3
+amendment 8). With several entries, one line each. On a tombstone: `⚠ x: it was deleted while
 machine 5d918462 changed its value (at …). tswap kept that value. See 'tswap conflicts x'.` `tswap` is `ctx.Prefix`.
 
 Where:
@@ -504,7 +562,9 @@ sync-conflict-test (open)
   characters, fields spec "Fields"). It works on a tombstone too, so a deleted secret's warning can be quietened.
   Output: `✓ Acknowledged 1 value of 'x' that a merge set aside. It is kept until 'sudo tswap
   conflicts --clear x' or 'sudo tswap restore x --discarded'.`
-- `--clear`: `✓ Dropped 1 value of 'x' that a merge set aside.`
+- `--clear`: `✓ Dropped 1 value of 'x' that a merge set aside. It can no longer be restored; a copy on another machine
+  that still holds it as its current value brings it back as a set-aside value at the next merge.` (round 3
+  amendment 2; the same sentence goes in `docs/multi-machine.md`.)
 
 ### 1.10 `restore --discarded` and `{{name:discarded}}`
 
@@ -534,8 +594,9 @@ being written).
   the same warning for an entry this machine's floor (§2.3) saw burned (round 2 amendment 3, point 1). The value is
   masked as `[REDACTED: x:discarded]` like any token. `SecretsDb.IsBurnedToken` answers false for `:discarded`, and
   its `ResolveToken` refuses as below;
-- **`:discarded` behaves exactly as `:previous`** in T58's `CommandValues` (the suffix stripped before asking the inner
-  lookup), in `StoredForms` (a code-giving discarded otpauth token masks the stored value and T58 amendment 5's seed
+- **`:discarded` behaves exactly as `:previous`** in T58's `CommandValues`: it is passed to the inner lookup as `x:discarded`, exactly as `:previous` is
+  passed as `x:previous`, and `CommandValues` then decides from the returned value as it does for `:previous`;
+  nothing strips the suffix first (round 3 amendment 3); in `StoredForms` (a code-giving discarded otpauth token masks the stored value and T58 amendment 5's seed
   spellings), and in `ISecretLookup.IsBurnedToken` (`TswapCore/ISecretLookup.cs`; `VaultView.cs:171-175`)
   (amendment 4). `SecretsDb.ResolveToken` (`TswapCore/Models.cs:283`, the whole-vault view of full loads) doesn't
   resolve it: `'{{x:discarded}}': values a merge set aside are read through 'tswap run' on a record vault only.`;
@@ -587,13 +648,15 @@ can never break `config.json`.
 
 ### 2.3 Format and when it is written
 
-`<config dir>/seen-records.json`, written 0600 as the folder's owner through `DirectoryOwnerMatcher.WriteAtomic`
-(the way `config.json` is, `RecordVaultStore.cs:234-245`), JSON through the source-generated context:
+`<config dir>/seen-records-<first 16 hex digits of the vault id>.json`, called `seen-records.json` below, written 0600
+as the folder's owner through `DirectoryOwnerMatcher.WriteAtomic` (the way `config.json` is,
+`RecordVaultStore.cs:234-245`), JSON through the source-generated context. The vault id is the keyring's (cleartext
+in the folder's `keyring`). One file per vault (round 3 amendment 4): a config pointed at another vault finds no file
+and starts a baseline, so no file ever holds another vault's state.
 
 ```json
 {
   "Format": 1,
-  "VaultId": "<base64 of the keyring's vault id>",
   "Records": {
     "<64 hex file name>": {
       "Write": "1794673220031.0@c7cad1d5…(32 hex)",
@@ -605,14 +668,15 @@ can never break `config.json`.
 }
 ```
 
-The **floor** of a record is `Write` (the largest write stamp seen), `Version` (the largest version seen), `Burn`
-(the outstanding burn of that version, when it had one; omitted otherwise) and `Discarded`: **every** entry seen,
+The **floor** of a record is `Write` (the largest write stamp seen), the **pair** `(Version, Burn)` (the largest
+version seen and the outstanding burn **of that version**, omitted when it has none; one component, never split,
+round 3 amendment 1) and `Discarded`: **every** entry seen,
 open or acknowledged, each with a burned bit set once it was seen burned (amendment 2; omitted when none). A machine
 whose first sight of an entry is already acknowledged still floors it. The acknowledgement itself is not floored: an
 acknowledgement lost to a rollback only brings the warning back, the safe direction, so there is nothing for R4 to
 check (round 2 amendment 3, point 4: "keep the ack if either side has it" has no field to apply to). At save time an
 entry whose stamp is in the record's retired list is pruned from the floor (round 2 amendment 9). Stamps are written in full (`<ms>.<logical>@<32 hex>`), not the 8-hex display form.
-`<config dir>/seen-keyring` is the keyring codec's bytes (`KeyringCodec.Encode`) of every slot this machine has seen,
+`<config dir>/seen-keyring-<16 hex of the vault id>`, called `seen-keyring` below, is the keyring codec's bytes (`KeyringCodec.Encode`) of every slot this machine has seen,
 written exactly as `seen-records.json` is: 0600, as the config folder's owner, through `WriteAtomic`, merged with
 the file on disk (a union of slots) before writing (round 2 amendment 3, point 4). Its format is the codec's own,
 versioned by the keyring's format byte.
@@ -621,19 +685,23 @@ folder learns: which hashed records were burned or had conflicts, and when; an a
 and `tswap conflicts`.
 
 - **Updated** after any load that authenticated records (the full load, `LoadMetadata`, a single record's open for
-  a read or a write) and after a commit, raising each floor component to what was seen; **never lowered**, except by
+  a read or a write) and after a commit, raising each floor component to what was seen. The pair: a seen version
+  above the floor's replaces `(Version, Burn)` whole with the seen state's (which may have no burn: that is a new
+  version, not a lowering); a seen version equal to the floor's keeps the floor's burn, or takes the seen burn when the
+  floor has none; **never lowered**, except by
   `vault accept-rollback` (§2.6), and by `conflicts --clear` and `restore --discarded` run **on this machine**, which
   remove that entry's stamp from this machine's floor: a person decided, and without this a later 0.3.x merge that
   loses the lineage would make R4 report a deliberate drop (amendment 8). A record whose R1 or R2 check failed (§2.4) gets no raise; an R4 warning doesn't stop
   the raise (round 2 amendment 3, point 2). At most one file write per store
   operation, and only when something rose, so a command on an unchanged vault writes nothing.
-- **Merged with the file on disk** before writing (per component, the larger; the entry lists as a union by stamp,
-  burned bits OR-ed), as `SaveConfig` merges `LastHlc`
+- **Merged with the file on disk** before writing: `Write` the larger; the pair whole from the side with the larger
+  version (equal versions: the side with a burn, then the earlier burn, as a merge keeps the earliest); the entry
+  lists as a union by stamp, burned bits OR-ed; as `SaveConfig` merges `LastHlc`
   (`RecordVaultStore.cs:195-201`). A lost update between two processes can only leave a floor lower than it could be
   (less detection), never higher than a real state.
-- **Missing** file: the first load records a baseline and warns about nothing (the upgrade path, and a new machine
-  joining a folder). **A different `VaultId`** (the config was pointed at another vault): start again, with a
-  `Notice:`. **Damaged** file: `Warning: … can't be read (…); this machine starts tracking record versions again from
+- These rules hold for **both** files (round 3 amendment 4). **Missing** file: the first load records a baseline and
+  warns about nothing (the upgrade path, a new machine joining a folder, a config pointed at another vault).
+  **Damaged** file (not JSON, or a keyring blob the codec refuses): `Warning: … can't be read (…); this machine starts tracking record versions again from
   now.`, then a fresh baseline **(my call: a damaged local file is not a reason to block the vault; the threat model
   of #197 is the shared folder)**.
 - Write failures (a read-only config folder) are one warning per command; detection keeps using what was last saved.
@@ -645,10 +713,10 @@ For a record whose merged state is `M` (main file plus usable copies, as §2.1 s
 
 | Rule | Condition | Meaning |
 |---|---|---|
-| R1 | `M.Write < F.Write`, or `M.Version < F.Version`, or `M.Version = F.Version` and `F.Burn` is set and `M` has no burn of that version | the record went back: a delete undone, a burn gone, a value or field change lost |
+| R1 | `M.Write < F.Write`, or `M.Version < F.Version`, or `M.Version = F.Version` and `F.Burn` is set and `M` has no burn of that version (the pair makes `F.Burn` always a burn of `F.Version`) | the record went back: a delete undone, a burn gone, a value or field change lost |
 | R2 | `F` exists and the record has no main file and no usable copy | the record is gone: the secret vanished. Sound only because no tswap command removes a record's main file: `delete` writes a tombstone, and copy removal touches conflicted copies only (`RecordVaultStore.cs:315-337`). A future purge command must update `F` itself (amendment 13) |
 | R3 | a file this machine can't read | **not** a rollback: today's unreadable-record rule applies (`RecordVaultStore.cs:1185-1188`) |
-| R4 | a stamp in `F.Discarded` is neither an entry of `M`, nor in `M`'s **retired** list, nor `M`'s current version (round 2 amendment 1: `S` no longer explains a gone entry); or it is still an entry of `M` but not burned while `F` saw it burned | a value a merge had set aside is gone, or its burn is (a 0.3.x merge dropped it, or the file went back). **Warning only**, no refusal: refusing can't bring it back. The burn text: `⚠ x: the value machine 5d918462 wrote at … (set aside by a merge) was burned when this machine last saw it; its burn is gone. It is still compromised.` |
+| R4 | a stamp in `F.Discarded` is neither an entry of `M`, nor in `M`'s **retired** list (round 2 amendment 1: `S` no longer explains a gone entry); or it is still an entry of `M` but not burned while `F` saw it burned | a value a merge had set aside is gone, or its burn is (a 0.3.x merge dropped it, or the file went back). **Warning only**, no refusal: refusing can't bring it back. The burn text: `⚠ x: the value machine 5d918462 wrote at … (set aside by a merge) was burned when this machine last saw it; its burn is gone. It is still compromised.` |
 
 A component check uses the version **and** the write stamp because each catches what the other can't: a rolled-back
 field change keeps its version; a rolled-back delete that another (stale) machine then writes over has a newer write
@@ -656,11 +724,13 @@ stamp but an older version. The `Burn` component catches a burn removed while a 
 the write stamp. A stale machine re-creating a deleted name with a **newer** version than the delete is
 indistinguishable from a legitimate value after the delete: the merge rules accept it too (limit, documented).
 
-What a normal sync and the #312 rules produce, checked against the table:
+What a normal sync and the #312 rules produce, checked against the table (re-run with the round 3 pair):
 
 | Situation | Result |
 |---|---|
 | another machine's write replaces the file | write stamp and version rise: no warning, floor raised |
+| A burns `v10`; B rotates to `v12`; synced to A | the seen version is above the floor's: the pair becomes (`v12`, none); no warning, writes work (round 3 amendment 1) |
+| A and B burn `v10` concurrently; the merge keeps B's earlier burn | equal versions, a burn of `v10` present: no warning |
 | a sync conflict, the older file kept as main and the newer as a copy | the merged state carries the newer stamps: no warning |
 | tswap removes a folded copy after writing it | the written main file carries everything: no warning |
 | a merge sets this machine's own value aside (#312) | the merged version is the largest of the inputs, so it never goes down; the value is an entry: no warning |
@@ -724,7 +794,7 @@ accept-rollback x && sudo tswap delete x`. The refusal adds that line for `delet
    merge rules, and the next load raises nothing and clears the warning. A folder needs its `keyring` and
    `records/`; with only single record files, put them in `records/` beside a copy of the current keyring.
 2. **The current state is the wanted one** (a deliberate restore from backup): `sudo tswap vault accept-rollback
-   NAME…` or `--all` (R1 and R2 records). Sudo, because accepting can bring back a deleted secret or drop a burn. It
+   NAME…` or `--all`. A name may be R1-, R2- or R4-flagged; `--all` sweeps all three (round 3 amendment 10). Sudo, because accepting can bring back a deleted secret or drop a burn. It
    unlocks, reads metadata only, sets those floors to the current state and prints each change it accepts:
    `✓ Accepted the current version of 'db-pw' (it was deleted when this machine last saw it).` R2 entries are
    removed, and the accepted records' floor entry lists are set to their current entries, which silences R4 for them
@@ -753,11 +823,13 @@ copies keep today's rule unchanged: a differing same-id slot there still refuses
   machine's slot 3f2a9c1b is missing from the keyring in <vault folder>, though this machine saw it there before:
   the keyring file was replaced by an older copy. config.json is fine. Put the slot back with 'sudo tswap vault
   restore-slots'.`
-- **`sudo tswap vault restore-slots [--yes]`** (new): adds back every slot of `seen-keyring` that the folder's keyring
-  lacks, by a keyring write (a union, as always). It needs **no unlock** (a union needs no `K_v`) and so works for
+- **`sudo tswap vault restore-slots [--yes]`** (new): reads `seen-keyring` of the vault id in the folder's keyring
+  (so another vault's file is never read, round 3 amendment 4), and adds every slot it holds that the folder's keyring
+  lacks **by id**; a same-id slot with other bytes is skipped with the "differs" warning below (round 3 amendment 9).
+  It writes through `WriteKeyring`'s union, which then meets no differing same-id slot. With no file for that vault
+  id: `This machine has no record of slots for vault <id>; nothing to put back.` It needs **no unlock** (a union needs no `K_v`) and so works for
   the own-slot case. It shows each slot's fingerprint (as `vault merge` does for new slots) and asks on a terminal,
-  or takes `--yes`. Sudo because it adds ways into the vault. Refuses when the folder's keyring belongs to another
-  vault (`KeyringUnion.RequireSameVault`).
+  or takes `--yes`. Sudo because it adds ways into the vault.
 - Keyring **writes** are not refused while slots are missing: a keyring write never drops a slot
   (`RecordVaultStore.cs:288-306`), and the local copy keeps the repair possible. Auto-repair is rejected **(my
   call)**: a future revocation must not be undone by a machine that saw the old keyring, so putting slots back stays
@@ -777,7 +849,7 @@ copies keep today's rule unchanged: a differing same-id slot there still refuses
 `docs/security-model.md` gains a "Rolled-back files" section: what is detected (§2.4), on which machines (those that
 saw the newer state), what isn't (a vault that was already rolled back before a machine first saw it; a stale
 machine's newer re-creation of a deleted name; a process running as the vault's user that edits the config folder
-too; a `seen-records.json` lost, damaged or restored from a backup, which starts a fresh or older baseline without a
+too; a `seen-records.json` or `seen-keyring` lost, damaged or restored from a backup, which starts a fresh or older baseline without a
 warning that can tell it from a new machine), and that `seen-records.json` reveals hashed record names with burn and conflict times to whoever can read the
 config folder.
 
@@ -815,6 +887,9 @@ with a parity test over random states like `RecordWrites_MatchNextRecord_OnRando
 | an entry `a` in one copy, `a` another copy's **previous** version (step 6 of MiMo's C1 sequence) | entry `a` kept |
 | an entry whose stamp is the winner's previous version | kept, warning kept |
 | A and B rotate to the same value | no entry (amendment 5) |
+| an entry cleared on B; A's copy still holds it as its current value | an entry again, its stamp not in the merged `T` (round 3 amendment 2) |
+| an entry and the winner's previous at one stamp with different plaintext | `RecordConflictException` (round 3 amendment 5) |
+| two copies' entries of one stamp, differing sections, one without a set (metadata path) | `RecordConflictException` (round 3 amendment 6) |
 | a candidate without a set on the metadata path | an entry; the vault "not fully fingerprinted" for that command; the next write fills the set from the section |
 | two copies' entries of one stamp with different plaintext (full) / different sections and base fingerprints (metadata) | `RecordConflictException` |
 | A deletes after seeing `v1`; B holds `v1` | tombstone, no entry |
@@ -855,6 +930,9 @@ with a parity test over random states like `RecordWrites_MatchNextRecord_OnRando
 | `{{x:discarded}}` reaching `SecretsDb.ResolveToken` | its refusal text |
 | A and B rotate from `v0`; B folds and shows the warning; **A rotates again before its folder merges**; B rotates; full sync | both A's values kept as entries on both machines; R4 silent; `tswap conflicts` lists two entries |
 | `{{x:discarded}}` on a tombstone holding an entry | the tombstone text |
+| B clears `a`; A, never merged, still has `a` current; full sync | `a` an entry again on both, the warning shown; `--clear` on B after that holds |
+| an entry that is also the previous value | the "also the previous value" text (round 3 amendment 8) |
+| a write command on a record whose fold would hold 256 entries | the cap text, once; copies kept; `conflicts --clear` then writes |
 | `conflicts --ack` twice; `--clear` twice | the second of each writes nothing (exit 0, `No value conflicts for 'x'.` for the second clear) |
 | an entry without a set read by `redact` | refused as "not fully fingerprinted" |
 | `--stamp` with two entries sharing the 8-hex origin prefix at one HLC | the ambiguity text; the full form picks one |
@@ -866,7 +944,8 @@ with a parity test over random states like `RecordWrites_MatchNextRecord_OnRando
 
 Break-it-once: drop the lineage check (the "two rotations behind" row warns); treat "has the extension" as exact
 (the 0.3.2-shaped stale-`asOf` row reports `v1`); let `S` remove entries (the step-6 and "A rotates again" rows lose
-`a`); drop the `known` term from `B` (both amendment 1 rows lose the value); compute discards from the main file
+`a`); strip `:discarded` before the inner lookup (the `{{sync-conflict-test:discarded}} = from-a` row gets `from-b`);
+let `T` exclude a current value (the "B clears `a`; A still has `a` current" row loses `a`); drop the `known` term from `B` (both amendment 1 rows lose the value); compute discards from the main file
 only (the reversed-order row fails); let `{{x:discarded}}` bypass `CommandValues` (the TOTP row gets the URI); make
 `--clear` not need sudo (its refusal row fails).
 
@@ -890,7 +969,16 @@ only (the reversed-order row fails); let `{{x:discarded}}` bypass `CommandValues
 | an entry dropped by a 0.3.2-shaped merge (main rewritten without the extension, newer write stamp) | R4 warning only; writes work |
 | a command on an unchanged vault | `seen-records.json` not rewritten (its bytes and mtime unchanged) |
 | `seen-records.json` missing / of another vault id / not JSON | baseline, no warning / notice / warning; nothing refused |
-| two commands' floors interleaved (write the file between load and save) | per-component maximum |
+| two commands' floors interleaved (write the file between load and save) | `Write` the larger; the (`Version`, `Burn`) pair whole from the side with the larger version |
+| A burns `v10`; B rotates to `v12`; sync; `names` and `rotate` on A | no warning; `rotate` works (round 3 amendment 1) |
+| A and B burn `v10` concurrently; sync | no warning |
+| `conflicts --ack`, `--clear` and `restore --discarded` on an R1-flagged record | each refused with the §2.5 text |
+| `{{x:discarded}}` on an R1-flagged record | the value given; the R1 warning shown |
+| `seen-keyring` damaged | the warning; a fresh baseline; nothing refused |
+| the config pointed at another vault | its own baseline files; the first vault's files untouched |
+| `restore-slots` with no file for the folder keyring's vault id | the "no record of slots" text, nothing written |
+| `restore-slots` where the folder's keyring has a same-id slot with other bytes | that slot skipped with the warning; the others put back |
+| `accept-rollback --all` with R1, R2 and R4 records | all three silent afterwards |
 | `keyring` replaced by a copy without B's slot; `names` on A | warning naming B's slot id and kind |
 | `keyring` replaced by a copy without A's own slot; any command on A | the new unlock text (not "Config is corrupted") |
 | then `sudo vault restore-slots --yes` | A unlocks again; B's slot back too; no unlock was needed (the unlocker seam counts none) |
@@ -903,7 +991,7 @@ only (the reversed-order row fails); let `{{x:discarded}}` bypass `CommandValues
 | `delete x` on a flagged record; then `accept-rollback x` and `delete x` | refused with the delete line; then deleted |
 | `restore-slots` against a folder whose keyring is another vault's | refused, nothing written |
 | a read-only config folder | one warning; floors unchanged; commands go on |
-| run under a sudo escalation (`FleetMachine.SudoEscalated`) | both new files owned by the config folder's owner, 0600 |
+| run under a sudo escalation (`FleetMachine.SudoEscalated`), and `sudo vault restore-slots` | both new files owned by the config folder's owner, 0600; the folder's `keyring` keeps its owner and mode |
 | each write command, `delete` included, run on a fixture vault | no main record file ever disappears (R2's premise) |
 | a 0.3.2-shaped reader with `seen-records.json` and `seen-keyring` present | the same output as without them |
 | two commands' `seen-keyring` writes interleaved | a union of both slot sets |
@@ -914,7 +1002,8 @@ only (the reversed-order row fails); let `{{x:discarded}}` bypass `CommandValues
 | `accept-rollback x` on a record with an R4 warning | R4 silent afterwards |
 | a floor entry whose stamp is in the record's retired list | pruned at the next save |
 
-Break-it-once: compare the main file instead of the merged state (the conflict row warns); drop the version component
+Break-it-once: merge `Burn` independently of `Version` (the burn-then-rotate row warns); compare the main file
+instead of the merged state (the conflict row warns); drop the version component
 (the delete-then-stale-write row passes silently); let `accept-rollback` run without sudo (its refusal row fails);
 make `restore-slots` unlock first (the own-slot row fails).
 
@@ -934,7 +1023,8 @@ T58's `TswapCore/Totp/CommandValues.cs` and the grammar files T58 lists, `TswapC
 `TswapCore/Fields/FieldSet.cs` (registry comment), `TswapCore/Prompt.cs`, `docs/commands.md`, `docs/multi-machine.md`,
 `docs/security-model.md`, AGENTS.md (the privilege lists), the release notes; tests as above. T60 changes the token suffix list again, so it re-sanctions exactly T58's
 suffix-pinning assertions (`FieldTokenRefusalTests.MalformedMessage` and `.MarkerMessage`, `RunEnvTests.Exactly` and
-its `{{x:bogus}}` row) and no others. Six tasks: extension
+its `{{x:bogus}}` row) and no others. `ValueLineage`'s entries must not share T58's `ValueKinds` code that drops entries of stamps no longer retained on a
+value write (round 3 amendment 13). Six tasks: extension
 and codec; merge rule and parity; writes; warnings and `names`; `conflicts`, `restore --discarded`, `:discarded`;
 docs.
 
