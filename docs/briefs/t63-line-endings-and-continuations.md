@@ -116,11 +116,16 @@ first non-blank character is `#` as a comment too.
        still parses);
   4. otherwise: removed, as today.
 
+  This deviates from #419's sketch ("stop the adoption at that line and report it"): the run goes on past a commented
+  line instead of stopping there, because a stop would leave the later filler lines of the same plain scalar in place,
+  and those make the file a YAML syntax error again (row 7). The issue's fail-closed core, never deleting a value
+  silently, holds either way.
+
   A token is `hit.IsPrevious ? hit.Name + SecretsDb.PreviousSuffix : hit.Name` (as at `:394`); several distinct tokens
   on one line give one entry each (the final ordering already sorts by line, then token). `ContinuationLines` is lazy
   over `lines` (`ToCommentProcessor.cs:128-138`), and it has already tested line `j` when it yields it, so writing
   `lines[j]` then is safe.
-- The main loop skips a line in `keptContinuations` (`continue` straight after the `linesToRemove` check, `:155-162`):
+- The main loop skips a line in `keptContinuations` (`continue` straight after the `linesToRemove` check, `:156-163`):
   it gets no other change and no other report.
 - `ToComment`'s summary (`:90-95`) and `ToCommentReport`'s summary say "removed, or commented out when it holds a
   stored value (brief T63, #419)".
@@ -135,12 +140,13 @@ first non-blank character is `#` as a comment too.
   content is the same; both warnings are fail-closed. Accepted, and pinned by row 12.
 
 **Tests** (new file `TswapTests/ToCommentContinuationTests.cs`, class `ToCommentContinuationTests`, through
-`Redact.ToCommentReport` and `ToCommentRoundTrip.Check`, with `Db(...)` as in `ToCommentBlockScalarTests`).
+`Redact.ToCommentReport` and `ToCommentRoundTrip.Check`, with `Db(...)` as in `ToCommentBlockScalarTests`; row 6 builds
+its `Secret` with `PreviousValue` set, as `RedactEngineTests.S` does, since that `Db` helper can't).
 `A = Aaaaaaaaaaaaaaaaaaaa1`, `B = Bbbbbbbbbbbbbbbbbbbb2`, `C = Cccccccccccccccccccc3`, `F = QUJDREVGR0hJSktMTU5PUA==`
 (filler: base64-like, no stored value); stored `a = A`, `b = B` unless the row says otherwise. `L1` is
 `LineDiff(1, "key: " + A, "key: \"\"  # tswap: a")`; `Cm(n, text)` is `CommentedLineDiff(n, "    " + text, "    # " + text)`.
 
-`ContinuationLine_HoldingAValue_IsCommentedOut_AndReported(int row)`, rows 1-8:
+`ContinuationLine_HoldingAValue_IsCommentedOut_AndReported(int row)`, rows 1-8 and 8a:
 
 | # | Content | `Content` after | `Changes` | `Skipped` |
 |---|---|---|---|---|
@@ -152,6 +158,7 @@ first non-blank character is `#` as a comment too.
 | 6 | as 1, `b` rotated so B is its previous value | as 1 | as 1 | `(2, 2, "b:previous", ContinuationLine)` |
 | 7 | `key: A\n    B\n    F\n` | `key: ""  # tswap: a\n    # B\n` | `L1`, `Cm(2, B)`, `LineDiff(3, "    " + F, "")` (removed) | `(2, 2, "b", ContinuationLine)` |
 | 8 | `key: A\n    B` + base64(C) + `\n`, stored `c = C` too | line 2 commented out | `L1`, `Cm(2, B + base64(C))` | `(2, 2, "b", …)`, `(2, 2, "c", …)` |
+| 8a | `key: A\n    B\n    C\n`, stored `c = C` too (a value on each of two continuation lines) | `key: ""  # tswap: a\n    # B\n    # C\n` | `L1`, `Cm(2, B)`, `Cm(3, C)` | `(2, 2, "b", ContinuationLine)`, `(3, 3, "c", ContinuationLine)` |
 
 Facts:
 - `ContinuationLine_WithNoValue_IsRemovedAsBefore` (row 9): `key: A\n    F\n` → `key: ""  # tswap: a\n`, `L1` and
@@ -162,7 +169,7 @@ Facts:
   (`ToCommentBlockScalarTests.ContinuationLineHoldingAnEncodedValue_KeptAndReported` stays an `UnreplacedLine` with no
   `Skipped` entry.)
 - `ContinuationLine_CommentedOut_EveryLineIsAKeyOrAComment` (row 11). There is no YAML parser among the test
-  dependencies (no YamlDotNet in any csproj), so this is a structural assertion: for each of rows 1-8, every line of
+  dependencies (no YamlDotNet in any csproj), so this is a structural assertion: for each of rows 1-8 and 8a, every line of
   `Content` after is empty, or matches `^[A-Za-z]\w*: ` at column 0, or has `#` as its first non-blank character.
 - `ToComment_SecondRun_OverACommentedLine_ReportsItAsNotAWholeValue` (row 12): row 1's `Content` after, run again →
   `Content` unchanged, `Changes` empty, `Skipped` `(2, 2, "b", NotWholeValue)`.
@@ -176,7 +183,8 @@ Facts:
 `Content` after, and stderr holds the full warning for `line 2` and `'b'` exactly; neither A nor B is in stdout or stderr
 of either run.
 
-**Oracle (pending owner sanction).** Run `Engine_MatchesOracle_OnRandomCorpus` after the change. If it passes, leave
+**Oracle (pending owner sanction).** Run `Engine_MatchesOracle_OnRandomCorpus` and the other tests that compare with the oracle (`ToCommentWholeValueTests`,
+`ToCommentLineBreakTests`, `RedactBehaviourPinTests`) after the change. If every oracle comparison passes, leave
 `PlaintextRedactOracle.cs` alone and say so in the report. If it differs on a continuation line, this rule mirrors
 production and is the only change: in the `ToCommenter` loop (`PlaintextRedactOracle.cs:90-108`, after the
 `IsLikelyBase64` check), when any entry's `SearchText` of the match list occurs in `nextLine` (ordinal `Contains`, every
@@ -189,7 +197,9 @@ candidate that holds a value is commented out (or kept in block content), never 
 change until the owner's sanction is recorded; stop and report with the corpus difference. Any other difference: stop
 and report; don't change the seed or the generator.
 
-**Break it once:** delete step 3 (the new `index.Scan(lines[j])` branch): rows 1-8, 10, 11 and the command test must fail.
+**Break it once:** delete step 3 (the new `index.Scan(lines[j])` branch): rows 1-8, 8a, 10 and the command test must
+fail. (Row 11 pins where the `#` goes, not the branch: without step 3 the lines are removed and the file is still keys
+only.)
 
 ## Task 2 (#417): the broker matches any line break as any line break
 
@@ -217,7 +227,7 @@ and report; don't change the seed or the generator.
   buffer (`L ≤ Window + 1`). The same bound covers the byte after a `\r` that ends a form's break: it lies inside
   `MaxMatchLength`, so whether a data `\r` is followed by `\n` is always known when the match is decided (no
   dependence on chunking). This relies on both constructors sorting the forms longest first **after** the CRLF
-  spellings are added (`BrokerRedactor` `:76`, `:97`; `BrokerTemplateOutput` `:45`).
+  spellings are added (`BrokerRedactor` `:76`, `:97`; `BrokerTemplateOutput` `:44`).
 - `BrokerRedactor.MatchAt` (`:243-249`) and `BrokerTemplateOutput.MatchAt` (`:145-151`) return the first
   `MatchLength(form, data, i) > 0` over the forms in their order (longest form first, as today). Both constructors fill
   their first-byte tables with `MarkFirstBytes`. `BrokerTemplateOutput` keeps its window as `_forms[0].Length - 1`
@@ -250,8 +260,12 @@ one byte per chunk; stdout). Printed text is between `x ` and ` y`.
 | 10 | the 120 ASCII bytes `string.Concat(Enumerable.Repeat("abcdefghij", 12))` | its base64 wrapped at 64 with `\r\n` | `x [REDACTED] y` |
 
 Facts:
-- `Forms_LongestFormMinusOne_CoversEveryMatch`: for each stored value above, `Window == Forms.Max(f => f.Length) - 1`
-  and, for every form, `MaxMatchLength(form) - 1 <= Window`.
+- `Forms_LongestFormMinusOne_CoversEveryMatch`: for each stored value above, `Window == Forms.Max(f => f.Length) - 1`;
+  for every form, `MaxMatchLength(form) - 1 <= Window`; and, structurally, **for every form holding a one-byte break,
+  its CRLF spelling is in `Forms`**. The first two hold even without the CRLF spellings for these values (the longest
+  form is the break-free spaced hex, `3L − 1` bytes), so the third is the one that pins them. Row 10's value is the
+  concrete case: its base64 (160 characters) wrapped at 64 with `\n` has two breaks, and its CRLF spelling (`160 + 2·2`
+  = 164 bytes) must be in `Forms`.
 - `Forms_OfAValueWithNoLineBreak_HoldNoLineBreak`: no form of `FormsOf(UTF-8 of "s3cr3t-Value_+/=é", null)` holds `\r`
   or `\n` (it is too short to wrap).
 - `TemplateOutput_MatchStartingOnStdout_ReplacedOnStdout`: row 1 through `BrokerTemplateOutput` with the first half of
@@ -259,8 +273,10 @@ Facts:
   as T9 decided.
 
 **Break it once:** (1) in `MatchLength`, compare a form's break byte for byte: rows 1, 3, 4, 5, 6, 7 and 9 must fail
-(rows 2 and 10 still pass: they pin the CRLF spellings, matched byte for byte); (2) drop the CRLF spellings from
-`FormsOf`: `Forms_LongestFormMinusOne_CoversEveryMatch` must fail; (3) put `BrokerTemplateOutput.MatchAt` back to its
+(rows 2 and 10 still pass then, because the CRLF spellings match them byte for byte; they pin the spellings only under
+this mutated compare, since the shipped tolerant compare matches them without); (2) drop the CRLF spellings from
+`FormsOf`: the structural assertion of `Forms_LongestFormMinusOne_CoversEveryMatch` (every form with a one-byte break
+has its CRLF spelling in `Forms`; row 10's 164-byte spelling) must fail; (3) put `BrokerTemplateOutput.MatchAt` back to its
 exact compare: `TemplateOutput_MasksAValue_PrintedWithOtherLineBreaks` rows 1, 3-7 and 9 must fail.
 
 ## Task 3 (#412): the field check scans every line-break spelling
@@ -315,8 +331,10 @@ the command test must fail; drop the `"\n"` spelling: row 4 must fail; drop the 
 
 - `docs/broker-threat-model.md`, the list of forms (`:27-39`): one bullet, "since 0.3.3, each line break in any of these
   (`\r\n`, `\n` or a lone `\r`) matches any line break in the output, in any mix". The window paragraph (`:51-55`) is
-  still true ("longest form − 1"); add "each form's spelling with every line break as `\r\n` is listed as a form" after
-  "the wrapped base64 form of a long value is the longest".
+  still true ("longest form − 1"), but its parenthetical names the wrong form: correct "the wrapped base64 form of a
+  long value is the longest" to "the spaced-hex form of a long value is the longest" (`3L − 1` bytes against about
+  `1.37L` for wrapped base64; `BrokerRedactor.cs:180-181`), and after it add "each form's spelling with every line break
+  as `\r\n` is listed as a form".
 - No other doc changes: `docs/commands.md` (the field bullet, `:227-234`) already promises that every value is checked
   against every stored value, and neither it nor any other doc describes the continuation-line removal.
   (`docs/commands.md` and `docs/security-model.md` are T58's and T62's.)
@@ -351,5 +369,13 @@ the command test must fail; drop the `"\n"` spelling: row 4 must fail; drop the 
   - M-2: the wording is now "at least as broadly as `redact` and `run`"; the field side's mixed-stored-value gap is stated.
   - M-3: the second-run reason flip is accepted and pinned (row 12).
   - M-4: `SecretMatcher.cs` summaries updated in Task 1; row 10 has ASCII bytes; removals are written as
-    `LineDiff(n, before, "")`; command tests normalise CRLF. #412's missing GitHub milestone is left to the controller.
+    `LineDiff(n, before, "")`; command tests normalise CRLF.
   - Header: the base is main after T58 merges; sharing `SecretMatcher.cs` with T58 is allowed.
+- **Round 2 (MiMo r2, 2026-11-27; controller rulings).** I-A: the CRLF spellings are pinned by a structural assertion
+  in `Forms_LongestFormMinusOne_CoversEveryMatch` (row 10's 64-wrap spelling; MiMo's 166 bytes recomputed as
+  164: 160 base64 characters plus two `\r`), cited in break-it-once (2); the rows 2/10 parenthetical is corrected.
+  M-1: row 11 dropped from Task 1's break-it-once. M-2: row 6 builds its `Secret` with `PreviousValue`. M-3: the
+  deviation from #419's "stop the adoption" sketch is stated, with the reason. M-4: Task 4 corrects the threat model's
+  "longest form" parenthetical (spaced hex). M-5: the stale #412 milestone note is dropped (it has 0.3.3). M-6: row 8a
+  (a value on each of two continuation lines). Also from the review: every oracle comparison is named, and two
+  off-by-one citations are fixed (`SecretMatcher.cs:156-163`, `BrokerTemplateOutput.cs:44`).
