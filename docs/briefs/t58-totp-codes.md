@@ -60,7 +60,7 @@ on this base (Debug build, test mode, a temp config folder, the RFC 6238 SHA1 se
 | `run … '{{demo-totp:totp}}'` | `Unknown token '{{demo-totp:totp}}': the only suffix is ':previous' …` (`Validation.cs:15-21`) |
 | `run … '{{@f.yaml}}'` with `# tswap: demo-totp:totp` | `Unknown marker … the only suffix is ':previous'.` (`Apply.cs:77-80`) |
 | `tswap totp demo-totp` | `Unknown command: totp` |
-| `names`, `names --json` | no sign the record is a TOTP seed (`NamesCommand.cs:108`, `CliJson.cs:12`) |
+| `names`, `names --json` | no sign the record is a TOTP seed (`NamesCommand.cs:108-109`, `CliJson.cs:12`) |
 
 So every non-sudo consumer of the record gets the seed, and nothing can hand out a 30-second code instead. The broker
 reads values the same way (`BrokerSecrets.cs:86`, `:128`, `SshKeys.cs:89`). `rotate` on a burned record replaces the
@@ -95,7 +95,8 @@ the library #374 names.
   only `Ticks`, so pass `now.UtcDateTime`. Its parameterless overloads read `DateTime.UtcNow` and are never called.
 - Its `Base32Encoding.ToBytes` is lax: it trims any number of `=`, accepts lower case, ignores trailing bits, decodes
   one character to zero bytes and throws on a space. So tswap validates the text first (below) and hands the library
-  only canonical text. It has no URI parser; the parse below is tswap's (input validation, not crypto).
+  only canonical text. It can serialise an otpauth URI (`OtpUri`) but cannot parse one; the parse below is tswap's
+  (input validation, not crypto).
 - The namespace `TswapCore.Totp` shares its name with `OtpNet.Totp`: refer to the class through
   `using OtpTotp = OtpNet.Totp;`. Its constructor is `(byte[] secretKey, int step, OtpHashMode mode, int totpSize)`,
   period before algorithm before digits; say so in a comment at the call.
@@ -203,7 +204,9 @@ can't give a code (docs say so). Every spelling of the grammar changes together:
 - `Validation.TokenRegex` (`:9`), `ThrowIfUnknownTokenSuffix` (`:15-21`), the malformed-token text (`:46`),
   `AnyTokenRegex` (`:168`);
 - `Apply.MarkerRegex`, the `AnyMarkerRegex` check and `ValidMarkerTail` (`:8`, `:15`), the two marker texts (`:73`,
-  `:80`), and `Apply`'s base-name split (`:85-87`), which strips `:totp` as it strips `:previous`;
+  `:80`), `Apply`'s base-name split (`:85-87`), which strips `:totp` as it strips `:previous`, and its previous-value
+  pre-check (`:96-97`), which runs for `:previous` only (today it runs for any suffix: `secretName.Length !=
+  baseName.Length`), so a `:totp` marker is resolved once and never gets the "no previous value" text;
 - `Check.MarkerRegex` (`:8`) and `CheckMarkers`' suffix split (`:156`);
 - `ToCommentProcessor.ExistingMarker` (`:16`); `SecretMatcher.ConsumedMarker` (`:290`);
 - `RunCommand.BracedNameRegex` (`:498`), the encoded-token decoding beside it, and `EnvToken`'s text (`:432`).
@@ -273,7 +276,7 @@ public sealed class CommandValues(ISecretLookup inner, DateTimeOffset now, strin
 | `rotate x` (Task 4) | refused, decided from the decrypted value |
 | `redact`, `tocomment`, `check`, `names`, `burned`, `field show` | no value, as today (`tocomment` writes `# tswap: x`, which `run` fills with the code; `check` reports `Ok` for `# tswap: x:totp` from metadata, without testing the seed) |
 | `sudo get`, `sudo export`, `sudo field adopt` | unchanged: the stored value (D6) |
-| `sudo list` | unchanged: names and dates, no value (`ListCommand.cs:9`) |
+| `sudo list` | unchanged: names and dates, no value (`ListCommand.cs:9-10`) |
 | `sudo apply` | the code, as `run`'s files (D7) |
 
 A bare Base32 value is never recognised (D2), so `{{name}}` still hands it out. A bare seed is given only through
@@ -298,6 +301,7 @@ SHA1 URI unless the row says otherwise):
 | `{{t:totp}}` on `hunter2-password`; `{{t}}` on a hotp URI; `# tswap: t` on `digits=7` | refused with the texts above (B1, R2, R11), exit 1, child not started, no seed or URI on stdout or stderr |
 | the three R0 values of Task 1: `{{t}}`, `--env OTP={{t}}`, `# tswap: t` | refused (R0), exit 1, child not started, neither the URI nor the secret text on stdout or stderr |
 | `{{t:previous:totp}}`, `# tswap: t:previous:totp` | the new unknown-suffix texts |
+| `# tswap: t:totp` in a `{{@file}}` on a record with no previous value | the code; no "no previous value" text; the value section decrypted once (the `_values` recorder) |
 | `check` on a file with `# tswap: t:totp` | `Ok`, no value decrypted |
 | `sudo apply` (sudo bypass) on the file above | the code on both lines |
 | `sudo get t` | the stored URI |
@@ -346,7 +350,7 @@ Break-it-once: print the remaining time on stdout (the stdout assertion fails).
 
 `names` already unlocks (`NamesCommand.cs:38`) and reads metadata only (`:43`, `Names_DecryptsNoValue`), so the kind
 must be in the metadata. Format 3 metadata carries an extension list that every build keeps byte for byte (ruling 6,
-`RecordMetadata.cs:33`), and a value write keeps extensions it doesn't own (`FieldEdits.ForWrite`,
+`RecordMetadata.cs:21`), and a value write keeps extensions it doesn't own (`FieldEdits.ForWrite`,
 `RecordWrites.cs:93`). Because an older build keeps the extension when it writes a new value, the kind is bound to a
 version.
 
@@ -409,7 +413,7 @@ build's write) wins comes back with `vault reindex`.
   `CreateCommand.GenerateValue` (`:40`), so a refusal requests no entropy. When `Classify` of the value is `Totp` or
   `OtpAuthUnusable`, it refuses: `'x' holds a TOTP seed, which comes from the issuer: 'rotate' would replace it with a
   random value. Store the new seed with '<source> | <prefix> ingest --rotate x'.`
-- A section that can't be decrypted (null) doesn't refuse: `rotate` goes on as today. That keeps owner decision 8 and
+- A section that can't be decrypted (null) doesn't refuse: `rotate` goes on as today. That keeps T16-S2b owner decision 8 (damaged section) and
   `Add_OtherVariantSet_DamagedCurrent_RefusesNamingTheFile_WritesNothing` unchanged; a damaged seed can't be lost
   further.
 - `ingest --rotate` decrypts nothing and still works.
@@ -527,7 +531,8 @@ it with `TSWAP_E2E_BINARY` pointed at a local Debug publish and report the outpu
   - store the URI alone;
   - `totp`'s output; `names`' marks;
   - `vault reindex` for old records; `rotate` vs `ingest --rotate`;
-  - the spellings `run` masks (Task 2's `StoredForms` list) and that no other spelling is masked;
+  - the spellings `run` masks (Task 2's `StoredForms` list) and that no other spelling is masked; a 6-digit code is
+    masked only where it stands as a whole word or number, an 8-digit code anywhere;
   - `check` reports `Ok` for a `:totp` marker from metadata, without testing the seed;
   - a previous bare seed can't give a code (`:previous:totp` is not a token);
   - a code filled into a `{{@file}}` copy expires within one period: codes belong in arguments or `--env` at use time.
@@ -537,13 +542,17 @@ it with `TSWAP_E2E_BINARY` pointed at a local Debug publish and report the outpu
 - **`docs/security-model.md`:**
   - the reading-command list (`:211-212`) gains `totp`;
   - "What each command decrypts" gains `totp` (the one value it computes from);
-  - `rotate` leaves the write-command rows at `:179` and `:230` and gets its own row: "The one current value, to refuse
-    a TOTP seed (#374); none for a section that can't be decrypted";
+  - remove `rotate` from two rows: the threat-table row "A reading command decrypting values it doesn't use" (`:179`,
+    its list "`create`, `ingest`, `rotate`, `burn`, `delete`, `add` and `import` decrypt no value"), and the "What each
+    command decrypts" row `create`, `ingest`, `rotate`, `ingest --rotate`, `burn`, `delete`, `add`, `import` (`:230`);
+  - give `rotate` its own row in "What each command decrypts": "The one current value, to refuse a TOTP seed (#374);
+    none for a section that can't be decrypted";
   - a short "TOTP secrets" note:
     - a code is a live credential valid for one period;
     - the seed of a recognised otpauth record never leaves without sudo, but a bare Base32 value is not recognised;
     - `run` masks the code, the stored value and the spellings listed in docs/commands.md, and another spelling of
-      the same key is not masked; other records' seeds inside URIs are masked only as whole values;
+      the same key is not masked; a 6-digit code is masked only where it stands as a whole word or number, an 8-digit
+      code anywhere; other records' seeds inside URIs are masked only as whole values;
     - the broker refuses otpauth records (D8);
     - `sudo tswap field adopt NAME FIELD --from <TOTP secret>` turns the URI into a visible field, which `field show`
       prints without sudo; adopt only what is meant to be visible;
@@ -572,6 +581,10 @@ stale line (M-1); the prompt continuation line (M-2); `VaultWriter.ReadCurrentVa
 the burned hint, prompt rule 7, `ALLOWED_COMMANDS`, the security-model list and the BROKER.md line in this brief
 (M-9); the `OtpTotp` alias and the constructor comment (M-10); Tasks 5 and 6 owning amendments 13 and 14 (M-11);
 `SpellingTests` covering `.cs` (M-12); the release-note lines (M-13).
+Round 6 (MiMo r5, controller rulings): `rotate` named out of the security-model rows at `:179` and `:230`, with its
+own row (I-1); `Apply`'s previous-value pre-check for `:previous` only, with a `:totp` marker row (M-1); the 6- vs
+8-digit masking clause in the docs (M-2); Otp.NET serialises but doesn't parse URIs (M-3); "T16-S2b owner decision 8"
+(M-4); citations `NamesCommand.cs:108-109`, `ListCommand.cs:9-10`, `RecordMetadata.cs:21` (M-5).
 
 ### Amendments (round 1: MiMo; GLM's round 1 hit its quota and reviews round 2; controller and owner rulings)
 
