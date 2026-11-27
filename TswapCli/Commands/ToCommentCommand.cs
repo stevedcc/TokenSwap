@@ -67,6 +67,13 @@ public sealed class ToCommentCommand : ICliCommand
                 ctx.Console.Error.WriteLine($"  - [removed block line]");
                 ctx.Console.Error.WriteLine($"  + (removed)");
             }
+            else if (diff is CommentedLineDiff)
+            {
+                // Brief T63 (#419): a continuation line kept because it holds a stored value; like a removed one, it can
+                // hold a fragment of the replaced value, so its text is never printed.
+                ctx.Console.Error.WriteLine($"  - [continuation line holding a stored value]");
+                ctx.Console.Error.WriteLine($"  + (commented out)");
+            }
             else if (diff.After == "")
             {
                 // Continuation line being removed. Its content is a raw base64 fragment that
@@ -107,6 +114,13 @@ public sealed class ToCommentCommand : ICliCommand
         foreach (var value in report.Skipped)
         {
             var where = value.FirstLine == value.LastLine ? $"line {value.FirstLine}" : $"lines {value.FirstLine}-{value.LastLine}";
+            if (value.Reason == SkippedReason.ContinuationLine)
+            {
+                // Brief T63 (#419): commented out, not left in place as it was.
+                ctx.Console.Error.WriteLine(
+                    $"Warning: {where}: the value of '{value.Token}' (or an encoded form of it) is on a continuation line of a replaced value; tocomment commented that line out ('# ' after its indentation) instead of removing it, because it holds a stored value. Move the value out by hand.");
+                continue;
+            }
             var reason = value.Reason == SkippedReason.InBlockScalar
                 ? "it is inside a YAML block scalar"
                 : "it is not a whole value that apply fills back ('key: value', or 'KEY=value' without control characters)";
