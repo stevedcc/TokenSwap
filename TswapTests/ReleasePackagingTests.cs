@@ -1919,6 +1919,27 @@ public class ReleasePackagingTests : IDisposable
         Assert.DoesNotContain("matchPackageNames", renovate[(renovate.IndexOf(last, StringComparison.Ordinal) + last.Length)..]);
     }
 
+    /// <summary>
+    /// Brief T62 Task 6: the security-critical rule (never automerged, the last packageRules entry) names the key,
+    /// crypto, PTY and CBOR packages and, since T58, Otp.NET (it computes the TOTP codes from a stored seed).
+    /// </summary>
+    [Fact]
+    public void Renovate_SecurityCriticalRule_NamesItsPackages_AndNeverAutomerges()
+    {
+        var rule = RenovatePackageRules()[^1];
+        var start = rule.IndexOf("\n      matchPackageNames: [\n", StringComparison.Ordinal);
+        Assert.True(start >= 0, $"the last packageRules entry has no multi-line matchPackageNames:\n{rule}");
+        var end = rule.IndexOf("\n      ],\n", start, StringComparison.Ordinal);
+        Assert.True(end > start, "the security-critical rule's matchPackageNames is not closed");
+        var names = rule[(start + "\n      matchPackageNames: [\n".Length)..end].Split('\n').Select(l => l.Trim()).ToList();
+
+        Assert.Equal(["'Yubico.YubiKey',", "'BouncyCastle.Cryptography',", "'Konscious.Security.Cryptography.Argon2',", "'RedactingPty',",
+            "'System.Formats.Cbor',", "'Otp.NET',"], names);
+        Assert.Contains("\n      groupName: 'security-critical packages',\n", rule);
+        Assert.Contains("\n      matchDatasources: ['nuget'],\n", rule);
+        Assert.Contains("\n      automerge: false,\n", rule);
+    }
+
     [Fact]
     public void SignWindows_SecretsOnlyInTheirSteps()
     {

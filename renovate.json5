@@ -106,7 +106,7 @@
       addLabels: ['signing-tool'],
     },
     {
-      description: 'Security-critical packages: keys, crypto, the PTY, CBOR (FIDO2 messages). Never automerged: CI cannot run the hardware tests, so the owner decides (a Yubico SDK bump wants the B6 suite on the spare key). KEEP THIS RULE LAST: later packageRules win, so nothing after it may set automerge for these packages.',
+      description: 'Security-critical packages: keys, crypto, the PTY, CBOR (FIDO2 messages), Otp.NET (TOTP codes from a stored seed). Never automerged: CI cannot run the hardware tests, so the owner decides (a Yubico SDK bump wants the B6 suite on the spare key). KEEP THIS RULE LAST: later packageRules win, so nothing after it may set automerge for these packages.',
       matchDatasources: ['nuget'],
       matchPackageNames: [
         'Yubico.YubiKey',
@@ -114,6 +114,7 @@
         'Konscious.Security.Cryptography.Argon2',
         'RedactingPty',
         'System.Formats.Cbor',
+        'Otp.NET',
       ],
       groupName: 'security-critical packages',
       groupSlug: 'security-critical',
