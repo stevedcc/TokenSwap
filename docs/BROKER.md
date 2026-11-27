@@ -375,6 +375,10 @@ sudo -iu vault tswap broker status                  # locked, or unlocked until 
 sudo -iu vault tswap broker lock
 ```
 
+- **`refused peers` counts the control socket only:** the peers the broker's control socket refused (a
+  `broker unlock`, `lock` or `status` from a user that isn't the vault user). A refusal on a data socket (the
+  broker's own uid, a wrong container, a wrong label) is not counted; it appears only in the log, as
+  `refused-connection … reason=…` (described in [the threat model](broker-threat-model.md)).
 - **As the vault user, never as root.** All three refuse euid 0 before connecting
   (`Run 'tswap broker unlock' as the vault user (<name>), without sudo.`); `sudo -iu vault` is fine.
   On a broker whose slot has no password they say `This broker's slot has no vault password; it is
