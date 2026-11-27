@@ -9,7 +9,8 @@ using static TswapTests.RecordVaultTestSupport;
 namespace TswapTests;
 
 /// <summary>
-/// Brief T16-S2b: the write commands decrypt no value they don't use (format 3), read only the
+/// Brief T16-S2b: the write commands decrypt no value they don't use (format 3), except <c>rotate</c>, which reads the
+/// current value once to refuse a TOTP seed (#374), read only the
 /// record they write, and still write what they wrote before (each test reads the write back).
 /// Tasks 5 (<c>create</c>, <c>ingest</c>, <c>add</c>), 6 (<c>burn</c>, <c>delete</c>,
 /// <c>rotate</c>, <c>ingest --rotate</c>), 7 (<c>restore</c>) and 8 (<c>import</c>).
@@ -397,14 +398,15 @@ public sealed class WriteCommandDecryptionTests : IDisposable
     }
 
     [Fact]
-    public void Rotate_DecryptsNoValue()
+    public void Rotate_DecryptsOnlyTheCurrentValue()
     {
+        var current = ReadRecord(_m, _key, "a").Version;
         var before = Snapshot();
         Watch();
 
         _m.Ok("", "rotate", "a", "20");
 
-        Assert.Empty(_values);
+        Assert.Equal([(FileOf("a"), current)], _values);
         Assert.Equal([FileOf("a")], _records);
         AssertOthersUnchanged(before, "a");
         Assert.Equal(20, _m.Get("a").Length);

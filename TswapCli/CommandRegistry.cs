@@ -23,6 +23,7 @@ public static class CommandRegistry
         new YubiKeyCommand(),
         new AgentCommand(),
         new RunCommand(),
+        new TotpCommand(),
         new CheckCommand(),
         new RedactCommand(),
         new ToCommentCommand(),

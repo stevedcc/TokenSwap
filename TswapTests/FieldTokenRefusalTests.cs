@@ -22,7 +22,7 @@ public sealed class FieldTokenRefusalTests : IDisposable
         $"Read it with 'tswap field show {name}' and write the value into the command.";
 
     private static string MalformedMessage(string token) =>
-        $"'{token}' is not a valid token: a token is {{{{NAME}}}} or {{{{NAME:previous}}}}, " +
+        $"'{token}' is not a valid token: a token is {{{{NAME}}}}, {{{{NAME:previous}}}} or {{{{NAME:totp}}}}, " +
         "and fields aren't substituted into commands.";
 
     [Fact]
@@ -133,7 +133,7 @@ public sealed class FieldTokenRefusalTests : IDisposable
     });
 
     private static string MarkerMessage(string marker) =>
-        $"'{marker}' is not a valid marker: a marker is # tswap: NAME or # tswap: NAME:previous, " +
+        $"'{marker}' is not a valid marker: a marker is # tswap: NAME, # tswap: NAME:previous or # tswap: NAME:totp, " +
         "and fields aren't substituted into commands.";
 
     [Fact]

@@ -177,6 +177,11 @@
         "resolved": "13.0.3",
         "contentHash": "HrC5BXdl00IP9zeV+0Z848QWPAoCr9P3bDEZguI+gkLcBKAOxix/tLEAAHC+UvDNPv4a2d18lOReHMOagPa+zQ=="
       },
+      "Otp.NET": {
+        "type": "Transitive",
+        "resolved": "1.4.1",
+        "contentHash": "UXjZ80T6BfVACJWmEcz4UFZ93hwX3STKojKvVpPk3qUhubjnLwIiZMsI4Hh91HhYxC0JlatNdNrVK2wkv4O9/Q=="
+      },
       "RedactingPty": {
         "type": "Transitive",
         "resolved": "1.3.0",
@@ -265,6 +270,7 @@
         "dependencies": {
           "BouncyCastle.Cryptography": "[2.7.0, 2.7.0]",
           "Konscious.Security.Cryptography.Argon2": "[1.3.1, 1.3.1]",
+          "Otp.NET": "[1.4.1, 1.4.1]",
           "Yubico.YubiKey": "[1.18.1, 1.18.1]"
         }
       }

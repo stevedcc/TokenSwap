@@ -176,7 +176,7 @@ deployment.
 | Another local user (no root) with the hardware or a copy of the vault folder | Optional **vault password** on a slot (0.2): the TPM or Secure Enclave checks it, a YubiKey slot mixes it into the key; held by `tswap agent` or typed per command. A vault is only as strong as the weakest slot usable on that machine. See [What the vault password does and doesn't protect](#what-the-vault-password-does-and-doesnt-protect) |
 | Privilege escalation by agents | sudo boundary — `get`, `add`, `list`, `apply`, `delete`, `restore`, `import`, `export`, rotating a secret that isn't burned ([rotating-and-burning.md](rotating-and-burning.md)), and vault administration require sudo; agents should never run sudo |
 | Recognising a value in the vault folder | Record format 3 keeps keyed fingerprints of every value only inside AES-GCM-encrypted metadata sections (keys derived from the vault key): no cleartext hash of any value exists to test guesses against |
-| A reading command decrypting values it doesn't use | Since 0.3 the eight reading commands and `run` decrypt only the value versions they print or substitute (`run`: its `{{name}}` / `{{name:previous}}` tokens and its files' markers): `redact`, `tocomment`, `check`, `names`, `list` and `burned` decrypt none on format 3 records, `get` and `apply` only the ones they output. The write commands do the same: `create`, `ingest`, `rotate`, `burn`, `delete`, `add` and `import` decrypt no value on format 3 records and `restore` only the one it puts back, each reading only the records of the names it is given (`import`: every exported name, to skip the ones the vault holds), except where such a record itself can only be decided or merged by its value ([what each command decrypts](#what-each-command-decrypts)) |
+| A reading command decrypting values it doesn't use | Since 0.3 the reading commands and `run` decrypt only the value versions they print or substitute (`run`: its `{{name}}` / `{{name:previous}}` / `{{name:totp}}` tokens and its files' markers): `redact`, `tocomment`, `check`, `names`, `list` and `burned` decrypt none on format 3 records, `get`, `apply` and `totp` only the ones they output or compute from. The write commands do the same: `create`, `ingest`, `burn`, `delete`, `add` and `import` decrypt no value on format 3 records, `rotate` only the current value (to refuse a TOTP seed, #374) and `restore` only the one it puts back, each reading only the records of the names it is given (`import`: every exported name, to skip the ones the vault holds), except where such a record itself can only be decided or merged by its value ([what each command decrypts](#what-each-command-decrypts)) |
 
 ### What tswap does not protect against
 
@@ -209,7 +209,7 @@ file-token `run` sweeps it ("Files with secrets", below). On a machine with seve
 ### What each command decrypts
 
 Since 0.3 the commands that only read (`redact`, `tocomment`, `check`, `names`, `list`, `burned`,
-`get`, `apply`) decrypt only the values they use (owner: "unlocking all secrets is bad practice"),
+`get`, `apply`, and since 0.3.3 `totp`) decrypt only the values they use (owner: "unlocking all secrets is bad practice"),
 and so do the write commands, which read only the records of the names they are given (the table). A format 3 record keeps its value versions in separate
 encrypted sections, so a command can read a record's name, burns and fingerprints without opening
 a value. A **format 2** record (written by tswap 0.1, and kept until `sudo tswap vault reindex`
@@ -227,7 +227,9 @@ and doesn't make the record format 2.
 | `get` | The one value it prints (the current version of that secret) | That record, decrypted whole; a warning |
 | `apply` | The value versions it fills in, each once; none for a line already filled | Each record a marker names, decrypted whole; a warning |
 | `run` | The value versions it substitutes (its tokens and its files' markers), each once; every other record's metadata only | Each record a token or marker names, decrypted whole; a warning after the child's output |
-| `create`, `ingest`, `rotate`, `ingest --rotate`, `burn`, `delete`, `add`, `import` | No value: only the records of the names given are read, their metadata (`import`: every exported name, so it can skip the ones the vault holds); a new value is encrypted, a kept one copied as it is (exceptions below) | Each format 2 record of those names, decrypted whole (`import`: each exported name the vault holds as format 2, up to the whole vault, though it writes none of them); a warning |
+| `totp` | The one value it computes the code from (the current version of that secret) | That record, decrypted whole; a warning |
+| `rotate` | The one current value, to refuse a TOTP seed (#374); none for a section that can't be decrypted; then as the row below | That record, decrypted whole; a warning |
+| `create`, `ingest`, `ingest --rotate`, `burn`, `delete`, `add`, `import` | No value: only the records of the names given are read, their metadata (`import`: every exported name, so it can skip the ones the vault holds); a new value is encrypted, a kept one copied as it is (exceptions below) | Each format 2 record of those names, decrypted whole (`import`: each exported name the vault holds as format 2, up to the whole vault, though it writes none of them); a warning |
 | `restore` | The one value it puts back (the previous version, encrypted again as the new one; exceptions below) | That record, decrypted whole; a warning |
 | `field set`, `field unset`; `create`, `ingest`, `rotate`, `ingest --rotate`, `add` with `--field`/`--fields` | No value: every record's metadata, for the check that no field holds a stored value ([fields](#fields-plain-visible-data)); the value command's own value as above | None: the write is refused before anything is written, and asks for `sudo tswap vault reindex` (`field unset` sets no value and isn't refused) |
 | `field show` | No value: the one record's metadata | That record, decrypted whole; a warning |
@@ -377,6 +379,29 @@ Limits:
   output is redirected and stdout and stderr are redacted on their own) are discarded, a
   marker `[output truncated: redaction failed]` is written, and `run` ends with an error whose text
   holds no output.
+
+### TOTP secrets
+
+Since 0.3.3 (#374) a value holding `otpauth:` is an otpauth record, and every path that gives a value without sudo
+gives its current code instead, or refuses ([commands.md, TOTP secrets](commands.md#totp-secrets)):
+
+- A code is a live credential, valid for one period (30 seconds by default): whoever sees it can use it until then.
+  Seeing one needs no burn; seeing the URI or the seed does.
+- The seed of a recognised otpauth record never leaves without sudo: `run`, `apply` and `totp` hand out codes, and a
+  record that isn't a clean, usable TOTP URI (also a URI among other text) is refused, never passed on. Only
+  `sudo tswap get` and `sudo tswap export` give the stored URI. A bare Base32 value is not recognised (any random value
+  may be Base32), so `{{name}}` still hands it out: store seeds as URIs, or give a bare seed only as `{{name:totp}}`.
+- `run` masks the code, the stored value and the spellings of the seed listed in
+  [commands.md](commands.md#totp-secrets); another spelling of the same key (grouped, re-cased, hex, base64 of the key
+  bytes, a re-encoded URI) is not masked. A 6-digit code is masked only where it stands as a whole word or number, an
+  8-digit code anywhere. Other records' seeds inside URIs are masked only as whole values.
+- The broker refuses otpauth records on routes, templates and the ssh-agent, and zeroes the value: it hands out
+  neither seeds nor codes ([BROKER.md](BROKER.md)).
+- `rotate` refuses a TOTP seed, decided from the decrypted value; the issuer's new seed goes in with
+  `ingest --rotate`. The `[TOTP]` mark `names` shows is display only and never decides anything.
+- `sudo tswap field adopt NAME FIELD --from <TOTP secret>` turns the URI into a visible field, which `field show`
+  prints without sudo: adopt only what is meant to be visible.
+- The Certum signing flow (#368) keeps its YubiKey code: CI signing doesn't read a TOTP secret from tswap.
 
 ### Files with secrets: `run` with `{{@file}}`
 

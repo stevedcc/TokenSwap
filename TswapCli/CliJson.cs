@@ -9,7 +9,8 @@ namespace TswapCli;
 /// CLI layer because these shapes are a presentation concern, not part of the on-disk
 /// vault format. Property names serialise as camelCase; null fields are omitted.
 /// </summary>
-public sealed record NameEntry(string Name, bool Burned, DateTime? BurnedAt);
+/// <param name="Kind">Brief T58 (#374): <c>"totp"</c> or <c>"otpauth-unusable"</c> for a marked otpauth record; null (omitted) otherwise.</param>
+public sealed record NameEntry(string Name, bool Burned, DateTime? BurnedAt, string? Kind = null);
 
 /// <param name="Status">Brief T6: "outstanding", or "rotated" for a burn a newer value superseded.</param>
 public sealed record BurnedEntry(string Name, DateTime? BurnedAt, string? Reason, string? Status = null);

@@ -7,6 +7,7 @@ namespace TswapCore.Fields;
 /// defines is listed here, so a new one can't collide with it.
 /// <list type="bullet">
 /// <item><c>0x0100</c> <see cref="Type"/>: a secret's plain fields (issue #311, <see cref="FieldsCodec"/>).</item>
+/// <item><c>0x0101</c> <see cref="TswapCore.Totp.ValueKinds.Type"/>: which retained versions are otpauth values (brief T58, #374).</item>
 /// </list>
 /// Taken by tests as types no build defines (they must stay unknown): <c>0x0001</c>, <c>0x0002</c>,
 /// <c>0x0005</c>, <c>0x0102</c>, <c>0x7000</c>, <c>0x7777</c>, <c>0xFFFF</c>.

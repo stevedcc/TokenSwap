@@ -275,7 +275,40 @@ public sealed class RecordWritesTests
     };
 
     /// <summary>A random merged record of one secret, as a full load gives it (every retained version with a section).</summary>
-    private static SecretRecord? RandomState(Random random, Random fields, string name)
+    /// <summary>Brief T58: the otpauth values the random states draw (usable, HOTP, 7 digits, a labelled paste).</summary>
+    private static readonly string[] OtpauthValues =
+    [
+        Totp.OtpNetContractTests.Sha1Uri, Totp.RunTotpTests.HotpUri, Totp.RunTotpTests.Digits7Uri, "certum-totp: " + Totp.OtpNetContractTests.Sha1Uri,
+        Totp.RunTotpTests.Sha256Uri,
+    ];
+
+    /// <summary>Brief T58: a plain value from <paramref name="random"/> (drawn always), or now and then an otpauth one from <paramref name="kinds"/>.</summary>
+    private static byte[] RandomValue(Random random, Random kinds)
+    {
+        var plain = RandomValue(random);
+        return Encoding.UTF8.GetBytes(kinds.Next(3) == 0 ? OtpauthValues[kinds.Next(OtpauthValues.Length)] : plain);
+    }
+
+    /// <summary>
+    /// Brief T58: a random <c>ValueKinds</c> extension for a state: consistent entries, no entry for a retained version,
+    /// or a stale entry for a stamp the state no longer retains (an old build's rotate), at a random place; or none.
+    /// </summary>
+    private static void AddRandomKinds(Random kinds, List<RecordExtension> extensions, IReadOnlyList<(Stamp Version, byte[] Value)> retained,
+        IReadOnlyList<Stamp> stamps)
+    {
+        List<TswapCore.Totp.ValueKinds.Entry> entries = [];
+        foreach (var (version, value) in retained)
+            if (TswapCore.Totp.ValueKinds.Classify(value) is var kind and not TswapCore.Totp.ValueKind.None && kinds.Next(4) != 0)
+                entries.Add(new(version, (byte)kind));
+        var stale = stamps.Where(s => retained.All(r => !r.Version.Equals(s))).ToList();
+        if (stale.Count > 0 && entries.Count < 2 && kinds.Next(3) == 0)
+            entries.Add(new(stale[kinds.Next(stale.Count)], (byte)(kinds.Next(2) + 1)));
+        if (entries.Count > 0)
+            extensions.Insert(kinds.Next(extensions.Count + 1),
+                new RecordExtension(TswapCore.Totp.ValueKinds.Type, TswapCore.Totp.ValueKinds.Encode(entries)));
+    }
+
+    private static SecretRecord? RandomState(Random random, Random fields, string name, Random? kinds = null)
     {
         if (random.Next(6) == 0)
             return null;
@@ -291,17 +324,24 @@ public sealed class RecordWritesTests
         if (fields.Next(4) != 0)
             extensions.Insert(fields.Next(extensions.Count + 1), FieldsExtensionOf(FieldMergeTests.RandomSet(fields)));
         if (random.Next(5) == 0)
+        {
+            // Brief T58: an older build keeps a ValueKinds extension on a tombstone.
+            if (kinds is not null)
+                AddRandomKinds(kinds, extensions, [], stamps);
             return RecordMerge.Normalize(new SecretRecord(IdOf(name), At(9_500), RecordType.Tombstone, version, name, 500, [], burns)
             {
                 Extensions = extensions,
             });
-        var value = Encoding.UTF8.GetBytes(RandomValue(random));
+        }
+        var value = kinds is null ? Encoding.UTF8.GetBytes(RandomValue(random)) : RandomValue(random, kinds);
         PreviousValue? previous = null;
         if (stamps.Count > 1 && random.Next(3) != 0)
         {
-            var old = Encoding.UTF8.GetBytes(RandomValue(random));
+            var old = kinds is null ? Encoding.UTF8.GetBytes(RandomValue(random)) : RandomValue(random, kinds);
             previous = new PreviousValue(stamps[^2], old, RandomSet(random, old));
         }
+        if (kinds is not null)
+            AddRandomKinds(kinds, extensions, previous is null ? [(version, value)] : [(version, value), (previous.Version, previous.Value)], stamps);
         var sealedSections = new Dictionary<Stamp, byte[]> { [version] = Section() };
         if (previous is not null)
             sealedSections[previous.Version] = Section();
@@ -328,13 +368,16 @@ public sealed class RecordWritesTests
     {
         var random = new Random(2_016);
         var fields = new Random(3_11);
+        // Brief T58 (sanctioned test-input change): otpauth values and ValueKinds extensions, from their own generator.
+        var kinds = new Random(374);
+        var marked = 0;
         using var keys = FingerprintKeys.Derive(Key);
         int compared = 0, burns = 0, restores = 0, tombstones = 0, imports = 0, sameValueBurns = 0, unchanged = 0;
         int fieldWrites = 0, fieldsUnchanged = 0, valueWritesWithEdits = 0, fieldsOnlyValueWrites = 0, nothingWritten = 0;
         for (var round = 0; round < 600; round++)
         {
             var name = $"s{round % 7}";
-            var state = RandomState(random, fields, name);
+            var state = RandomState(random, fields, name, kinds);
             var live = state is { Type: not RecordType.Tombstone };
             var meta = state is null ? null : Meta(state);
             var held = state?.Sealed ?? new Dictionary<Stamp, byte[]>();
@@ -379,7 +422,7 @@ public sealed class RecordWritesTests
                     // same value go through the same dispatch as everything else (CommitWrites calls Next).
                     var sameValue = live && !restored && random.Next(2) == 0;
                     var rotated = restored || random.Next(sameValue ? 6 : 2) == 0;
-                    var value = restored ? state!.Previous!.Value : sameValue ? state!.Value : Encoding.UTF8.GetBytes(RandomValue(random));
+                    var value = restored ? state!.Previous!.Value : sameValue ? state!.Value : RandomValue(random, kinds);
                     DateTime? importedAt = random.Next(sameValue ? 2 : 3) == 0 ? new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddMinutes(round) : null;
                     var edits = fields.Next(3) == 0 ? RandomEdits() : null;
                     var expected = RecordVaultStore.NextRecord(state, IdOf(name), name, value, rotated, restored, Created, importedAt, "imp",
@@ -390,7 +433,7 @@ public sealed class RecordWritesTests
                         {
                             section = Section();
                             return (section, Fp(value));
-                        }, edits, edits is null ? null : Claude);
+                        }, edits, edits is null ? null : Claude, newKind: TswapCore.Totp.ValueKinds.Classify(value));
                     valueWritesWithEdits += edits is null ? 0 : 1;
                     Assert.Equal(expected is null, actual is null);
                     if (expected is not null)
@@ -398,6 +441,8 @@ public sealed class RecordWritesTests
                         if (section is not null)
                             plaintexts[stamp] = value;
                         Compare(expected, actual!.Value.Metadata, actual.Value.Sections, state, section);
+                        if (TswapCore.Totp.ValueKinds.Of(actual.Value.Metadata) != TswapCore.Totp.ValueKind.None)
+                            marked++;
                     }
                     // The value part: a burn of the same value, or nothing (field edits may still be written).
                     var burnAdded = expected is not null && section is null && expected.OutstandingBurn is not null && state!.OutstandingBurn is null;
@@ -465,6 +510,7 @@ public sealed class RecordWritesTests
             $"field writes {fieldWrites} (unchanged {fieldsUnchanged}), value writes with edits {valueWritesWithEdits} " +
             $"(fields only {fieldsOnlyValueWrites})");
         Assert.True(nothingWritten > 10, $"only {nothingWritten} rounds where both paths wrote nothing");
+        Assert.True(marked > 20, $"only {marked} value writes left a marked current version");
     }
 
     /// <summary>

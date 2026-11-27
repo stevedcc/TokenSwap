@@ -5,7 +5,7 @@ namespace TswapCore;
 public static class Check
 {
     // Fix round 3: '# tswap: name:previous' markers are checked against the previous value.
-    private static readonly Regex MarkerRegex = new(@"#\s*tswap\s*:\s*([a-zA-Z0-9_-]+(?::previous)?)");
+    private static readonly Regex MarkerRegex = new(@"#\s*tswap\s*:\s*([a-zA-Z0-9_-]+(?::previous|:totp)?)");
 
     /// <summary>
     /// One marker. Brief T20 (#315): <paramref name="UnderSecretData"/> when the marker line is inside a
@@ -154,7 +154,10 @@ public static class Check
         return markers.Select(marker =>
         {
             var previous = marker.SecretName.EndsWith(SecretsDb.PreviousSuffix, StringComparison.Ordinal);
-            var name = previous ? marker.SecretName[..^SecretsDb.PreviousSuffix.Length] : marker.SecretName;
+            // Brief T58: a ':totp' marker is checked from metadata like a plain one; the seed itself isn't tested.
+            var name = previous ? marker.SecretName[..^SecretsDb.PreviousSuffix.Length]
+                : marker.SecretName.EndsWith(SecretsDb.TotpSuffix, StringComparison.Ordinal) ? marker.SecretName[..^SecretsDb.TotpSuffix.Length]
+                : marker.SecretName;
             if (!db.Contains(name))
             {
                 db.ThrowIfUnreadable(name);

@@ -944,6 +944,8 @@ Each refusal names the socket and the reason; on a reload the running config is 
   header it names, the other hop-by-hop headers, `Expect`, `Range`, `If-Range` and
   `Accept-Encoding` never reach the upstream; `Set-Cookie`, hop-by-hop headers and any header
   holding a redaction form never reach the client.
+- TOTP records (a value holding `otpauth:`, #374) are refused on routes, templates and the ssh-agent, and the value
+  is zeroed: the broker hands out neither seeds nor codes ([security-model.md](security-model.md#totp-secrets)).
 
 ## Moved sections
 

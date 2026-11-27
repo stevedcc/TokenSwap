@@ -287,7 +287,7 @@ public sealed class SecretMatcher(FingerprintIndex index, IReadOnlySet<string> b
     /// </summary>
     private sealed record MultiLineOccurrence(int Start, int End, int MarkerEnd, int First, int Last, string Token, bool AtLineBreak);
 
-    private static readonly Regex ConsumedMarker = new(@"\G\s*#\s*tswap\s*:\s*[a-zA-Z0-9_-]+(?::previous)?(?![-\w])");
+    private static readonly Regex ConsumedMarker = new(@"\G\s*#\s*tswap\s*:\s*[a-zA-Z0-9_-]+(?::previous|:totp)?(?![-\w])");
 
     /// <summary>
     /// Brief T50b Task 3 (#399): the occurrences in the raw <paramref name="content"/> (and its line-ending views)
