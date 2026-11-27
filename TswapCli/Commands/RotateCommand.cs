@@ -31,11 +31,13 @@ public sealed class RotateCommand : ICliCommand
         fields.ResolveWho(ctx);
         var config = ctx.Storage.LoadConfig();
         var key = ctx.Unlock(config);
-        // Brief T16-S2b: only this record is read, and no stored value is decrypted.
+        // Brief T16-S2b: only this record is read; brief T58 (#374): its current value is decrypted once, to refuse a
+        // TOTP seed, and no other value.
         using var writer = ctx.OpenVaultForWrite(key);
         try
         {
             var existing = SecretRotation.Check(ctx, writer, name, "rotate");
+            RefuseTotpSeed(ctx, writer, name);
 
             var value = CreateCommand.GenerateValue(ctx, config, length);
             SecretRotation.Write(ctx, key, writer, fields, name, value, "rotate");
@@ -47,6 +49,29 @@ public sealed class RotateCommand : ICliCommand
         finally
         {
             FingerprintTexts.WarnFormatTwo(ctx.Console.Error, ctx.Prefix, writer.FormatTwoDecoded + fields.FormatTwoDecoded, FormatTwoUse.Write);
+        }
+    }
+
+    /// <summary>
+    /// Brief T58 (decision D9): a TOTP seed comes from the issuer, so a random value can't replace it. Decided from the
+    /// decrypted current value, marked or not (a record written before 0.3.3 carries no mark); a section that can't be
+    /// decrypted doesn't refuse (T16-S2b owner decision 8: a damaged seed can't be lost further).
+    /// </summary>
+    private static void RefuseTotpSeed(CommandContext ctx, VaultWriter writer, string name)
+    {
+        var value = writer.ReadCurrentValue(name);
+        if (value is null)
+            return;
+        try
+        {
+            if (TswapCore.Totp.ValueKinds.Classify(value) != TswapCore.Totp.ValueKind.None)
+                throw new TswapException(
+                    $"'{name}' holds a TOTP seed, which comes from the issuer: 'rotate' would replace it with a random value. " +
+                    $"Store the new seed with '<source> | {ctx.Prefix} ingest --rotate {name}'.");
+        }
+        finally
+        {
+            System.Security.Cryptography.CryptographicOperations.ZeroMemory(value);
         }
     }
 }

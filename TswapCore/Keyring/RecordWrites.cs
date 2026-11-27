@@ -1,5 +1,6 @@
 using TswapCore.Fields;
 using TswapCore.Fingerprints;
+using TswapCore.Totp;
 
 namespace TswapCore.Keyring;
 
@@ -29,7 +30,7 @@ internal static class RecordWrites
         RecordMetadata? state, IReadOnlyDictionary<Stamp, byte[]> heldSections, byte[] recordId, string name, Func<bool> sameValue,
         bool rotated, bool restored, DateTime created, DateTime? burnedAt, string? burnReason, byte[] origin, Func<Stamp> nextStamp,
         Func<Stamp, (byte[] Section, FingerprintSet Fingerprints)> seal, IReadOnlyList<FieldEdit>? edits = null, FieldWho? who = null,
-        bool checkFieldCaps = true)
+        bool checkFieldCaps = true, ValueKind newKind = ValueKind.None)
     {
         // NextRecord's order: a new version when there is no live record, when rotated, or when the
         // value differs (asked last, so add's comparison runs only when it decides something).
@@ -38,7 +39,7 @@ internal static class RecordWrites
             var version = nextStamp();
             var (section, fingerprints) = seal(version);
             return NewVersion(state, heldSections, recordId, name, version, section, fingerprints, restored, created, burnedAt, burnReason, origin,
-                edits, who, nextStamp, checkFieldCaps);
+                edits, who, nextStamp, checkFieldCaps, newKind);
         }
         // The same value: a burn of the current version, stamped now, when it has none; then the
         // field edits (issue #311), as a metadata-only write; null when neither changes anything.
@@ -70,11 +71,15 @@ internal static class RecordWrites
     /// <paramref name="nextStamp"/> after <paramref name="version"/>. A new life of the name (no live
     /// <paramref name="state"/>) always gets a fresh <c>Fields</c> extension, <c>Since</c> = <paramref name="version"/>.
     /// </param>
+    /// <param name="newKind">
+    /// Brief T58: the new value's kind (<see cref="ValueKinds.Classify"/>), its <c>ValueKinds</c> entry; the replaced
+    /// current version keeps its entry if it has one, every other entry is dropped.
+    /// </param>
     public static (RecordMetadata Metadata, IReadOnlyDictionary<Stamp, byte[]> Sections) NewVersion(
         RecordMetadata? state, IReadOnlyDictionary<Stamp, byte[]> heldSections, byte[] recordId, string name, Stamp version,
         byte[] newSection, FingerprintSet newFingerprints, bool restored, DateTime created, DateTime? importedBurnAt,
         string? importedBurnReason, byte[] origin, IReadOnlyList<FieldEdit>? edits = null, FieldWho? who = null, Func<Stamp>? nextStamp = null,
-        bool checkFieldCaps = true)
+        bool checkFieldCaps = true, ValueKind newKind = ValueKind.None)
     {
         var live = state is { Type: not RecordType.Tombstone };
         List<BurnEntry> burns = [.. state?.Burns ?? []];
@@ -90,7 +95,9 @@ internal static class RecordWrites
         if (importedBurnAt is { } at)
             burns.Add(new BurnEntry(version, new Stamp(new Hlc(new DateTimeOffset(UtcOf(at)).ToUnixTimeMilliseconds(), 0), origin), importedBurnReason));
         var createdMs = live ? state!.CreatedMs : new DateTimeOffset(DateTime.SpecifyKind(created, DateTimeKind.Utc)).ToUnixTimeMilliseconds();
-        var extensions = FieldEdits.ForWrite(state?.Extensions ?? [], live ? null : version, edits, who, nextStamp, name, checkFieldCaps);
+        var extensions = ValueKinds.ForNewVersion(
+            FieldEdits.ForWrite(state?.Extensions ?? [], live ? null : version, edits, who, nextStamp, name, checkFieldCaps),
+            version, newKind, live ? state!.Version : null);
         var metadata = new RecordMetadata(recordId, Stamp.Zero, RecordType.Value, version, name, createdMs, burns, newFingerprints,
             live ? state!.Version : null, live ? state!.Fingerprints : null, extensions);
         return (RecordMerge.Normalize(metadata), sections);
@@ -109,7 +116,7 @@ internal static class RecordWrites
 
     /// <summary>
     /// The tombstone a delete writes: no value versions, sections or sets; the burns kept as history;
-    /// no <c>Fields</c> extension (issue #311), every other extension kept.
+    /// no <c>Fields</c> extension (issue #311) and no <c>ValueKinds</c> one (brief T58), every other extension kept.
     /// </summary>
     public static RecordMetadata Tombstone(RecordMetadata state, Stamp version) => RecordMerge.Normalize(state with
     {
