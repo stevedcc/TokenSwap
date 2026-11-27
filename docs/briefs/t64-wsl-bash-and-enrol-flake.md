@@ -27,8 +27,10 @@ No hardware suites, `ykman`, `sudo`, real YubiKeys or `~/.config/tswap`. Commits
 brief can't be built as written, stop and report. **No existing test's assertions change.** If an existing test fails
 on an assertion, stop and list it. Checked: the in-process run tests with a `bash` word are
 `RunMsysTargetTests` (its probe has no WSL `bash.exe` and resolves `bash` to Git's), `CommandTests.cs:921` (refused
-earlier by `GetBlockedInvocation`, unchanged) and `RunFileTokenTests.cs:764` (the file-token refusal comes first, see
-Task 3). On Windows CI every in-process test runs with `Os` Windows and a null probe (`FleetMachine.cs:213-217`), so the
+earlier by `GetBlockedInvocation`, unchanged), and `RunFileTokenTests.cs:764` and `:1003` (the file-token refusal
+comes first, see Task 3; in `:1003`'s `helm template -f {{@f}} --post-renderer bash`, `bash` is an argument, not a
+program position). Task 2a's `runuser` change touches no existing row: `InlineCodeBlockTests.cs:105`, `:129`, `:261`
+and `:269` go through the same branch as before, and no file-token row uses `runuser`. On Windows CI every in-process test runs with `Os` Windows and a null probe (`FleetMachine.cs:213-217`), so the
 order in Task 3 matters there.
 
 **File ownership.** T62 owns `MsysTarget.cs`, `SecretVariants.cs`, `MsysQuotingTests`, `DependencyPinningTests`,
@@ -206,6 +208,48 @@ twice:
 Remove the sleep and confirm with `git diff --stat -- TswapCli/SystemConsole.cs` that nothing is left. Put both results
 in the commit message. The macOS landing (no controlling terminal) is confirmed only by macOS CI.
 
+## Task 2a (shared walk): `runuser` joins `Wrappers` (round 4 I-1)
+
+**The gap.** `ProgramPositions` (`:269-312`) walks only through `Wrappers` (`:525-531`). `runuser` is in `ShellAsUser`
+(`:534`), not in `Wrappers`, although `GetBlockedInvocation` already checks its command with `CheckWrapper` (`:699`).
+So every guard built on `ProgramPositions` skips `runuser`'s command: today `GetFileTokenRefusal`'s program-position
+printers (`FileProgramPrinters`, `:222`, `install`), and after this brief the bash check
+(`runuser -u root bash.exe ./x.sh {{x}}` under WSL interop). `CheckWrapper` is reached from only two places, the
+`Wrappers` branch (`:684-685`) and `runuser` (`:699`), so `runuser` is the only wrapper with this shape. `su` is refused
+outright (`:700`). Wrappers that no guard knows (`pkexec`, `setpriv`, `prlimit`, `numactl`, `cgexec`, `sg`,
+Windows' `runas`) are the unknown-runner residual (Out of scope).
+
+**Parser-first** (util-linux at e57914591653, `login-utils/su-common.c`, shared by `su` and `runuser`):
+`getopt_long(argc, argv, "c:fg:G:lmpPTs:u:hVw:", longopts)` (`:1093`), with long options (`:1060-1076`) `--command`,
+`--session-command`, `--group`, `--supp-group`, `--shell`, `--user`, `--whitelist-environment` taking a value, and
+`--fast`, `--login`, `--preserve-environment`, `--pty`, `--no-pty`, `--help`, `--version` not. There is no leading `+`,
+so GNU getopt permutes: options may also follow the command, and `--` ends them. A lone `-` after the options means
+`--login` (`:1172-1175`). With `-u USER` the first non-option word is the command, run directly (`:1184-1198`).
+Without `-u`, the first non-option word is the user, and the rest go to that user's shell (`:1200-1203`).
+
+**Change**, in `Validation.cs`:
+- Add `"runuser"` to `Wrappers`.
+- Move the `ShellAsUser` branch (`:687-701`) **above** the `Wrappers` branch (`:684-685`). Otherwise `runuser` would
+  reach `CheckWrapper` first and skip its `-c`/`--command` refusal, which would fail open. `GetBlockedInvocation`
+  then behaves exactly as today for every word: `runuser` reaches the same branch as before, and no other word is in
+  both sets.
+- Add `-w` and `--whitelist-environment` (valued in util-linux) to `WrapperValued["runuser"]` (`:820`), so their value
+  is never taken for the command. `runuser` stays out of `TrustedWrappers`, so its later words are still scanned (F22).
+  That covers permuted options and `-lu USER` clusters, whose value the walk can't see.
+- `IsCheckedProgram` (`:1424`) already includes `ShellAsUser`, so nothing changes there.
+
+Tests (`TswapTests/RunuserWalkTests.cs`, in-process):
+
+| call | outcome |
+|---|---|
+| `ProgramPositions(["runuser", "-u", "app", "install", "a", "b"])` | `[0, 3]` |
+| `ProgramPositions(["runuser", "-w", "PATH", "-u", "app", "--", "tool"])` | `[0, 6]` |
+| `GetBlockedInvocation(["runuser", "-c", "echo {{x}}"])`, `(["runuser", "root", "--command=echo {{x}}"])`, `(["runuser", "-lc", "echo {{x}}"])` | refused with `InlineReason` (unchanged) |
+| `GetFileTokenRefusal(["runuser", "-u", "app", "install", "{{@f}}", "/tmp/x"])` | refused, `'install' copies files` (new: it was allowed) |
+
+Break-it-once: put the `ShellAsUser` branch back below the `Wrappers` branch. The three `-c` rows must fail
+(allowed). Then remove `runuser` from `Wrappers`. The `ProgramPositions` and `install` rows must fail.
+
 ## Task 2 (#411): `Validation.BashLauncherRefusal`
 
 In `TswapCore/Validation.cs`, next to `GetBlockedInvocation`:
@@ -244,8 +288,10 @@ A word is **absolute** when it starts with a drive letter, `:` and `\` or `/` (`
 **The program positions** are the ones `run`'s existing guards check, as `CheckWrapper` (`:848-940`) reaches them
 ("names bash" below means "names bash.exe" off Windows):
 1. `argv[0]`, and then each command `ProgramPositions` (`:269-312`) finds: through a simple wrapper (`Wrappers`,
-   `:525-531`, not in `SubcommandTools`), skipping its options, the values in `WrapperValued` and a leading positional
-   (`WrapperLeadingPositional`, `:830-831`: `timeout 5`, `flock FILE`, …), and through `find -exec`.
+   `:525-531`, not in `SubcommandTools`; `runuser` included since Task 2a), skipping its options, the values in
+   `WrapperValued` and a leading positional (`WrapperLeadingPositional`, `:830-831`: `timeout 5`, `flock FILE`, …),
+   and through `find -exec`. At a `command` position with `-v` or `-V` among its arguments the walk stops, as
+   `CheckWrapper` does (`:856-857`): `command -v` only looks the name up (round 4 M-4).
 2. After a wrapper that is **not** in `TrustedWrappers` (`:1064-1066`; for example `npx`, `strace`, `bwrap`,
    `unbuffer`, `systemd-run`): every later word that names bash, as `CheckWrapper` scans them (`:929-933`, review
    F22). An unknown option's value can hide the command.
@@ -254,14 +300,22 @@ A word is **absolute** when it starts with a drive letter, `:` and `\` or `/` (`
    `CheckWrapper` checks them (`:888-890`). The host-side runners `uv`, `poetry`, `pipenv`, `pdm`, `hatch`, `conda`,
    `pixi`, `npm`, `pnpm`, `yarn` and `bundle` get the rule of the OS. The container, remote and sandbox tools
    `docker`, `podman`, `nerdctl`, `kubectl`, `oc`, `lxc`, `incus`, `machinectl`, `toolbox`, `distrobox`, `flatpak`
-   and `snap` run the command elsewhere, in Linux, so their words get the off-Windows rule: `bash` there is Linux bash,
-   and `bash.exe` would be the launcher only through interop.
+   and `snap` run the command elsewhere, so their words get the off-Windows rule. That rule **assumes a Linux
+   target**: there `bash` is Linux bash, and `bash.exe` would be the launcher only through interop. A Windows
+   container or node would start `bash` through its own `CreateProcess`. No Windows container image is known to carry
+   WSL's launcher, so this is declared rather than handled (round 4 M-2).
 4. A `wsl` at any of these positions (`argv[0]` included): the walk ends there. `var walk = WalkWsl("wsl", argv.Skip(k + 1).ToList())`. If
    `walk.Ended`, or not `walk.Exec`, or `walk.Command` is past the end, return null: `CheckWsl` already decides those
    cases (T51), and its shell-mode refusal is unchanged. Otherwise check wsl's command,
    `argv.Skip(k + 1 + walk.Command).ToList()`, with `BashLauncherRefusal(inner, windows: false, probe: null)`. A
    refusal from there comes back as `inner with { Reason = $"'wsl' runs '{inner.Program}': {inner.Reason}" }`, as
    `CheckWsl` words its own (`:1024`). This applies on both OSes.
+
+Rules 2 to 4 apply at every position rule 1 yields, those inside a `find -exec` command included; there a later-word
+scan runs to that command's `;` or `+`. **Once a `wsl` walk starts, its command is checked only by the walk** (round 4
+M-5): the later-word scans of rules 2 and 3 stop at the first word whose `ProgramName` is `wsl`, which is then
+handled as rule 4. So in `npx wsl -e bash ./x.sh {{x}}`, `bash` is Linux bash inside the distribution (null), and in
+`npx wsl -e bash.exe …` it is refused by the walk.
 
 Nothing else is checked: an ordinary argument (`git commit -m bash`, a passphrase holding the word) is not a program
 position. A program `run` doesn't know as a wrapper or runner (`pipx run`, `dotnet tool run`) has no positions after
@@ -294,7 +348,10 @@ Neither reason contains `WayOutFor(false)`, so `RunCommand.Reason` leaves them a
 does not change, so the broker's template check (`BrokerTemplatePolicy.cs:265`) doesn't change either.
 
 Tests (`TswapTests/BashLauncherRefusalTests.cs`; in-process, every OS). "WSL probe" is
-`MsysTargetTests.FakeProbe([@"C:\Windows\System32\bash.exe"])`. "Git probe" is `MsysTargetTests.FakeProbe([])`. The
+`MsysTargetTests.FakeProbe([@"C:\Windows\System32\bash.exe"])`. "Git probe" is `MsysTargetTests.FakeProbe([])`.
+"Win32 probe" is the Git probe with `FileExists` normalising as Win32 does, trailing dots and spaces of the path
+dropped: `var git = MsysTargetTests.FakeProbe([]); var win32 = git with { FileExists = path => git.FileExists(path.TrimEnd('.', ' ')) };`
+(round 4 I-3). The
 script argument is `./x.sh {{x}}` unless shown otherwise. A path shown in `"…"` is shell quoting: the word holds no
 `"`. The exception is a row marked "(quotes in the word)".
 
@@ -314,6 +371,8 @@ script argument is `./x.sh {{x}}` unless shown otherwise. A path shown in `"…"
 | `bash` | true | Git plus `C:\tools\bash.exe` | refused (tswap's folder comes first) |
 | `bash` | true | `new MsysTarget.Probe(@"C:\tools", @"C:\work", @"C:\Windows\System32", @"C:\Windows", _ => null, _ => false)` | refused (not found) |
 | `bash.exe.`, `bash.exe `, ` bash`, `bash\.`, `bash\`, `bash/` | true | Git | refused (padded, outright; the row asserts only "refused") |
+| `C:\msys64\usr\bin\bash.exe` | true | Win32 | null (the control) |
+| `C:\msys64\usr\bin\bash.exe.`, `C:\msys64\usr\bin\bash.exe ` | true | Win32 | refused (padded, outright; without that rule these would resolve to MSYS2 and be allowed) |
 | `"C:\Windows\System32\bash.exe"`, `"ba"sh` (quotes in the word) | true | WSL | refused (padded) |
 | `"C:\Program Files\Git\bin\bash.exe"` (quotes in the word) | true | WSL | refused (outright: T55 would not recognise it) |
 | `bash.exe::$DATA`, `bash.exe:stream`, `C:\Windows\System32\.\bash.exe`, `\\?\C:\Windows\System32\bash.exe`, `C:\WINDOW~1\System32\bash.exe` | true | WSL | refused (not found by the exact fake probe; on Windows not found or not MSYS2) |
@@ -323,6 +382,12 @@ script argument is `./x.sh {{x}}` unless shown otherwise. A path shown in `"…"
 | `sudo .\bash ./x.sh {{x}}`; `sudo sub\bash.exe ./x.sh {{x}}` with `C:\work\sub\bash.exe` and `C:\work\sub\msys-2.0.dll` in the probe; `sudo \Program Files\Git\bin\bash.exe ./x.sh {{x}}` | true | Git (plus those files) | refused (not absolute, MSYS2 or not) |
 | `timeout 5 C:\Windows\System32\bash.exe ./x.sh {{x}}` | true | WSL | refused |
 | `bwrap --tmpfs /x bash ./x.sh {{x}}` | true | WSL | refused (an untrusted wrapper: later words scanned) |
+| `runuser -u x bash ./x.sh {{x}}`, `runuser -w PATH -u x bash ./x.sh {{x}}` | true | Git | refused (bare, behind a wrapper; Task 2a) |
+| `command bash ./x.sh {{x}}` | true | WSL | refused |
+| `command -v bash`, `command -V bash` | true | WSL | null (only looks the name up) |
+| `npx wsl -e bash ./x.sh {{x}}` | true | WSL | null (the walk decides: Linux bash) |
+| `npx wsl -e bash.exe ./x.sh {{x}}` | true | WSL | refused (by the walk) |
+| `find . -exec bwrap --tmpfs /x bash ./x.sh {{x}} ;` | true | WSL | refused |
 | `uv run bash.exe ./x.sh {{x}}`, `poetry run bash ./x.sh {{x}}`, `conda run -n x bash.exe ./x.sh {{x}}`, `npm exec bash.exe ./x.sh {{x}}`, `uv run "ba"sh ./x.sh {{x}}` (quotes in the word) | true | WSL | refused |
 | `uv run "C:\Program Files\Git\bin\bash.exe" ./x.sh {{x}}` | true | WSL | null |
 | `uv pip install bash` | true | WSL | null (`pip` is not an exec subcommand) |
@@ -339,6 +404,7 @@ script argument is `./x.sh {{x}}` unless shown otherwise. A path shown in `"…"
 | `bashful ./x.sh`, `C:\tools\bash-5.exe ./x.sh`, `tool ./bashrc.d {{x}}` | true | WSL | null |
 | `bash`, `C:\Program Files\Git\bin\bash.exe` | true | null | refused |
 | `bash.exe`, `BASH.EXE`, `bash.exe.`, `/mnt/c/Windows/System32/bash.exe`, `/mnt/c/Program Files/Git/bin/bash.exe`, `"bash.exe"` (quotes in the word), ` bash.exe`, `"ba"sh.exe` | false | null | refused |
+| `runuser -u x bash.exe ./x.sh {{x}}`, `runuser -u x -- bash.exe ./x.sh {{x}}` | false | null | refused (Task 2a) |
 | `sudo bash.exe ./x.sh {{x}}`, `uv run bash.exe ./x.sh {{x}}`, `wsl.exe -e bash.exe ./x.sh {{x}}`, `wsl.exe -e /mnt/c/Windows/System32/bash.exe ./x.sh {{x}}`, `wsl.exe -e wsl.exe -e bash.exe ./x.sh {{x}}` | false | null | refused |
 | `bash`, `/bin/bash`, `/usr/bin/bash`, `sudo bash ./x.sh {{x}}`, `uv run bash ./x.sh {{x}}`, `wsl.exe -e bash ./x.sh {{x}}` | false | null | null (Linux bash) |
 | `tool bash.exe`, `bash.exe ./x.sh` (one word) | false | null | null (an argument; not a bash.exe name) |
@@ -357,10 +423,15 @@ Break-it-once:
 3b. Accept a relative word with a separator at `k >= 1`. The `sudo sub\bash.exe` row must fail.
 3c. Name the word without removing `"`. The `"ba"sh` rows must fail.
 3d. Give the container tools the Windows rule. The `docker run img bash` row must fail (refused).
-4. Make it check the inner command with the caller's `windows` instead of the off-Windows rule. The Windows
-   `wsl -e bash.exe` rows must fail, and `wsl -e bash` must still pass.
+4. Make it check the inner command with the caller's `windows` instead of the off-Windows rule. The `wsl -e bash`
+   rows must fail (refused, because the inner call passes `probe: null`), and the `wsl -e bash.exe` rows must still be
+   refused (round 4 M-1).
 5. Drop the off-Windows branch. The off-Windows `bash.exe` rows must fail.
-6. Skip the outright refusal of padded words. The quoted-Git-path row must fail (allowed).
+6. Skip the outright refusal of padded words. The Win32-probe rows `C:\msys64\usr\bin\bash.exe.` and
+   `…\bash.exe ` must fail (allowed: the normalising `FileExists` finds them and `msys-2.0.dll` lies beside). With the
+   exact Git probe no row can flip, because the raw word is resolved and isn't found (round 4 I-3).
+7. Let the later-word scans run past a `wsl`. The `npx wsl -e bash` row must fail (refused).
+8. Drop the `command -v` stop. The `command -v bash` rows must fail (refused).
 
 ## Task 3 (#411): `run` applies it before unlock and after substitution
 
@@ -390,7 +461,7 @@ secret `pw` = `a\b"c`; `"…"` around a path is shell quoting, as in Task 2's ta
 | Windows | WSL | `run uv run bash.exe ./capture.sh {{pw}}` | exit 1, 0 starts, the Windows reason, no key asked |
 | Windows | WSL | `run "C:\Program Files\Git\bin\bash.exe" ./capture.sh {{pw}}` | exit 0, 1 start, argv `[GitBash]`, `WindowsArguments` as in `GitBash_StartsByItsResolvedPath_…` |
 | Windows | WSL | `run tool {{pw}}` with `pw` = `bash` | exit 0, 1 start (an argument is not a program position) |
-| Windows | WSL | `run bash {{@values.yaml}}` (the file written as `RunFileTokenTests` writes it) | exit 1, 0 starts; stderr holds `which would expose the filled copy` and not `'bash' here is not` (the file-token refusal comes first) |
+| Windows | WSL | `run bash {{@values.yaml}}` (the file written as `RunFileTokenTests` writes it) | exit 1, 0 starts; stderr holds `'bash' is a shell or interpreter, which can print the filled copy of a {{@file}} token past redaction.` (`GetFileTokenRefusal`'s interpreter branch, `Validation.cs:253-254`) and not `'bash' here is not` (the file-token refusal comes first; round 4 I-2) |
 | Windows | WSL | `run {{prog}} ./capture.sh {{pw}}` with `prog` = `bash` | exit 1, 0 starts; stderr holds `After substitution, the value of {{prog}} makes this a command 'run' refuses` (`RunCommand.cs:266-270`, `:497-505`); stderr holds no `bash` word from the value (assert `DoesNotContain("'bash'")`) |
 | Linux | null | `run bash.exe ./capture.sh {{pw}}` | exit 1, 0 starts, the off-Windows reason then `ViewSecretLine(false)`, no key asked |
 | Linux | null | `run bash ./capture.sh {{pw}}` | exit 0, 1 start, argv as given |
@@ -435,7 +506,9 @@ have no WSL distribution to run it in. Name the CI branch in the report once it 
   another program later parses as a command line: a runner that hands a whole argument to cmd.exe or sh
   (`npm exec "x&bash"`, `uv run sh -c …`), and environment or glob expansion that forms a bash name (`%X%`, `$X`,
   `~`, `*`), are not checked. A copy or link of the launcher (or of `wsl.exe`) under another name, or that name's 8.3
-  short name, still re-parses its command line unchecked. Git Bash given by an absolute path behind a wrapper or
+  short name, still re-parses its command line unchecked. So does a copy named `bash.exe` with a `msys-2.0.dll`
+  planted beside it, which passes the MSYS2 test. Inside a container `bash` is taken to be Linux bash: the rule
+  assumes a Linux target. Git Bash given by an absolute path behind a wrapper or
   runner gets the runner's quoting, not T55's MSYS2 quoting, so a value can still arrive altered there (as before)."
   In the same cell's "Accepted over-refusals" list, add: "on Windows, a `bash` at a program position that isn't MSYS2
   (Cygwin's included) or isn't found; such a `bash` that holds `"`, white space at either end, or a trailing `.`, `\`
@@ -458,8 +531,11 @@ have no WSL distribution to run it in. Name the CI branch in the report once it 
   glob expansion that forms a bash name (`%X%`, `$X`, `~`, globs). Both are shared by every `run` guard, which checks
   program positions, not text another program later parses as a command line. The controller files one issue for
   runner pass-through across all guards. Declared in the docs (Task 4).
-- Programs the guards don't know as wrappers or runners (`pipx run`, `dotnet tool run`): no positions after their
-  own, as for every other guard. That issue covers them too.
+- Programs the guards don't know as wrappers or runners (`pipx run`, `dotnet tool run`, `pkexec`, `setpriv`,
+  `prlimit`, `numactl`, `cgexec`, `sg`, Windows' `runas`): no positions after their own, as for every other guard.
+  That issue covers them too.
+- A copy of `wsl.exe` named `bash.exe` with a planted `msys-2.0.dll` beside it (round 4 M-3), and Windows containers
+  or nodes behind the container tools (M-2): declared in the docs.
 - `sh.exe` off Windows through interop (Git's MSYS2 `sh`, with interop's quoting rather than MSYS2's).
 - Cygwin as a recognised target (its `cygwin1.dll` and quoting rules): refused here, see the open questions.
 - The broker's template check on Windows (#306). `GetBlockedInvocation` is unchanged.
@@ -504,3 +580,12 @@ have no WSL distribution to run it in. Name the CI branch in the report once it 
   minors: M-1 (a row pins the file-token precedence), M-2 (`bash\.`, `bash\`, `bash/` trimmed and refused), M-3
   (`WslWalk` wording), M-4 (`char.IsWhiteSpace`, fail closed), M-5 (the SysWOW64 claim dropped), M-6 (docs line:
   Git Bash behind a runner gets the runner's quoting), M-7 (empty argv; verbatim literals).
+- **Round 6 (MiMo round 4; controller's rulings).** I-1: `runuser` was missing from the shared `Wrappers` list, so
+  every `ProgramPositions` guard skipped its command. New Task 2a adds it, with util-linux's valued options (`-w` added
+  to `WrapperValued`). The `ShellAsUser` branch moves above the `Wrappers` branch, so the `-c` refusal still runs
+  first and `GetBlockedInvocation` is unchanged. No existing row changes; the file-token guard gains `runuser`
+  (tightening). I-2: the precedence row asserts the file-token refusal's real text. I-3: break-it-once 6 uses a probe
+  whose `FileExists` normalises as Win32 does, so it can fail. M-1: break-it-once 4's rows corrected. M-2: the
+  container rule assumes a Linux target, declared. M-3: the planted-`msys-2.0.dll` copy declared. M-4: `command -v`/`-V`
+  stops the walk, as in `CheckWrapper`. M-5: a `wsl` walk owns its command. M-6: `RunFileTokenTests.cs:1003` added to
+  the checked list.
