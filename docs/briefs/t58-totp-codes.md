@@ -171,6 +171,62 @@ Owner: "Make sure we have tests that would catch any issues on package upgrades"
     amendment 14. Whether Otp.NET joins the "security-critical packages" rule (no automerge either way, but a label and
     the owner's eye) is the owner's call. This brief doesn't change it, since `renovate.json5` is T59's.
 
+## Amendments (round 2: MiMo on 209e7c1; controller rulings)
+
+These bind and win over everything above where they differ. Round 1b (amendments 12-15) is unaffected, except where
+amendment 16 replaces amendment 11.
+
+16. **When a kind entry is written (I-1; replaces amendment 11).** A kind entry is written only for a version being
+    sealed now. Entries are never invented for a version a write merely carries: such a version keeps its entry if it
+    has one and stays without one if it doesn't. Only `vault reindex` fills entries for carried versions, since it holds
+    every value. The current kind is still always right for `run`, `totp` and `rotate`, because they decide from the
+    value (amendment 1). The rule, the same on both write paths:
+    - **New version** (`RecordWrites.NewVersion` and `RecordVaultStore.NextRecord`'s new-version branch, `:1535-1563`):
+      the new version's entry from `Classify` of its value; the replaced current becomes previous and keeps its entry
+      if it has one; every other entry is dropped. So `NextRecord` does change (amendment 11 said it needn't).
+    - **Burn, field write, same value:** extensions untouched, as today.
+    - **`PrepareV3`:** sets entries from both retained values only when `recomputeOlderSets` is true (reindex).
+      Otherwise it leaves the extension as the write made it.
+
+    `RecordWrites_MatchNextRecord_OnRandomStates` compares against `PrepareV3(…, recomputeOlderSets: false)`
+    (`RecordWritesTests.cs:442`), so it holds the two paths equal under this rule. Its random states (a sanctioned
+    test-input change) draw values that are otpauth URIs as well as plain ones. Each state's `ValueKinds` extension
+    holds, at random, consistent entries, no entry for a retained version, or a stale entry for a stamp no longer
+    retained. Add a Task 4 row: an entry-less previous version stays entry-less after a rotation, and gets its entry
+    from `vault reindex`.
+17. **One Base32 rule (I-2; replaces the order and B1/B3 wording of Task 1 and amendment 6).**
+    - The checks run in the order B1, B2, B3, B4, B5.
+    - **B1, the character set:** A-Z, a-z, 2-7 and `=`, with the text `the seed isn't Base32 (letters A-Z, digits 2-7,
+      '=' padding)`.
+    - **B2:** the unpadded length (the text before the first `=`) mod 8 is 1, 3 or 6.
+    - **B3:** an `=` followed by any non-`=` character, or a non-empty trailing run of `=` that isn't exactly the run
+      the unpadded length needs (mod 8 of 0: none; 2: six; 4: four; 5: three; 7: one). An empty run is always fine,
+      so unpadded text of any valid length is accepted, padded or not.
+    - **B4 and B5:** unchanged.
+
+    This gives: `GEZD=GNB…` B3, `GEZDGNBVGY3TQOJQ=` B3, `GEZDGNBVGY3TQ==` B3, the 32-byte seed with and without
+    `====` accepted.
+18. **Refusal table (M-1):** 20 rows: R1-R11 one each, R12 two, B1 one, B2 one, B3 three, B4 one, B5 one.
+19. **`rotate` text (M-2):** Task 4's sentence reads "when `Classify` of the decrypted current value is `Totp` or
+    `OtpAuthUnusable` (amendment 1)". The refusal text is unchanged.
+20. **Spaces and percent-hex (M-3).** A URI's `secret` loses its U+0020 spaces after percent-decoding, as the bare form
+    does, so `%20`-grouped seeds are accepted. "Inside a URI no space is allowed" is withdrawn. Percent-escapes take
+    either hex case (`%3d`, `%3D`; RFC 3986 2.1). Amendment 5's "as written" form covers such spellings: it is the
+    parameter text before decoding.
+21. **`CommandValues` surface (M-4).** Only the token-taking members (`ResolveToken`, `IsBurnedToken`) strip a `:totp`
+    suffix. `Contains`, `HasPreviousValue` and `ThrowIfUnreadable` take names, as today; `Apply` and `Check` pass them
+    the base name, with `:totp` stripped as `:previous` is. `StoredForms` is keyed by the token or marker name exactly as
+    `ResolveToken` received it (`x`, `x:previous`, `x:totp`), the key `ApplySecretsReporting` reports its rows under.
+22. **Split writes (M-5).** Add a Task 2 row: `_pty.ChunkSize = 3` (`RecordingPty.cs:18`). The child prints the code,
+    then the URI. Output: `[REDACTED: t]` for each, nothing of either left.
+23. **`ValueKinds.Of` (M-6)** takes the metadata only and gives the current version's kind. Nothing reads a previous
+    version's mark. Entries for the previous version are still kept, so a restore keeps its mark.
+24. **tswap's own strictness (M-7).** `docs/commands.md` marks each rule that is tswap's and not the Key Uri Format's as
+    such, with its reason: B4 canonical-only, B5 the 80-bit floor, R12's 1-300, R6's case-sensitive names, R11's 6/8.
+    The controller's release note says that a short-seed or long-period service is refused.
+25. **Task 2's table (M-8):** `sudo list` shows names and dates, no value (`ListCommand.cs:9`). Its cell reads
+    "unchanged: no value"; `get`, `export` and `field adopt` keep "the stored value".
+
 ## What is wrong (evidence)
 
 The owner stored the Certum code-signing token's whole `otpauth://totp/...` URI as `certum-totp` (#368). Reproduced
