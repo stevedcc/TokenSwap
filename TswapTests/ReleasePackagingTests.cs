@@ -1794,7 +1794,7 @@ public class ReleasePackagingTests : IDisposable
     public void SignWindows_PinsSsignBySha()
     {
         var job = Job(Workflow("release.yml"), "sign-windows");
-        var cargo = Assert.Single(job.Split('\n'), line => line.Contains("cargo install", StringComparison.Ordinal) && !line.TrimStart().StartsWith('#'));
+        var cargo = SsignCargoLine();
 
         Assert.Contains(" --locked ", cargo);
         Assert.Contains(" --git https://github.com/Le-Syl21/ssign ", cargo);
@@ -1823,7 +1823,10 @@ public class ReleasePackagingTests : IDisposable
         return renovate[start..end];
     }
 
-    /// <summary>The ssign manager's <c>matchStrings</c> entry, as the .NET regex Renovate runs (JSON5's <c>\\</c> is one <c>\</c>).</summary>
+    /// <summary>
+    /// The ssign manager's <c>matchStrings</c> entry: the regex Renovate runs, compiled here as a .NET <c>Regex</c>
+    /// (JSON5's <c>\\</c> is one <c>\</c>).
+    /// </summary>
     private static System.Text.RegularExpressions.Regex SsignManagerRegex()
     {
         var line = Assert.Single(SsignManagerText().Split('\n'),
