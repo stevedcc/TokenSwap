@@ -589,3 +589,4 @@ have no WSL distribution to run it in. Name the CI branch in the report once it 
   container rule assumes a Linux target, declared. M-3: the planted-`msys-2.0.dll` copy declared. M-4: `command -v`/`-V`
   stops the walk, as in `CheckWrapper`. M-5: a `wsl` walk owns its command. M-6: `RunFileTokenTests.cs:1003` added to
   the checked list.
+- Controller confirmations (2026-11-27): round 5's M1 kept (behind a wrapper or runner only an absolute Git Bash path is accepted); `pipx run`, `dotnet tool run` and the other unknown runners and wrappers go to #438; Task 2a's reorder of `GetBlockedInvocation` (ShellAsUser above Wrappers) is sanctioned, because it keeps every existing refusal and is needed to add `runuser` without a fail-open.
