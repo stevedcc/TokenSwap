@@ -396,6 +396,14 @@ tswap run [--env NAME={{name}}]... [--] <cmd> [args...]
 
 Execute with {{token}} and {{@file}} substitution; --env sets a secret in the command's environment instead of its arguments
 
+### totp
+
+```
+tswap totp <name>
+```
+
+Print the current code of a TOTP secret (an otpauth://totp/ URI, or a Base32 seed) and how long it stays valid; the seed itself only with sudo get
+
 ### check
 
 ```
