@@ -222,7 +222,8 @@ amendment 16 replaces amendment 11.
 23. **`ValueKinds.Of` (M-6)** takes the metadata only and gives the current version's kind. Nothing reads a previous
     version's mark. Entries for the previous version are still kept, so a restore keeps its mark.
 24. **tswap's own strictness (M-7).** `docs/commands.md` marks each rule that is tswap's and not the Key Uri Format's as
-    such, with its reason: B4 canonical-only, B5 the 80-bit floor, R12's 1-300, R6's case-sensitive names, R11's 6/8.
+    such, with its reason: B4 canonical-only, B5 the 80-bit floor, R12's 1-300, R6's case-sensitive names (R11's 6/8 and R10's list are the
+    Key Uri Format's own, amendment 37).
     The controller's release note says that a short-seed or long-period service is refused.
 25. **Task 2's table (M-8):** `sudo list` shows names and dates, no value (`ListCommand.cs:9`). Its cell reads
     "unchanged: no value"; `get`, `export` and `field adopt` keep "the stored value".
@@ -277,6 +278,57 @@ place to match.
     (`~/.nuget/packages/microsoft.dotnet.ilcompiler/11.0.0/build/`, checked). MiMo's `:32/:317/:320` are dotnet/runtime's
     main branch. The comment in `TswapCli.csproj` names the properties, not line numbers.
 31. **Body contradictions and header (M-5, M-6):** fixed in place (above).
+
+## Amendments (round 4: MiMo; controller rulings on I-1 and I-2)
+
+These bind and win over everything above where they differ. The body lines MiMo listed (M-1), and the lines
+amendments 37-39 touch, are edited in place to match.
+
+32. **No spaces in a URI's `secret` (I-1; controller ruling, fail closed; withdraws amendment 20's space part).**
+    Under amendment 20, `secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ note` would merge into a 36-character key. That is a
+    valid length and canonical, so it would silently give wrong codes; Otp.NET and Google Authenticator refuse it.
+    So a URI's `secret` that contains U+0020 after percent-decoding is refused with a new reason, checked before B1:
+    `R14 the secret parameter contains a space (a URI's secret is Base32 without spaces)`.
+    Amendment 20's other part stays: percent-escapes in either hex case. A bare seed keeps its de-spacing, and a bare
+    seed is used only through `:totp` (and `totp`). New refusal rows:
+    - `secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ note`;
+    - `secret=GEZD%20GNBV%20GY3T%20QOJQ%20GEZD%20GNBV%20GY3T%20QOJQ`.
+
+    Both give R14, and the message holds neither the URI nor the secret text. The refusal table now has 25 rows.
+33. **Masking routed per form (I-2).** `run` routes each `StoredForms` entry by its own length through the
+    short-value test (`RunCommand.cs:177`), not by the code's. Every such entry is at least 16 characters (B5, and the
+    URI is longer), so all go to `redactions` and are masked anywhere. Only the code goes to the short-value matcher:
+    one `Redact(token, code, [])`, then one `Redact(token, form, [])` per stored form. New Task 2 rows, each giving
+    `[REDACTED: t]` with nothing of the URI or seed left on stdout:
+    - the child prints `x<URI>`;
+    - it prints `-<URI>`;
+    - it prints `x<seed, lower case unpadded>`.
+34. **Doc block with the command (M-2).** Task 3's commit also regenerates the generated block of `docs/commands.md`
+    (`TSWAP_REGENERATE_DOCS=1` on `CommandReferenceIsCurrent`), so `./runtests.sh --unit` passes after Task 3. Task 5
+    adds only prose.
+35. **`ValueKinds` fail-safe rows (M-3)** in Task 4:
+    - a codec round trip pinning the layout: format byte `1`, count, then each entry's 28-byte stamp in
+      `SecretRecordCodec`'s stamp encoding and its kind byte;
+    - an extension of `0x0101` that is truncated, has an unknown format byte, an unknown kind byte, or a count of 0:
+      `names` lists the record without a mark, nothing is unreadable, and `run` still gives the code;
+    - a delete: the tombstone carries no `0x0101`.
+36. **`SuppressAotAnalysisWarnings` (M-5).** Amendment 13's guard also forbids `SuppressAotAnalysisWarnings` true
+    (ILC's `--noaotwarn`, `Microsoft.NETCore.Native.targets:313` in the pinned package), with a positive row.
+37. **R11 and R10 are the spec's (M-4).** The Key Uri Format allows exactly `digits` 6 or 8 and the three algorithms.
+    Amendment 24's "tswap's own" list is B3, B4, B5, R12, R6 and R14 (edited in place). docs/commands.md calls R10 and
+    R11 the spec's rules.
+38. **Bare seeds (M-6).** The security-model note says the seed never leaves without sudo for a record recognised as an
+    otpauth URI. A bare Base32 value is never recognised (any random value may be Base32), so `{{name}}` still hands it
+    out: give a bare seed only through `{{name:totp}}`. docs/commands.md and the prompt say so (edited in Task 5's
+    bullet).
+39. **Small gaps (M-7).**
+    - Task 3's tests live in a new `TswapTests/TotpCommandTests.cs`, with its own value recorder copying `RunEnvTests`'
+      (`_m.StoreOpened = store => store.ValueDecrypted = …`; `RunEnvTests._values` is private).
+    - Renaming `Rotate_DecryptsNoValue` (amendment 1): the class summary of `WriteCommandDecryptionTests` adds
+      "except `rotate`, which reads the current value once to refuse a TOTP seed (#374)".
+    - Tombstones: the `0x0101` extension is dropped in `FieldEdits.ForTombstone`, which both tombstone paths call
+      (`RecordWrites.Tombstone` and `RecordVaultStore.Tombstone`, `:1601-1604`). An older build keeps it on a tombstone, which is harmless:
+      `SecretInfo.From` returns null for one.
 
 ## What is wrong (evidence)
 
@@ -354,7 +406,7 @@ trimmed of `char.IsWhiteSpace` at both ends:
 | `algorithm` | `SHA1` (default), `SHA256`, `SHA512`, case ignored | R10 `algorithm must be SHA1, SHA256 or SHA512` |
 | `digits` | exactly `6` (default) or `8` (D10) | R11 `digits must be 6 or 8` |
 | `period` | 1-3 ASCII digits, value 1-300 (default 30) | R12 `period must be a whole number of seconds from 1 to 300` |
-| `secret` | Base32 as below, no spaces | B1-B5 |
+| `secret` | Base32 as below; a U+0020 after percent-decoding is refused (R14, amendment 32) | R14, B1-B5 |
 
 The first failing check wins, in this order: R1, R2/R3, R4, the query's pieces left to right (R6-R9), R5, then
 the values (R10-R12, B1-B5).
@@ -364,7 +416,7 @@ groups) and trims; inside a URI no space is allowed. Then: letters A-Z in either
 at the end, and only when the padded length is a multiple of 8 and the run is 1, 3, 4 or 6 long (what 5-byte groups
 leave); unpadded length mod 8 in {0, 2, 4, 5, 7}; the unused low bits of the last character zero (canonical, RFC 4648
 3.5); at least 16 characters, 80 bits (the spec's own example `JBSWY3DPEHPK3PXP` is 80 bits; RFC 4226 asks 128, but
-80-bit seeds are common). Checked in the order B1, B3, B2, B4, B5. Reasons: B1 `the seed isn't Base32 (A-Z and 2-7,
+80-bit seeds are common). Checked in the order B1, B2, B3, B4, B5 (amendment 17; R0 first, amendment 26). Reasons: B1 `the seed isn't Base32 (A-Z and 2-7,
 with '=' padding only at the end)`, B2 `the seed's length isn't a Base32 length`, B3 `the seed's '=' padding is wrong`, B4 `the seed isn't canonical Base32 (its
 last character has unused bits set)`, B5 `the seed is shorter than 16 Base32 characters (80 bits)`. The canonical text
 (upper case, no padding) goes to `Base32Encoding.ToBytes`; the decoded length is checked against `5 * length / 8`.
@@ -378,7 +430,7 @@ last character has unused bits set)`, B5 `the seed is shorter than 16 Base32 cha
 | Window edges | the SHA1 URI, 6 digits, at 1111111109.999 / 1111111110.000 / 1111111139.999 / 1111111140.000 | `081804` 1 s; `050471` 30 s; `050471` 1 s; `266759` 30 s |
 | Period 60, digits 8 | the same seed with `&period=60&digits=8` | the code of step `t / 60`; remaining `60 - t mod 60` |
 | Accepted spellings | `OTPAUTH://TOTP/…`, `algorithm=sha512`, `secret=gezd…` (lower), the SHA256 seed text with its padding as `%3D%3D%3D%3D` and `algorithm=SHA256`, no label, `issuer=` twice, unknown `image=…`, surrounding whitespace | parsed, same code as the plain form |
-| Refusals | one row per reason R1-R12 and B1-B5 (`otpauth:totp/…`, `otpauth://hotp/…?counter=1`, `otpauth://u@totp/`, `…#x`, `?issuer=X`, `Secret=`, `digits=6&digits=6`, `&period&`, `secret=%G1`, `algorithm=SHA-256`, `digits=7`, `period=0`, `period=301`, `secret=GEZ1…`, length 17, `GEZD=GNB…`, the SHA256 seed text ending `GEZB` (canonical `GEZA`), `GEZDGNBVGY3TQ` (13, 8 bytes)) | `TotpSeedException` with exactly that reason; the message contains neither the URI nor the secret text (assert both absent) |
+| Refusals | one row per reason R1-R12 and B1-B5 (`otpauth:totp/…`, `otpauth://hotp/…?counter=1`, `otpauth://u@totp/`, `…#x`, `?issuer=X`, `Secret=`, `digits=6&digits=6`, `&period&`, `secret=%G1`, `algorithm=MD5`, `digits=7`, `period=0`, `period=301`, `secret=GEZ1…`, length 17, `GEZD=GNB…`, the SHA256 seed text ending `GEZB` (canonical `GEZA`), `GEZDGNBVGY3TQ` (13, 8 bytes)) | `TotpSeedException` with exactly that reason; the message contains neither the URI nor the secret text (assert both absent) |
 | Bare forms | `gezd gnbv gy3t qojq gezd gnbv gy3t qojq`, mixed case; the 32-byte seed's text with and without `====` | at 1111111111: `050471`; `201283` (SHA1, 6 digits, the bare defaults) |
 | Classify | a password, a bare Base32 seed, the SHA1 URI, a hotp URI, ` otpauth:x` | `None`, `None`, `Totp`, `OtpAuthUnusable`, `OtpAuthUnusable` |
 | No system clock | the sources under `TswapCore/` and `TswapCli/` | no call of `ComputeTotp()`, `RemainingSeconds()` or `WindowStart()` without an argument (a source scan) |
@@ -488,8 +540,8 @@ Because a build before this one keeps the extension when it writes a new value, 
 - **Write.** Where a new version is sealed, from the value in hand (no new decryption, so the decrypt counts of the
   write commands stay as they are): `RecordWrites.Next`/`NewVersion` get an optional `ValueKind newKind = None`
   (`RecordVaultStore.cs:881` passes `Classify` of `v.Value`, decoded as `Fingerprinter.Compute` decodes it), carry the previous version's entry when its stamp matches,
-  drop the rest; `PrepareV3` (`:2056`, plaintext known) sets the extension from both retained values; both tombstone
-  paths drop it. `RecordWritesTests.RecordWrites_MatchNextRecord_OnRandomStates` must include otpauth values in its
+  drop the rest; `PrepareV3` (`:2056`) sets the extension as amendment 16 says; both tombstone
+  paths drop it (amendment 39). `RecordWritesTests.RecordWrites_MatchNextRecord_OnRandomStates` must include otpauth values in its
   random states (a test-input change) so it holds the two write paths equal here too. A folder still writing format 2
   stores no extensions: such a record is marked after `vault reindex`.
 - **Reindex.** `IsCurrent` (`:1434`) is false when the extension disagrees with `Classify` of a retained value (the
@@ -532,7 +584,7 @@ Break-it-once: drop the stamp comparison in `ValueKinds.Of` (the stale-entry row
   `totp`'s output, `names`' marks, `vault reindex` for old records, `rotate` vs `ingest --rotate`.
 - AGENTS.md: `totp <name>` in the No-sudo list; one sentence in "Token Substitution".
 - `docs/security-model.md`: "What each command decrypts" gains `totp` (the one value it computes from); a short
-  "TOTP secrets" note: a code is a live credential valid for one period, the seed never leaves without sudo, `run`
+  "TOTP secrets" note: a code is a live credential valid for one period, the seed of a recognised otpauth record never leaves without sudo (a bare Base32 value is not recognised: amendment 38), `run`
   masks code, URI and seed text, other records' seeds inside URIs are masked only as whole values (fingerprints cover
   whole values), the broker refuses otpauth records (D8; the `docs/BROKER.md` line follows after T59), and the Certum
   signing flow (#368) keeps its YubiKey code.
