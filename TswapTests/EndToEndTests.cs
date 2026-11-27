@@ -785,6 +785,118 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         Assert.Equal(0, exit);
     }
 
+    // --- TOTP (brief T58, #374): the published binary's real clock, so shapes and absences only ---
+
+    private const string TotpSeedText = Totp.OtpNetContractTests.Sha1Seed;
+    private const string TotpSha1Uri = Totp.OtpNetContractTests.Sha1Uri;
+    private const string TotpSha512Uri =
+        "otpauth://totp/Example:alice?secret=" + Totp.OtpNetContractTests.Sha512Seed + "&algorithm=SHA512&digits=8";
+
+    /// <summary>Lines of a stream, compared one by one (ctx.Unlock may add a notice before them).</summary>
+    private static string[] TotpLines(string text) => text.ReplaceLineEndings("\n").Split('\n', StringSplitOptions.RemoveEmptyEntries);
+
+    private static void AssertNoTotpSecret(string text, string uri, string seed)
+    {
+        Assert.DoesNotContain(uri, text, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(seed, text, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("otpauth", text, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData(TotpSha1Uri, TotpSeedText, 6)]
+    [InlineData(TotpSha512Uri, Totp.OtpNetContractTests.Sha512Seed, 8)]
+    public void Totp_PrintsOnlyTheCode_AndHowLongItStaysValid(string uri, string seed, int digits)
+    {
+        RunTswap("init", "--yubikey", "--no-recovery");
+        Assert.Equal(0, RunTswapWithStdin(uri, "ingest", "t").exitCode);
+
+        var (exit, stdout, stderr) = RunTswap("totp", "t");
+
+        Assert.True(exit == 0, stderr);
+        Assert.Matches($"^[0-9]{{{digits}}}\n$", stdout.ReplaceLineEndings("\n"));
+        Assert.Contains(TotpLines(stderr), line =>
+            System.Text.RegularExpressions.Regex.IsMatch(line, @"^Valid for [0-9]+ more seconds? \(a new code every 30 seconds\)\.$"));
+        AssertNoTotpSecret(stdout + stderr, uri, seed);
+    }
+
+    [Theory]
+    [InlineData(TotpSha1Uri, TotpSeedText, 6)]
+    [InlineData(TotpSha512Uri, Totp.OtpNetContractTests.Sha512Seed, 8)]
+    public void Totp_RunGivesTheChildACode_NeverTheSeed(string uri, string seed, int digits)
+    {
+        RunTswap("init", "--yubikey", "--no-recovery");
+        Assert.Equal(0, RunTswapWithStdin(uri, "ingest", "t").exitCode);
+
+        // The child prints value-free markers only: the length, whether it is all digits, and LEAK for the seed or a URI.
+        var lowerSeed = seed.ToLowerInvariant();
+        string script;
+        (int, string, string) result;
+        if (OperatingSystem.IsWindows())
+        {
+            script = Path.Combine(_tempDir, "shape.ps1");
+            File.WriteAllText(script,
+                "param($v)\n\"LEN=$($v.Length)\"\nif ($v -match '^[0-9]+$') { 'DIGITS=yes' }\n" +
+                $"if ($v -match 'otpauth' -or $v -match '{lowerSeed}') {{ 'LEAK' }}\n");
+            result = RunTswap("run", "pwsh", "-NoProfile", "-File", script, "{{t}}");
+        }
+        else
+        {
+            script = Path.Combine(_tempDir, "shape.sh");
+            File.WriteAllText(script,
+                "v=$1\necho \"LEN=${#v}\"\ncase $v in ''|*[!0-9]*) ;; *) echo DIGITS=yes ;; esac\n" +
+                "lower=$(printf '%s' \"$v\" | tr 'A-Z' 'a-z')\n" +
+                $"case $lower in *otpauth*|*{lowerSeed}*) echo LEAK ;; esac\n");
+            result = RunTswap("run", "sh", script, "{{t}}");
+        }
+        var (exit, stdout, stderr) = result;
+
+        Assert.True(exit == 0, stderr);
+        var lines = TotpLines(stdout);
+        Assert.DoesNotContain("LEAK", lines);
+        Assert.Contains($"LEN={digits}", lines);
+        Assert.Contains("DIGITS=yes", lines);
+        AssertNoTotpSecret(stdout, uri, seed);
+    }
+
+    [Fact]
+    public void Totp_NamesJson_MarksTheTotpRecordOnly()
+    {
+        RunTswap("init", "--yubikey", "--no-recovery");
+        Assert.Equal(0, RunTswapWithStdin(TotpSha1Uri, "ingest", "t").exitCode);
+        Assert.Equal(0, RunTswapWithStdin("plain-value-123", "ingest", "plain").exitCode);
+
+        var (exit, stdout, stderr) = RunTswap("names", "--json");
+
+        Assert.True(exit == 0, stderr);
+        using var doc = JsonDocument.Parse(stdout);
+        var entries = doc.RootElement.EnumerateArray().ToDictionary(e => e.GetProperty("name").GetString()!);
+        Assert.Equal("totp", entries["t"].GetProperty("kind").GetString());
+        Assert.False(entries["plain"].TryGetProperty("kind", out _));
+    }
+
+    [Fact]
+    public void Totp_ARefusedUri_RunAndTotpExitOne_WithoutTheUriOrSeed()
+    {
+        const string sevenDigits = TotpSha1Uri + "&digits=7";
+        RunTswap("init", "--yubikey", "--no-recovery");
+        Assert.Equal(0, RunTswapWithStdin(sevenDigits, "ingest", "t").exitCode);
+        var noop = Path.Combine(_tempDir, "noop.ps1");
+        if (OperatingSystem.IsWindows())
+            File.WriteAllText(noop, "exit 0\n");
+
+        var run = OperatingSystem.IsWindows()
+            ? RunTswap("run", "pwsh", "-NoProfile", "-File", noop, "{{t}}")
+            : RunTswap("run", "true", "{{t}}");
+        var totp = RunTswap("totp", "t");
+
+        foreach (var (name, (exit, stdout, stderr)) in new[] { ("run", run), ("totp", totp) })
+        {
+            Assert.True(exit == 1, $"{name}: exit {exit}\n{stderr}");
+            Assert.Contains("(digits must be 6 or 8)", stderr);
+            AssertNoTotpSecret(stdout + stderr, sevenDigits, TotpSeedText);
+        }
+    }
+
     // --- Apply ---
 
     // --- Check ---

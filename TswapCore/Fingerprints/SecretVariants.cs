@@ -125,6 +125,21 @@ public static class SecretVariants
     /// UTF-16 length exactly when every character is ASCII (any other character takes more UTF-8 bytes than UTF-16
     /// units).
     /// </summary>
+    public static bool IsCurrent(FingerprintSet set)
+    {
+        ArgumentNullException.ThrowIfNull(set);
+        if (set.VariantSetVersion == CurrentSetVersion) return true;
+        if (set.VariantSetVersion != 1) return false;
+        if (set.Entries.Count == 0) return true;
+
+        var plain = set.Entries.FirstOrDefault(e => e.Kind == VariantKind.Plain);
+        if (plain is null) return false;
+        if (set.Entries.FirstOrDefault(e => e.Kind == VariantKind.Base64Url) is { } url)
+            return 3L * url.Length / 4 == plain.Length;
+        return set.Entries.FirstOrDefault(e => e.Kind == VariantKind.Base64) is { } base64
+            && base64.Length % 4 == 0 && 3L * base64.Length / 4 == plain.Length;
+    }
+
     /// <summary>
     /// T54 fix round 1 (GLM Minor 1, controller ruling): whether <paramref name="stored"/>, a set of
     /// <see cref="CurrentSetVersion"/> for <paramref name="valueBytes"/>, lacks a form kind (NFC or NFD) that this
@@ -153,20 +168,5 @@ public static class SecretVariants
     {
         ArgumentNullException.ThrowIfNull(set);
         return set.VariantSetVersion is >= 1 and <= CurrentSetVersion;
-    }
-
-    public static bool IsCurrent(FingerprintSet set)
-    {
-        ArgumentNullException.ThrowIfNull(set);
-        if (set.VariantSetVersion == CurrentSetVersion) return true;
-        if (set.VariantSetVersion != 1) return false;
-        if (set.Entries.Count == 0) return true;
-
-        var plain = set.Entries.FirstOrDefault(e => e.Kind == VariantKind.Plain);
-        if (plain is null) return false;
-        if (set.Entries.FirstOrDefault(e => e.Kind == VariantKind.Base64Url) is { } url)
-            return 3L * url.Length / 4 == plain.Length;
-        return set.Entries.FirstOrDefault(e => e.Kind == VariantKind.Base64) is { } base64
-            && base64.Length % 4 == 0 && 3L * base64.Length / 4 == plain.Length;
     }
 }

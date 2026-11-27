@@ -31,6 +31,8 @@ public sealed class BurnedCommand : ICliCommand
 
     private static void Write(CommandContext ctx, IReadOnlyList<SecretInfo> secrets, bool json)
     {
+        // Brief T58: an outstanding TOTP seed gets one more hint after the rotate line.
+        var totpOutstanding = secrets.Any(s => s.BurnedAt.HasValue && s.Kind != TswapCore.Totp.ValueKind.None);
         var burned = secrets
             .Where(s => s.BurnedAt.HasValue)
             .Select(s => (Name: s.Name, BurnedAt: s.BurnedAt!.Value, Reason: s.BurnReason))
@@ -68,6 +70,9 @@ public sealed class BurnedCommand : ICliCommand
             ctx.Console.Out.WriteLine($"\n⚠ Burned Secrets ({burned.Count}):");
             PrintTable(ctx, burned, "outstanding");
             ctx.Console.Out.WriteLine($"\n→ Rotate these secrets: {ctx.Prefix} rotate <name> [len], or <source> | {ctx.Prefix} ingest --rotate <name>.");
+            if (totpOutstanding)
+                ctx.Console.Out.WriteLine(
+                    $"→ A TOTP seed can't be rotated: the user stores the issuer's new seed with '<source> | {ctx.Prefix} ingest --rotate <name>'.");
         }
 
         if (rotated.Count > 0)

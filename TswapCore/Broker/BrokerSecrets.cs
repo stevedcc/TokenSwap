@@ -95,6 +95,12 @@ public sealed class VaultBrokerSecretSource(RecordVaultStore store, VaultUnlocke
         }
         if (value is null)
             throw new BrokerSecretException($"secret '{secretName}' is not in the vault");
+        // Brief T58 (D8): the broker hands out neither a TOTP seed nor a code.
+        if (TswapCore.Totp.OtpAuthUri.IsOtpAuth(value))
+        {
+            CryptographicOperations.ZeroMemory(value);
+            throw new BrokerSecretException(TswapCore.Totp.OtpAuthUri.BrokerRefusal(secretName));
+        }
         if (value.AsSpan().IndexOfAny((byte)'\r', (byte)'\n', (byte)0) >= 0)
         {
             CryptographicOperations.ZeroMemory(value);
@@ -133,6 +139,12 @@ public sealed class VaultBrokerSecretSource(RecordVaultStore store, VaultUnlocke
                 }
                 if (value is null)
                     throw new BrokerSecretException($"secret '{name}' is not in the vault");
+                // Brief T58 (D8): the broker hands out neither a TOTP seed nor a code.
+                if (TswapCore.Totp.OtpAuthUri.IsOtpAuth(value))
+                {
+                    CryptographicOperations.ZeroMemory(value);
+                    throw new BrokerSecretException(TswapCore.Totp.OtpAuthUri.BrokerRefusal(name));
+                }
                 result[name] = new BrokerSecret(value);
             }
             return result;

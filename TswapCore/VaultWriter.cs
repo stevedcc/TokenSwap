@@ -58,6 +58,26 @@ public sealed class VaultWriter : IDisposable
         return Open(name).Entry?.Info;
     }
 
+    /// <summary>
+    /// Brief T58 (#374): the current value's bytes of <paramref name="name"/> (one value section, the read <c>get</c> uses),
+    /// so <c>rotate</c> can refuse a TOTP seed; null when there is no live secret or that section can't be decrypted. The
+    /// caller zeroes the bytes.
+    /// </summary>
+    public byte[]? ReadCurrentValue(string name)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (Open(name).Entry is not { Info: not null } entry)
+            return null;
+        try
+        {
+            return entry.DecryptValue(previous: false);
+        }
+        catch (UnreadableRecordException)
+        {
+            return null;
+        }
+    }
+
     /// <summary><see cref="SecretsDb.ThrowIfUnreadable"/>: throws, naming the file, when <paramref name="name"/>'s record can't be read.</summary>
     public void ThrowIfUnreadable(string name)
     {
