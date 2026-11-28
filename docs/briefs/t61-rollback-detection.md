@@ -129,6 +129,11 @@ config folder, `MigrateToRecordsTests.cs:107-116` and `SecureEnclaveTouchChoiceT
 
 If T60 as merged names any of these differently, use T60's names; if one is missing, stop and report.
 
+## Amendments (brief round 9: MiMo r8 minors, at 3d14d90)
+
+- M-1: the `--file` error's class listed as a departure. M-2: "nothing is written" scoped to the seen files. M-3: no
+  seam reaches the folder keyring's read, so the decode row is stated as the accepted proxy for the I/O half.
+
 ## Amendments (brief round 8: MiMo r7, at 5b688b2)
 
 - **I-1:** a number `Format` is classified by value (`TryGetInt64`, else `TryGetDecimal`, else `double.TryParse` of
@@ -368,6 +373,8 @@ M-4) and `SaveConfig` behaves exactly as today: that covers `init` (`InitCommand
 - `restore-slots` step 1 offers only the `VaultId` file (MiMo M7) and gains the keyring-differs exit (I-7).
 - At save, a new or changed copy that can't be decoded or merged is left out of the check (Task 2), not refused.
 - R2 on the all-records paths for a floored record with only unusable copies (R-5).
+- The `--file` error is a `TswapException` carrying Appendix A's message with no usage line; Appendix A calls it a
+  usage error (a real `UsageException` would print `Usage: …` instead of that text; MiMo r8 M-1).
 - The own-slot "missing" texts come from `OwnBackend`'s pre-check, `HardwareSlotOpens` and `:1342`; Appendix A's third
   site, the end of `Unlock`, is dropped, as no lost own slot reaches it without passing `OwnBackend` (Task 3).
 - The cap refusal's parenthetical ` (on a rolled-back record, accept it first)` is a text Appendix A lacks (it says
@@ -643,7 +650,7 @@ Tests (`SeenStateTests`, files in a temp config folder; `MachineConfigVaultIdTes
 | the `Write` seam throws `OwnerSwitchException` | the command fails with its text and exit code; no write-failure warning |
 | a file chmodded 0644, then a save that changes its bytes (`UnixFact`) | 0600 |
 | `init` of a record vault; `slot accept` (as `SlotAcceptRecordVaultTests`) ; `migrate --to-records`; `init --vault-dir`; `slot request` on a record-store machine whose config had it | `config.json` has the keyring's `VaultId` (`slot request`: kept) |
-| `SaveConfig` (no keyring being saved) on a store whose folder `keyring` holds bytes the codec refuses | `config.json` written as without T61 (same bytes), no `VaultId`, no exception (MiMo r7 M-4) |
+| `SaveConfig` (no keyring being saved) on a store whose folder `keyring` holds bytes the codec refuses | `config.json` written as without T61 (same bytes), no `VaultId`, no exception (MiMo r7 M-4). It is the accepted proxy for the `IOException`/`UnauthorizedAccessException` half too: no seam reaches the folder keyring's read (`DirectoryOwnerMatcher` is sealed and `ReadAllBytes`, `FileOwnership.cs:332`, has none; checked at f2e3a5a), and both halves go through the one catch (MiMo r8 M-3) |
 | `config.json` with another vault's `VaultId`; `names` | `VaultId` now the folder keyring's; nothing else in `config.json` changed |
 
 Break-it-once: drop `keepMode: false`; the 0644 row must fail. Write the stamp's origin with `Convert.ToHexString`; the
@@ -701,7 +708,8 @@ is missing and whose copies are all unusable is neither listed nor unreadable on
 (`FoldConflictCopies` returns no state and no reason, `:1248-1249`; `LoadMetadata` skips it, `:1779-1780`): those
 paths raise nothing from it, and, when the floor has its file name, report it as R2 (`Check(floor, null)`, R-5's
 exception; GLM r3 M-12); with no floor, nothing, as today. An open reports it as R3 ("no readable copy", `:783`).
-Nothing rose: nothing is written. The operations:
+Nothing rose: nothing is written to the seen files (the notice's command still fills `VaultId`, R-8; MiMo r8 M-2).
+The operations:
 
 | Operation | Checks and raises from |
 |---|---|
