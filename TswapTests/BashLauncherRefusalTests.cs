@@ -11,13 +11,13 @@ namespace TswapTests;
 /// </summary>
 public class BashLauncherRefusalTests
 {
-    private const string WindowsReason =
+    internal const string WindowsReason =
         @"'bash' here is not a bash.exe that 'run' recognises as Git Bash or MSYS2 (msys-2.0.dll beside it, or Git's bin\bash.exe launcher). It may be WSL's launcher (System32's bash.exe, or the WSL app's bash.exe alias), which runs its whole command line through the Linux shell (/bin/bash -c), so a substituted value is parsed again and can transform and print secrets past redaction. A bash at a program position (run's own program, or the command of a wrapper or runner such as sudo or uv run) is refused unless it is Git Bash or MSYS2's bash; behind a wrapper or runner it must be given by its full path. For WSL give the command after -e: 'wsl -e ./deploy.sh {{secret}}'; for Git Bash name it by its path: 'run ""C:\Program Files\Git\bin\bash.exe"" ./deploy.sh {{secret}}'.";
 
-    private const string OffWindowsReason =
+    internal const string OffWindowsReason =
         @"'bash.exe' is a Windows program: under WSL it is System32's bash.exe, WSL's launcher, reached through Windows interop, which runs its whole command line through the Linux shell (/bin/bash -c), so a substituted value is parsed again and can transform and print secrets past redaction. Run the Linux shell instead: 'run bash ./deploy.sh {{secret}}'.";
 
-    private const string PaddedWslReason =
+    internal const string PaddedWslReason =
         @"'wsl' written with quote characters, surrounding white space or a trailing dot can't be checked: run reads it as another program, but Windows starts wsl.exe, which runs its command line through the Linux shell. Write it plainly: 'wsl -e ./deploy.sh {{secret}}'.";
 
     private const string WslRuns = "'wsl' runs 'bash.exe': ";

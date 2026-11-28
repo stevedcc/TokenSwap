@@ -91,6 +91,10 @@ public sealed partial class RunCommand : ICliCommand
         // or be a shell or interpreter, and the file is never the program.
         if (fileTokens.Count > 0)
             ThrowIfBlocked(Validation.GetFileTokenRefusal(commandArgs), windows);
+        // Brief T64 (#411): a bash that may be WSL's launcher (it parses its command line again with bash -c), after the
+        // refusals above so they keep their precedence, and before unlock, so no key is asked for.
+        var msysProbe = windows ? ctx.MsysProbe() : null;
+        ThrowIfBlocked(Validation.BashLauncherRefusal(commandArgs, windows, msysProbe), windows);
 
         // Block shell output redirection in the command template (secrets could be written
         // to readable files). Note: this check runs before token substitution. Secret values
@@ -256,12 +260,14 @@ public sealed partial class RunCommand : ICliCommand
                 // `run {{cmd}} arg` where {{cmd}} expands to `echo`, or `run sh {{opt}} ...` expanding
                 // to `-c`) would bypass the pre-substitution check above.
                 // The word refused here came from a secret's value, so the refusal names the token.
-                if (Validation.GetBlockedInvocation(argv) is { } blocked)
+                // Brief T64: the bash launcher check too; the message stays the generic one (review F5).
+                if ((Validation.GetBlockedInvocation(argv) ?? Validation.BashLauncherRefusal(argv, windows, msysProbe)) is { } blocked)
                 {
                     if (secretValues.Count == 0)
                         ThrowIfBlocked(blocked, windows);
                     var named = NameCulprit(commandArgs, secretValues, filePaths,
-                        a => Validation.GetBlockedInvocation(a) is not null, "makes", "together make");
+                        a => Validation.GetBlockedInvocation(a) is not null || Validation.BashLauncherRefusal(a, windows, msysProbe) is not null,
+                        "makes", "together make");
                     throw new TswapException(
                         $"After substitution, {named} this a command 'run' refuses, which could expose secret values: " +
                         "a program that prints its arguments or environment, or a shell or interpreter given inline code " +
@@ -286,7 +292,7 @@ public sealed partial class RunCommand : ICliCommand
                 // The child's environment is the --env pairs, then tswap's own (names ignoring case, as on Windows).
                 var childArgv = argv;
                 string? windowsArguments = null;
-                if (windows && ctx.MsysProbe() is { } probe
+                if (msysProbe is { } probe
                     && MsysTarget.Resolve(argv[0], probe) is { } program && MsysTarget.IsMsys2(program, probe.FileExists))
                 {
                     string? ChildVariable(string name) =>

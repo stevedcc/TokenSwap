@@ -2205,6 +2205,52 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     }
 
     /// <summary>
+    /// Brief T64 (#411): <c>run</c> refuses a bash that may be WSL's <c>bash.exe</c> launcher, which runs its whole command
+    /// line through <c>/bin/bash -c</c>. Leg 1: System32's <c>bash.exe</c> by its path, refused whether WSL is installed or
+    /// not (not found is refused too). Leg 2: a bare <c>bash</c>, the expected outcome computed as the product computes it,
+    /// over a probe of tswap's view of the machine (its folder, the work folder), not the test host's.
+    /// </summary>
+    [WindowsFact("WSL's bash.exe and CreateProcess's search order exist only on Windows")]
+    public void Run_WslBashLauncher_IsRefused_Windows()
+    {
+        var (work, _, _) = ScriptWork();
+        File.WriteAllText(Path.Combine(work.FullName, "capture.sh"), "printf '%s' \"$1\" > out.txt\n");
+        var outFile = Path.Combine(work.FullName, "out.txt");
+        var (initExit, _, initErr) = RunTswap("init", "--yubikey", "--no-recovery");
+        Assert.True(initExit == 0, $"init failed: {initErr}");
+        const string value = "v$(echo pwned)k7Qz";
+        var (ingestExit, _, ingestErr) = RunTswapWithStdin(value, "ingest", "v");
+        Assert.True(ingestExit == 0, $"ingest failed: {ingestErr}");
+
+        // Leg 1: System32's bash.exe by its path.
+        var (exit1, out1, err1) = RunTswapIn(work, "run", Path.Combine(Environment.SystemDirectory, "bash.exe"), "./capture.sh", "{{v}}");
+        Assert.Equal(1, exit1);
+        Assert.Contains(BashLauncherRefusalTests.WindowsReason, err1);
+        Assert.False(File.Exists(outFile), "System32's bash.exe ran the script");
+        Assert.DoesNotContain("k7Qz", out1 + err1);
+
+        // Leg 2: a bare bash, as tswap resolves it.
+        var probe = new MsysTarget.Probe(Path.GetDirectoryName(_binaryPath), work.FullName, Environment.SystemDirectory,
+            Environment.GetFolderPath(Environment.SpecialFolder.Windows), Environment.GetEnvironmentVariable, File.Exists);
+        var resolved = MsysTarget.Resolve("bash", probe);
+        var msys = resolved is not null && MsysTarget.IsMsys2(resolved, probe.FileExists);
+        _output.WriteLine($"T64 leg 2: bare bash resolves to {resolved ?? "(not found)"}: {(msys ? "MSYS2, runs" : "not MSYS2, refused")}");
+        var (exit2, out2, err2) = RunTswapIn(work, "run", "bash", "./capture.sh", "{{v}}");
+        if (!msys)
+        {
+            Assert.Equal(1, exit2);
+            Assert.Contains(BashLauncherRefusalTests.WindowsReason, err2);
+            Assert.False(File.Exists(outFile), "a bare bash that isn't MSYS2 ran the script");
+            Assert.DoesNotContain("k7Qz", out2 + err2);
+        }
+        else
+        {
+            Assert.True(exit2 == 0, $"run bash failed (exit {exit2}): {err2}");
+            Assert.Equal(value, File.ReadAllText(outFile, Encoding.UTF8));
+        }
+    }
+
+    /// <summary>
     /// Brief T52 (#403): every non-ASCII corpus value, ingested as raw UTF-8, comes out of <c>tswap get</c> with stdout
     /// redirected (a pipe) as its UTF-8 bytes and CRLF, whatever the console code page (437 on the runner). Before,
     /// 15 of 16 came out in the code page or as <c>?</c>.
