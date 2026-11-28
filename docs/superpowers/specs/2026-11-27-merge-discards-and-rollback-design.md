@@ -426,6 +426,24 @@ after round 10): the `S`-cap rows corrected (65 rotations give no entry, A's `S`
 order); a row that the 64 KiB cap still binds `burn`; §1.4 rule 3 states the tied-winner `asOf` when none is exact
 (T60 R15); Appendix A's `delete` line for an R2 record, which can't lead to `delete` (the record is gone).
 
+## Amendments (round 12)
+
+Three edits from the adversarial Claude review of the T60 brief (`~/RiderProjects/tswap-wt/tools/t60-brief-r2-claude.md`).
+1. **C-1:** a value write over a tombstone (a new life) is always written in format 3, whatever the folder writes
+   (§1.4 rule 4, §1.5). In a folder still writing format 2, the new life's `Fields` (with `Since`) and its lineage
+   would otherwise be dropped, and a stale copy's deleted-life value would become a current-life entry that
+   `{{x:discarded}}` hands out without sudo. Row and step table in Tests.
+2. **I-9:** the `--clear` output and the docs add that a machine still holding the cleared value as its current
+   value keeps it as its own previous value after its next rotation, until the one after: the unchanged winner rule,
+   so text only (§1.9).
+3. **I-10:** §1.6 corrected: once the folder holds one format 3 file, this build writes format 3 for every record
+   (`WritesV3`, `ProbeFormatThree`), so a 0.1 machine can't read records written after that; upgrading every machine
+   is required.
+
+Noted: the earlier-life test (an entry below `Fields.Since`) can't tell a real delete from two machines creating the
+same name concurrently. `{{x:discarded}}` refuses both without sudo (fail closed), and the warning, the refusal and the
+`conflicts` status say "may be from before 'x' was deleted or created again elsewhere".
+
 ## Intent and why
 
 Both issues are about the per-record store losing data **without saying so clearly**.
@@ -752,11 +770,12 @@ discardedCount    1   0..255 decoded; 64 is a write cap (T60 R6), then per entry
    record leaves only `T`, and leaving the extension out would lose it), except an all-zero lineage, which is not
    written (T60 R7, which replaces round 6 amendment 6: such an extension is exactly "none"). A newer-format lineage
    is kept or refused per §1.3. Whenever `T` or the
-   entries are non-empty the record is written in format 3, whatever the folder writes; `S` alone doesn't force it
+   entries are non-empty, and for every value write over a tombstone (a new life, round 12 amendment 1), the record is
+   written in format 3, whatever the folder writes; `S` alone doesn't force it
    (round 7 amendment 3), so a record with only a lineage in a folder that writes format 2 (one with 0.1 machines) is
-   written in format 2, drops the extension and falls back to D2 until a format 3 write. This trades exactness for
-   records this release wrote, whenever a 0.1 machine shares the folder, to keep them readable there (round 10,
-   DeepSeek M-4). `S` and `T` are capped at
+   written in format 2, drops the extension and falls back to D2 until a format 3 write. This holds only while the
+   folder has no format 3 file at all: once it has one, this build writes format 3 for every record (`WritesV3`,
+   `RecordVaultStore.cs:155`, through `ProbeFormatThree`, `:1012-1037`; round 12 amendment 3). `S` and `T` are capped at
    the 64 newest stamps on writes as on merges.
 5. A tombstone winner keeps the extension (unlike `Fields`): its lineage stops a stale copy's value from being
    reported as discarded, and (owner decision 1) its discarded entries.
@@ -918,7 +937,8 @@ Every row is a test row (Tests, T60 "§1.4a orders").
   the record "not fully fingerprinted" until a value write or `vault reindex` fills it (round 5 amendment 10, M-5). On
   a tombstone only `vault reindex` fills them (`WithMissingSets` returns early for tombstones, `:996-997`; round 5
   amendment 11, M-6).
-- Any write of a record carrying entries or retirements (`T`) is written in **format 3** even in a folder that still
+- Any write of a record carrying entries or retirements (`T`), and any value write over a tombstone (round 12
+  amendment 1: the new life's `Fields` keeps its `Since`), is written in **format 3** even in a folder that still
   writes format 2 (round 7 amendment 3: `S` alone doesn't force it), as a write with fields is (`RecordVaultStore.cs:919-923`, `CarriesEdits`); format 2 stores no extensions
   (`:2022-2029`).
 - A write copies every entry's section byte for byte. The full path seals an entry that has no section (a format 2
@@ -945,7 +965,7 @@ Every row is a test row (Tests, T60 "§1.4a orders").
 | 0.3.x writing format 2 (a folder with 0.1 machines) | drops the whole extension, entries and `T` included; R4 warns for the entries on every machine that had them in a file |
 | 0.3.x folding conflicted copies before any machine running this release wrote the record | the entry this release set aside in memory is lost with no later warning: no machine had it in a file, so no floor holds it. The keep-promise holds from the first write of the record (round 9 amendment 1) |
 | 0.2.x | as 0.3.0 for the extension |
-| 0.1 (format 2 only) | can't read format 3 at all, as today; a vault with 0.1 machines writes format 2, except records with entries or retirements (written in format 3, as records with fields are); a record with neither written in format 2 loses its lineage and falls back to D2 until a format 3 write |
+| 0.1 (format 2 only) | can't read format 3 at all, as today. A folder writes format 2 only while it holds no format 3 file: the first record this build forces to format 3 (a kept conflict, a retirement, a new life, a field) makes it write format 3 for every record from then on (`WritesV3`, `ProbeFormatThree`), and a 0.1 machine can't read any record written after that. **Every machine must be upgraded** (round 12 amendment 3) |
 | 0.3.2 writing a value over a record with entries | keeps the extension byte for byte; the entries stay; this release then sees a stale `asOf` (pinned in Tests) |
 
 `docs/multi-machine.md` "The merge rules" gains a "Mixed versions" paragraph like the fields one (`:482-489`): in a
@@ -959,7 +979,7 @@ reports it on machines that had seen the entry burned (amendment 9).
 The same paragraph says (round 9 amendment 1): a value set aside is kept once a machine running this release writes
 the record; until then it lives only in the conflicted copies, which an older tswap's fold can remove.
 
-**Upgrading a shared folder** (numbered, in `docs/multi-machine.md` and the release notes): 1. Upgrade every machine that shares the folder. 2. Then run `tswap conflicts` (on any one machine) and deal with what it lists. Until a machine running this release writes a record, an older tswap's fold of its conflicted copies can drop a set-aside value with no warning anywhere. The release-note line says the same in two steps. A fold can't
+**Upgrading a shared folder** (numbered, in `docs/multi-machine.md` and the release notes): 1. Upgrade every machine that shares the folder (required: once the folder holds a format 3 file, 0.1 machines can't read records written after it, round 12). 2. Then run `tswap conflicts` (on any one machine) and deal with what it lists. Until a machine running this release writes a record, an older tswap's fold of its conflicted copies can drop a set-aside value with no warning anywhere. The release-note line says the same in two steps. A fold can't
 persist the entry at once instead: reads never write records (a write needs the stale-write guard, removes the
 conflicted copies and would turn every `names` or `run` into a shared-folder write), and flooring an entry that isn't
 in a file is what Claude's round 7 C-1 showed to be unsound (round 10 amendment 1).
@@ -1007,8 +1027,8 @@ parts in UTC with `Z` (the fields rule, fields spec Constraints). The second hal
 the current value has moved on since the conflict, it reads `… was set aside by a merge; the current value is the
 one machine c7cad1d5 wrote at …` (T60 R12 decides between the two from metadata). An entry whose stamp is the
 previous version is silent (round 8 model 2; round 3 amendment 8's variant is gone). An earlier-life entry (§1.10)
-reads `⚠ x: tswap kept a value machine 5d918462 wrote at … from before 'x' was deleted and created again. See 'tswap
-conflicts x'.` (round 8, Claude I-5). With several entries, one line each. On a tombstone: `⚠ x: it was deleted while
+reads `⚠ x: tswap kept a value machine 5d918462 wrote at … that may be from before 'x' was deleted or created again
+elsewhere. See 'tswap conflicts x'.` (round 12) (round 8, Claude I-5). With several entries, one line each. On a tombstone: `⚠ x: it was deleted while
 machine 5d918462 changed its value (at …). tswap kept that value. See 'tswap conflicts x'.` `tswap` is `ctx.Prefix`.
 
 Where:
@@ -1057,8 +1077,8 @@ sync-conflict-test
 - `(same value as the current value)` (or `previous`) for an entry whose value the record retains (round 6
   amendment 3).
 - The status goes at the end of each `discarded` line (T60 R10): `(open)`, `(open on this machine; acknowledged on
-  machine c7cad1d5 at …)` (§1.4a, display), `(acknowledged 2026-11-15T09:12:00Z, machine c7cad1d5, by owner)`, `(from
-  before 'x' was deleted)` for an earlier-life entry; the header line is the name, plus ` (deleted)` for a tombstone. A
+  machine c7cad1d5 at …)` (§1.4a, display), `(acknowledged 2026-11-15T09:12:00Z, machine c7cad1d5, by owner)`, `(may be
+  from before 'x' was deleted or created again elsewhere)` for an earlier-life entry (round 12); the header line is the name, plus ` (deleted)` for a tombstone. A
   burned entry shows ` [BURNED 2026-11-15T09:12:00Z: <reason>]`
   with its burn's date and reason, as `burned` shows them (round 7, M-3); an entry at or below `forgotten` shows
   `(open: its retirement may have been forgotten)`.
@@ -1087,7 +1107,9 @@ sync-conflict-test
   the same value doesn't bring it back. Only an older file put back from before this clear (a sync restore) can, as
   any rolled-back change can, or a stale copy after 64 later drops on this secret, or a merge done by an older tswap;
   in those cases tswap warns about it again. A machine that still holds this value as its current value (it hasn't
-  merged yet) loses it too, with no warning there: check 'tswap conflicts x --json' on each machine before clearing.`
+  merged yet) loses it too, with no warning there: check 'tswap conflicts x --json' on each machine before clearing.
+  If that machine rotates first, it keeps the value as its previous value until its next rotation after that.`
+  (round 12 amendment 2)
   (round 7 amendment 2, round 8 model 5, round 10 amendment 3; the same sentences go in `docs/multi-machine.md`.)
 
 ### 1.10 `restore --discarded` and `{{name:discarded}}`
@@ -1120,11 +1142,13 @@ history). No new command; `docs/commands.md` gives the three lines.
   A tombstone holding entries: `'{{x:discarded}}': 'x' was deleted; it has 1 kept value(s): see 'tswap conflicts
   x'.` (a tombstone without entries: `Secret 'x' not found`) (round 2 amendment 3, point 6);
 - an **earlier-life** entry (round 8, Claude I-5): one whose stamp is below the current life's start, the `Fields`
-  extension's `Since` (`RecordWrites.cs:93`; a record with no `Fields` extension, re-created by v0.3.0, can't tell and
+  extension's `Since` (`RecordWrites.cs:93`; the test can't tell a real delete from two machines creating the name
+  concurrently, so both are refused here, fail closed, round 12; a record with no `Fields` extension, re-created by
+  v0.3.0, can't tell and
   counts as current-life, documented: there `{{x:discarded}}` hands out a value from the deleted life without sudo, a
   non-sudo leak on that mixed-version path only; round 10, DeepSeek M-2). `{{x:discarded}}` refuses it, as on the tombstone it came from: `'{{x:discarded}}':
-  the value 'x' kept from before it was deleted and created again can only be put back by the user: 'sudo tswap restore x
-  --discarded'.` It counts towards "more than one" too;
+  the value of 'x' kept from what may be before it was deleted or created again elsewhere can only be put back by the
+  user: 'sudo tswap restore x --discarded'.` It counts towards "more than one" too;
 - a burned entry gives `run`'s burned-value warning from the entry's own burn (T60, through `IsBurnedToken`); T61 adds
   the same warning for an entry this machine's floor (§2.3) saw burned (round 2 amendment 3, point 1). The value is
   masked as `[REDACTED: x:discarded]` like any token. `SecretsDb.IsBurnedToken` answers false for `:discarded`, and
@@ -1607,6 +1631,11 @@ with a parity test over random states like `RecordWrites_MatchNextRecord_OnRando
 | `burn`, `field set` on a record with entries | entries byte-identical |
 | any write in a format 2 folder of a record with entries | written in format 3 |
 | a 0.3.2-shaped round trip (unknown extension kept) | unchanged bytes |
+| a value write over a tombstone in a folder with no format 3 file | written in format 3; `Fields` with `Since` kept (round 12 amendment 1) |
+| Claude T60 r2 C-1's steps: a format 2 folder (a 0.1 machine shares it, no format 3 file); `x` = `c`, previous `p`; B (offline) burns `x`; A `sudo delete x`; A `ingest x` (new life `n`); B's file arrives as a conflicted copy; fold; `run … '{{x:discarded}}'` | the new life is format 3 with `Since` = `n`; `c` is an entry below `Since`, so earlier-life: `{{x:discarded}}` refused with the earlier-life text, no value to the child; `sudo restore --discarded` works |
+| two machines create `x` concurrently; the loser's value is an entry below the winner's `Since` | refused by `{{x:discarded}}` as earlier-life (fail closed); the "may be … created again elsewhere" text |
+| B clears `a`; A (unmerged, holding `a` current) rotates `a`→`a2`; merge | `a` is the previous value (`{{x:previous}}` gives it) until A's next rotation; no entry (round 12 amendment 2) |
+| a folder with one format 3 file, a 0.1 machine sharing it | every later write by this build in format 3 (round 12 amendment 3) |
 
 **Commands and the end-to-end case from the issue** (`FleetMachine` A and B):
 
