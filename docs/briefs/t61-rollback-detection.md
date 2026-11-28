@@ -129,6 +129,17 @@ config folder, `MigrateToRecordsTests.cs:107-116` and `SecureEnclaveTouchChoiceT
 
 If T60 as merged names any of these differently, use T60's names; if one is missing, stop and report.
 
+## Amendments (brief round 8: MiMo r7, at 5b688b2)
+
+- **I-1:** a number `Format` is classified by value (`TryGetInt64`, else `TryGetDecimal`, else `double.TryParse` of
+  the raw text): above 1 is Newer whatever its spelling or range; `1.0`/`1e0` and other values up to 1 are Damaged;
+  rows.
+- M-1: the newer-lineage names checked at T60 474f3cc (`NewerLineages` is there, with `LineageNewerFormat`); cite
+  updated. M-2: the null check runs only on a file the pre-pass concluded is format 1. M-3: the `--file` text is a
+  `TswapException`, other usage errors a `UsageException`; rows. M-4: an unreadable folder keyring fills nothing;
+  a row. M-5: the notice's command writes `VaultId` even when nothing rose; a row. M-6: the generic-reason rows
+  assert the prefix only. M-7: the config-folder row labelled a proxy.
+
 ## Amendments (brief round 7: MiMo r6, at 2b8dc07)
 
 - **I-1:** the `Format` pre-pass classifies each value on its own (`ValueKind == Number && TryGetInt64`, else "not a
@@ -290,7 +301,9 @@ below; this list says where.
   vault. Every config this release writes for a record vault with a keyring gets `VaultId` (R-8 lists the writers),
   so the notice shows at most once per machine.
 - **R-8, where `VaultId` is written.** `SaveConfig` of a non-detached store fills a missing `VaultId` from the keyring
-  being saved, else from the vault folder's `keyring` when it exists: that covers `init` (`InitCommand.cs:303`) and
+  being saved, else from the vault folder's `keyring` when it exists and decodes; a folder `keyring` that can't be read or decoded
+fills nothing (the read's exception is caught: `TswapException`, `IOException`, `UnauthorizedAccessException`; MiMo r7
+M-4) and `SaveConfig` behaves exactly as today: that covers `init` (`InitCommand.cs:303`) and
   `slot accept` (`SlotCommand.cs:946`) without editing them. `migrate --to-records` writes `config.json` itself
   (`RecordMigration.cs:235`); T61 adds `VaultId` to that one `newConfig` (the design names migrate; the Briefs list
   omits the file). Two writers bypass `SaveConfig` (GLM r3 M-4, checked at f2e3a5a): `init --vault-dir` writes
@@ -298,6 +311,9 @@ below; this list says where.
   `config`), and `slot request` on a record-store machine rebuilds the config in `KeepRecordStoreFields`
   (`SlotCommand.cs:1052-1058`; T61 adds `VaultId = current.VaultId` to its `with`; both one-line edits outside the design's file list). A config without one gets it at
   the first save of `seen-records` after an authenticated load, and at any record write (`WriteAll`'s config save).
+  **The command that prints the notice writes `VaultId` at its end whether or not anything rose** (MiMo r7 M-5), when
+  a vault id is known (I-2), so a vault with no records (nothing authenticated, no `seen-records` save) still prints
+  the notice once, not on every command.
   **The fills after an authenticated load or write also correct** (the `seen-records` save, `WriteAll`, and
   `SaveConfig` from the keyring being saved, never from the folder's `keyring` alone): a `VaultId` that is invalid or
   differs from the vault id of the keyring whose records were just authenticated is replaced by it (the seen files are
@@ -499,17 +515,26 @@ one: the same text).
 **`Format` is read first, in a tolerant pre-pass** (round 4, MiMo r3 I-1), before any strict rule:
 `JsonDocument.Parse` of the bytes (which keeps repeated properties), then every root property named exactly `Format`
 (`EnumerateObject`, not `GetProperty`, so a repeated `Format` is seen whole), walked in document order. **Each value
-is classified on its own** (MiMo r6 I-1): only when `ValueKind == JsonValueKind.Number && TryGetInt64(out n)` is it
-an integer `n` (`TryGetInt64` **throws** `InvalidOperationException` on a value that isn't a number, so it is never
-called on one; it returns false for `1.0`, `1e3` and a number beyond `long`). Every other value (`"1"`, `true`,
-`null`, an object, `1.0`, `1e3`, beyond `long`) is "not a whole number". `JsonDocument.Parse` failing (a
-`JsonException`) is "not JSON". Nothing in the pre-pass throws. **After the loop**, the first of these that applies
+is classified on its own** (MiMo r6 I-1, r7 I-1), by its value, never by its spelling:
+- not `ValueKind == JsonValueKind.Number` (`"1"`, `true`, `null`, an object or array): "not a whole number".
+  (`TryGetInt64` and `TryGetDecimal` **throw** `InvalidOperationException` on a non-number, so they are called only on
+  a number.)
+- a number with `TryGetInt64(out n)` true (the literal integers, `5000000000` included): the integer `n`.
+- any other number (`2.0`, `2e0`, `1e3`, `1.5`, `1.0`, `1e0`, `5000000000.0`, `1e308`, `1e400`): its value, from
+  `TryGetDecimal` when that succeeds, else from the raw text (`GetRawText()`) through `double.TryParse(text,
+  NumberStyles.Float, CultureInfo.InvariantCulture)`, which gives ±infinity past `double`'s range rather than failing.
+  A value **above 1** (`1.5` too) is "a number above 1": a later tswap may have written it, so it is never
+  overwritten. Any other value is "not a whole number": `1.0` and `1e0` (equal to 1, but not the literal `1`, which
+  is all this tswap writes; a value of 1 can't be a newer file), `0.5`, `-3.0`.
+`JsonDocument.Parse` failing (a `JsonException`) is "not JSON". Nothing in the pre-pass throws. **After the loop**,
+the first of these that applies
 decides (GLM r3 M-7; the safer state wins, since only a Damaged file is overwritten, so the order of repeated
 members never matters):
 - not JSON: **Damaged**, reason `it is not valid JSON`; the root not an object: **Damaged**, `it is not a JSON object`;
   no `Format`: **Damaged**, `it has no Format`;
-- any value an integer above 1 (so `5000000000` too): **Newer**, whatever else the file holds (unknown members,
-  other stamp spellings, another `Format` beside it, before or after);
+- any value an integer above 1, or a number above 1 (`2`, `5000000000`, `2.0`, `1e3`, `1e308`, `1e400`, `1.5`):
+  **Newer**, never written, whatever else the file holds (unknown members, other stamp spellings, another `Format`
+  beside it, before or after);
 - any value not a whole number: **Damaged**, `its Format is not a whole number`;
 - any integer below 1: **Damaged**, reason `its Format is <n>, not 1` (`<n>` the first such value in document order);
 - otherwise (every value is the integer 1, concluded only here): the strict parse below, which rejects a repeated
@@ -528,8 +553,9 @@ stamps, so the path reveals nothing. `Format`, `Vault` and `Records` are require
 <member>`; an empty `Records` object is fine). `Vault` must be 16 characters of `[0-9a-f]` (otherwise reason `its
 Vault is not a vault id`) and equal the file name's 16 hex (a mismatch: `it names another vault (<16 hex>)`).
 **Explicit `null` members** (MiMo r6 M-1): the options above deserialise `"Burn": null` into a nullable member
-silently, which would read as "no burn" (fail-open: R1's "the burn is gone" lost). So the reader checks the
-`JsonDocument` of the pre-pass before the strict parse: any member whose `ValueKind` is `Null`, at the root, in a
+silently, which would read as "no burn" (fail-open: R1's "the burn is gone" lost). So, **only for a file the pre-pass
+concluded is format 1** (MiMo r7 M-2: a null `Format` never gets here and keeps the pre-pass reason `its Format is not
+a whole number`), the reader checks the pre-pass's `JsonDocument` before the strict parse: any member whose `ValueKind` is `Null`, at the root, in a
 `Records` entry, in a `Discarded` item, or as a `Records`, `Discarded` or `Retired` element, makes the file damaged,
 reason `record <file>'s <field> is null` (`<field>` the member's name; at the root, `it has a null <member>`); the
 writer never writes `null`. **Duplicate keys inside `Records`**: `AllowDuplicateProperties = false` (already used on
@@ -600,11 +626,13 @@ Tests (`SeenStateTests`, files in a temp config folder; `MachineConfigVaultIdTes
 | `seen-records` with `Format` 3 | Newer: the "newer tswap" warning; nothing checked; the file's bytes unchanged after a write command |
 | `Format` 2 with an unknown property and a stamp in another spelling | Newer (the pre-pass decides before the strict parse); bytes unchanged after a write command |
 | `Format` 5000000000 | Newer |
+| `Format` `2.0`; `1e3`; `5000000000.0`; `1e308`; `1e400`; `1.5`, each after a write command (MiMo r7 I-1) | Newer each: the "newer tswap" warning; the file's bytes unchanged |
+| `Format` `1e0`; `0.5`; `-3.0` | Damaged, `its Format is not a whole number` |
 | `Format` 0; `Format` `1.0`; `Format` `"1"`; no `Format` | Damaged, reasons `its Format is 0, not 1`, `its Format is not a whole number` (twice), `it has no Format` |
-| a `Records` key repeated | Damaged, reason starting `it doesn't follow format 1 at $.Records` (the generic reason; MiMo r6 M-1) |
-| `{"Format":"x","Format":2}`; `{"Format":null}`; `{"Format":"1"}`; `{"Format":1e3}` | Newer (the other order is in the row below); Damaged `its Format is not a whole number` (each; no exception escapes) |
+| a `Records` key repeated | Damaged, the reason starts `it doesn't follow format 1` (the generic reason; the row asserts that prefix only, `<path>` being whatever `JsonException.Path` gives; MiMo r6 M-1, r7 M-6) |
+| `{"Format":"x","Format":2}`; `{"Format":null}`; `{"Format":"1"}` | Newer (the other order is in the row below); Damaged `its Format is not a whole number` (each; no exception escapes; a null `Format` takes the pre-pass reason, not the null-member one) |
 | `"Discarded":[{"Stamp":"…","Burned":null}]` at `Format` 1; `"Vault": null` | Damaged `record <file>'s Burned is null`; Damaged `it has a null Vault` |
-| root `[]`; `{"Format":1,"Format":2,…}`; `{"Format":2,"Format":"x"}`; `{"Format":1,"Format":1,…}`; `{"Format":1,"Format":0,…}` | Damaged `it is not a JSON object`; Newer; Newer; Damaged `it doesn't follow format 1 at $…`; Damaged `its Format is 0, not 1` |
+| root `[]`; `{"Format":1,"Format":2,…}`; `{"Format":2,"Format":"x"}`; `{"Format":1,"Format":1,…}`; `{"Format":1,"Format":0,…}` | Damaged `it is not a JSON object`; Newer; Newer; Damaged, the reason starts `it doesn't follow format 1` (prefix only); Damaged `its Format is 0, not 1` |
 | at `Format` 1, an unknown member `X` | Damaged, `it doesn't follow format 1 at <path>` naming `X`'s path |
 | an operation that raises nothing, with no `seen-records` file | no file written |
 | `"Burn": null`; `Vault` `"XYZ"` | Damaged, the null reason; the vault-id reason |
@@ -615,6 +643,7 @@ Tests (`SeenStateTests`, files in a temp config folder; `MachineConfigVaultIdTes
 | the `Write` seam throws `OwnerSwitchException` | the command fails with its text and exit code; no write-failure warning |
 | a file chmodded 0644, then a save that changes its bytes (`UnixFact`) | 0600 |
 | `init` of a record vault; `slot accept` (as `SlotAcceptRecordVaultTests`) ; `migrate --to-records`; `init --vault-dir`; `slot request` on a record-store machine whose config had it | `config.json` has the keyring's `VaultId` (`slot request`: kept) |
+| `SaveConfig` (no keyring being saved) on a store whose folder `keyring` holds bytes the codec refuses | `config.json` written as without T61 (same bytes), no `VaultId`, no exception (MiMo r7 M-4) |
 | `config.json` with another vault's `VaultId`; `names` | `VaultId` now the folder keyring's; nothing else in `config.json` changed |
 
 Break-it-once: drop `keepMode: false`; the 0644 row must fail. Write the stamp's origin with `Convert.ToHexString`; the
@@ -656,7 +685,9 @@ raise gets the merged state (for `Write` and the pair) and the record's `Persist
 `Missing` gets no raise; an R4 finding doesn't stop it. **An R3 record raises nothing**, not even from the copies that
 authenticated before its merge failed (`FoldConflictCopies`' `RecordConflictException` branch, `:1257-1266`; the
 metadata path's `:786-797`; an `UnreadableRecordException` from an open). **A record with a newer-format lineage**
-(round 3, I-8), told by T60's names (brief at e4f415b, "Interfaces T61 relies on"):
+(round 3, I-8), told by T60's names (brief at 474f3cc, the current `origin/brief/t60`, "Interfaces T61 relies on";
+they are unchanged since e4f415b; `SecretEntry` also has `internal bool LineageNewerFormat => NewerLineages.Count > 0`,
+which T61 may use for the same test):
 `ValueLineageCodec.Read(extensions).NewerFormat` for one record's extension list; `SecretEntry.NewerLineages`
 (`IReadOnlyList<byte[]>`, the `0x0103` data of each newer-format input of an opened entry's merge) on the open and write
 paths; `LoadedRecord.NewerLineages` (the same, set by `FoldConflictCopies`) on the full load;
@@ -893,6 +924,7 @@ Tests (`RollbackDetectionTests`: `FleetMachine` A, B, C sharing or copying one v
 | `seen-records` missing; another vault id's file only; content naming another vault id; not JSON | baseline, no text / baseline, no text / the damaged warning, no floor / the damaged warning; nothing refused |
 | a sync tool deletes a conflicted copy that had raised the floor; no newer main arrives | R1 stays after waiting; `vault merge` of the writer's folder or `accept-rollback` clears it |
 | missing `seen-records`, `config.json` with `LastHlc` and no `VaultId` | the notice once; `VaultId` written; the next command prints nothing |
+| the same on a vault with an empty `records/` (nothing to authenticate or raise) | the notice once; `VaultId` written; the next command prints nothing (MiMo r7 M-5) |
 | P1 (a store with `BeforeSeenSave`) loads metadata; the seam writes a floor with a larger `Write` and a smaller pair, then P1 saves | `Write` the larger; the pair whole from the larger version |
 | floor `(v10, burn t2)`; on disk `(v10, burn t1)` written in the seam | burn `t1` |
 | two operations' entry lists interleaved through the seam | the union by stamp, burned bits OR-ed |
@@ -1147,7 +1179,7 @@ does):
 | the config pointed at another vault | its own baseline files; the first vault's untouched |
 | two commands' `seen-keyring` writes interleaved (`BeforeSeenSave`) | a union of both slot sets |
 | `Ownership` = `FakeOwnership(privileged: true, euid: 0)` with the vault folder owned by uid 2000, `SudoEscalated = true`: `names`, then `sudo vault restore-slots --yes` | each `seen-*` write switched to the config folder's owner (uid 1000), both files 0600; the `keyring` write to uid 2000, its mode 0600 |
-| `CliEnvironment`'s config-folder resolution (`RefuseAmbiguousMacVault` `:235`, the legacy move `:317-322`) and `VaultStores.IsRecordStore` with both files present | the same results as without them (the 0.3.2-shaped reader) |
+| `CliEnvironment`'s config-folder resolution (`RefuseAmbiguousMacVault` `:235`, the legacy move `:317-322`) and `VaultStores.IsRecordStore` (a **proxy** for the design's "0.3.2-shaped reader" row, which is the PR-time one-off check of Task 5; MiMo r7 M-7) with both files present | the same results as without them (the 0.3.2-shaped reader) |
 
 Break-it-once: make `restore-slots` unlock first (the `Tpm = null` row fails: the unlock throws); skip the
 `seen-keyring` comparison (the lost-slot rows are silent); compare with `KeyringUnion.Union` (the differing-slot row
@@ -1162,13 +1194,13 @@ mismatch as damage (the other-`K` row rewrites `seen-keyring`).
 the record-store check (`'vault accept-rollback' works on record-store vaults only. Convert this vault first: sudo
 <prefix> migrate --to-records`, as merge's), then `ctx.RequireSudo("vault accept-rollback")`, then the unlock; each
 refusal exits 1 with nothing read or written. Names and `--file` may be mixed; `--all` takes nothing else. Usage errors
-(`UsageException` with the command's usage line, exit 1): no target, `--all` with anything else, `--all` twice, a
+(`UsageException(usage)`, which prints `Usage: <the command's usage line>`, exit 1): no target, `--all` with anything else, `--all` twice, a
 `--file` with no value, any other argument starting with `-`. `--file` takes exactly 64 characters of `[0-9a-f]`
 (parser-first: what the file names are, `FilenameHasher.ToFilename`, `TswapCore/Keyring/FilenameHasher.cs:54`);
-anything else (upper case, 63 or 65 characters, a space or line break inside) is the error `--file takes a record's
-file name: 64 lower-case hex digits, as the warning prints it.`, exit 1. Each name goes through
-`Validation.ValidateName` (`TswapCore/Validation.cs:82` at f2e3a5a, as `delete` and `burn` do), its message and exit
-code unchanged. Targets are deduplicated by file name (a name and its own `--file` are one target, shown by name).
+anything else (upper case, 63 or 65 characters, a space or line break inside) is a `TswapException` (not a `UsageException`, so no usage line; MiMo r7 M-3) with exactly the text `--file takes a
+record's file name: 64 lower-case hex digits, as the warning prints it.`, exit 1. Each name goes through
+`Validation.ValidateName` (`TswapCore/Validation.cs:82` at f2e3a5a, as `delete` and `burn` do): it throws a plain
+`Exception`, which `CliRunner` reports as it does for `delete` today (its message, exit 1). Targets are deduplicated by file name (a name and its own `--file` are one target, shown by name).
 It unlocks (`ctx.Unlock`) and calls a new
 `public IReadOnlyList<AcceptedRollback> AcceptRollback(byte[] vaultKey, IReadOnlyCollection<string> names,
 IReadOnlyCollection<string> files, bool all)` that loads metadata (`FormatTwoRecords.Decode`) without printing the
@@ -1202,9 +1234,10 @@ Tests (`AcceptRollbackTests`):
 | `accept-rollback <name>` of an R2 record; `--file <hash>` of another | both accepted |
 | `accept-rollback x` with nothing flagged | `Nothing to accept …`, exit 0, `seen-records` unchanged |
 | `accept-rollback` without sudo | refused ("requires"); `seen-records` unchanged |
-| `--file 3F2A…` (upper case), `--file` of 63 hex, `--all x` | usage errors, exit 1 |
-| `--file 3F2A…` without sudo; `accept-rollback 'bad name'` without sudo | the usage error; `ValidateName`'s error; neither the "requires" text (arguments first) |
-| `accept-rollback`, no target; `--all --all`; `--file` with no value; `--force x` | usage errors, exit 1 |
+| `--file 3F2A…` (upper case), `--file` of 63 hex | `--file takes a record's file name: 64 lower-case hex digits, as the warning prints it.`, no usage line, exit 1 (MiMo r7 M-3) |
+| `--all x` | `Usage: …` (the usage line), exit 1 |
+| `--file 3F2A…` without sudo; `accept-rollback 'bad name'` without sudo | the `--file takes …` text; `ValidateName`'s error; neither the "requires" text (arguments first) |
+| `accept-rollback`, no target; `--all --all`; `--file` with no value; `--force x` | `Usage: …` (the usage line) each, exit 1 |
 | an R1 record that also has an R4 finding | the R1 line, then the R4 line; both silent afterwards |
 | `accept-rollback x --file <x's hash>` | one line for `x` |
 | `accept-rollback x` after a delete was rolled back | the "it was deleted" line; then `delete x` works |
