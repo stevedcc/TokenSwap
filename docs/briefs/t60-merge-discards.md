@@ -67,6 +67,11 @@ forms, `Read`'s format 0 and empty data, `\z`, `RestoreDiscarded`'s `_values`, t
 third seeded generator, two pinning tests, `conflicts <name>` validation, the delete line past 64). This brief's body is
 authoritative; these round notes only record why.
 
+**Brief round 9 (MiMo r8, with the controller's rulings):** `import` joins R17's warning row, with a test row (I-1; `create`
+stays out); `UnsealedDiscards` is not in record equality (M-1); the mixed-versions sentence for `:discarded` markers
+(M-2); `Summary` leaves out a secret `ForSecret` already warned about, with a test row (M-3); lineage joins insert in
+stamp order, then cap (M-4); R22 keeps exit 0 and the docs say the stderr warning is the signal (M-5).
+
 **Base.** Main at 686f1fe (T58, cd1a5e7, and T62, #439, merged), already merged into `brief/t60`; the implementer
 merges `origin/main` into `brief/t60` again before starting (a merge, never a rebase). This brief builds on T58's record
 extension `0x0101` (`ValueKinds`), `CommandValues` and its token grammar. Every line number below is checked at
@@ -296,10 +301,11 @@ carries them into the design's next round.
 
 - **R17, the per-secret warning's commands** (design §1.8 departure, MiMo r5 M-1: the design's table gives `delete`
   and `restore` the warning): `delete`, `restore --discarded` and the `conflicts` modes don't print it, and `add` and
-  plain `ingest` do. Reason: the first three act on the entries themselves, so a warning that they exist says nothing
+  plain `ingest` do, and so does `import` (round 9, MiMo r8 I-1; the design's table misses it too). Reason: the first three act on the entries themselves, so a warning that they exist says nothing
   the command doesn't (`delete` prints its own "It also dropped …" line, `restore --discarded` and `conflicts` name
-  the entry they act on); `add` and plain `ingest` open a named secret for a write, like `rotate`, which
-  the table warns for. Plain `restore` keeps the warning.
+  the entry they act on); `add`, plain `ingest` and `import` open a named secret for a write (`import` writes every named secret through
+  `VaultWriter.SetValue`, `ImportCommand.cs:88`, `:128`, then `writer.Commit()`, `:133`), like `rotate`, which
+  the table warns for. `create` stays out: it has no record yet, so `writer.Record(name)` is null. Plain `restore` keeps the warning.
 - **R18, texts this brief adds** (the design gives none): `BurnedAdvice`'s `conflicts --clear` tail,
   `DiscardedRefusalText`, ` (replaced knowingly by a later value)`, the `--stamp` "not a stamp" text, the tombstone
   ` (the secret is back)` variant of `restore --discarded`, the `--ack`/`--clear` "none" texts, the `--by` byte text,
@@ -533,7 +539,8 @@ Wiring:
 - Full path: a holding's section is `input.Sealed[stamp]` (format 3, `SecretRecordCodec.cs:700`) or none (format 2,
   `Sealed` null), its plaintext `input.Value` / `input.Previous.Value`. Metadata path: sections from the input's dictionary,
   no plaintext.
-- `SecretRecord` gains `public IReadOnlyDictionary<Stamp, byte[]>? UnsealedDiscards { get; init; }` (not in `SameState`):
+- `SecretRecord` gains `public IReadOnlyDictionary<Stamp, byte[]>? UnsealedDiscards { get; init; }` (not in `SameState` and not in record equality: `SecretRecord` is a record, so its
+  synthesized `Equals` would compare the dictionary by reference; never compare `SecretRecord`s with `Assert.Equal`):
   `MergeAll` sets it from `Merge`'s `Unsealed`: by reference from the inputs, for exactly the entries the result holds. Writes carry it:
   `NextRecord`, `SetFieldsRecord`, the burn branch and `EditLineageRecord` copy `state.UnsealedDiscards` to the record
   they build, minus the stamps of entries the write removes; `Tombstone` keeps those of the entries a tombstone keeps
@@ -628,7 +635,7 @@ creates an entry); make `Older032.ValueWrite` refresh `AsOf` (the stale-`asOf` r
 
 | Write | Lineage | Entries |
 |---|---|---|
-| new version over a live record (`create`, `add`, `ingest`, `rotate`, `ingest --rotate`, `import`, `restore`) | the dropped old previous joins `Superseded`; `AsOf` = new; when not exact, `ExactFrom` = old previous, or old version when none; `Retired`, `Forgotten` unchanged | unchanged |
+| new version over a live record (`create`, `add`, `ingest`, `rotate`, `ingest --rotate`, `import`, `restore`) | the dropped old previous joins `Superseded` (inserted in stamp order; then capped to the 64 largest, as every join below, so `Encode`'s ordering check can't throw); `AsOf` = new; when not exact, `ExactFrom` = old previous, or old version when none; `Retired`, `Forgotten` unchanged | unchanged |
 | new version with no record | `AsOf` = new, `ExactFrom` = `Stamp.Zero` | none |
 | new life over a tombstone | the tombstone's `Superseded`, `Retired`, `Forgotten` and entries kept (a deleted value never comes back through a stale copy); `AsOf` = new; `ExactFrom` = the tombstone's version when not exact, else unchanged | kept, now earlier-life (R14) |
 | `restore --discarded` of entry `e` | as a new version, and `e` joins `Retired` | `e` removed |
@@ -832,6 +839,7 @@ via `Hlc.ToDisplayDate`, as `FieldCommand.cs:403`; machine = the first 8 hex of 
   - earlier life (R14), whatever R12 says: `⚠ x: tswap kept a value machine 5d918462 wrote at 2026-11-14T16:20:16Z that may be from before 'x' was deleted or created again elsewhere. See 'tswap conflicts x'.`
 - `internal static void Summary(CommandContext ctx, IEnumerable<RecordMetadata> records)`:
   `⚠ 1 secret has a value a merge set aside: x. See 'tswap conflicts'.` / `⚠ 3 secrets have values a merge set aside: a, b (deleted), c. See 'tswap conflicts'.`;
+  a secret already warned by `ForSecret` in the same command (it is in `ConflictsWarned`) is left out of the list and the count, and nothing prints when that leaves none;
   names ordinal, always joined by `, ` (two names: `a, b`; no "and" between names), at most 5, then ` and N more`
   after the fifth (`⚠ 7 secrets have values a merge set aside: a, b, c, d, e and 2 more. See 'tswap conflicts'.`;
   GLM r7 M-5); the count is of secrets, singular only for 1; tombstones named `x (deleted)`; nothing when none warns.
@@ -839,7 +847,7 @@ via `Hlc.ToDisplayDate`, as `FieldCommand.cs:403`; machine = the first 8 hex of 
 | Command | Call |
 |---|---|
 | `run` (every secret a token, `--env` value or `{{@file}}` marker names), `totp`, `get`, `apply`, `field show` | `ForSecret(ctx, view.Record(name))` |
-| `rotate`, `ingest` (incl. `--rotate`), `add`, `restore`, `burn`, `field set`/`unset` | `ForSecret(ctx, writer.Record(name))`, on the record as opened, before staging; `delete`, `restore --discarded` and every `conflicts` mode don't call it (they act on the entries) |
+| `rotate`, `ingest` (incl. `--rotate`), `add`, `import`, `restore`, `burn`, `field set`/`unset` | `ForSecret(ctx, writer.Record(name))`, on the record as opened, before staging; `delete`, `restore --discarded` and every `conflicts` mode don't call it (they act on the entries) |
 | `names`, `burned`, `list`, `check`, `redact`, `tocomment` | `Summary(ctx, view.LoadAll(…).Records)` once |
 
 `VaultView` gains `public RecordMetadata? Record(string name)` (from `LoadAll`'s records when loaded, tombstones
@@ -909,6 +917,8 @@ Tests, `TswapTests/ConflictWarningTests.cs` (`FleetMachine` A and B sharing a fo
 | a tombstone with an entry, `names` | the summary names `x (deleted)` |
 | `names` with 2 secrets that warn; with 7 | `… 2 secrets have values a merge set aside: a, b. See …`; `… 7 secrets have values a merge set aside: a, b, c, d, e and 2 more. See …`, each line asserted exactly |
 | the fold of a conflict on a `run` | the full warning instead of the copy's `Note:`; a copy that lost nothing keeps its note, with the name |
+| a fold that created an entry for `x` on `names` (so `ConflictCreated` warns for `x`), with `y` also holding an open entry | the full per-secret warning for `x`; `Summary` names only `y` (`1 secret … : y`); with `x` alone, no summary line |
+| a record holding a set-aside value, then `import` of a backup naming it | the per-secret warning on stderr, exact text as for `rotate`; the import itself succeeds |
 | a newer-format lineage | the R8 warning once |
 | a newer-format `0x0103` on the input with the **smaller** write stamp, format 1 on the other | the whole-list rule for the whole merge; nothing set aside; the R8 warning once |
 | merged `ValueLineage` position: the chosen list has `Fields` then `ValueLineage`; has neither | kept in place; appended `Fields` then `ValueLineage` (R13) |
@@ -1165,7 +1175,7 @@ entry).
   Base32 seed is handed out as its text (store TOTP seeds as otpauth URIs); that on a record with no `Fields`
   extension (above) `{{x:discarded}}` can hand out a value from the deleted life without sudo; that a v0.3.2 `export`
   leaves entries out with no warning (it has no such code); that `tocomment` leaves a discarded value in a file as it
-  is and warns about it (R22), so move it out by hand.
+  is and warns about it (R22), so move it out by hand; and that `tocomment`'s exit code is 0 in that case, so the stderr warning (not the exit code) is the signal, and a script must not treat success as "the file holds nothing from the vault".
 - **`docs/multi-machine.md`**: "The merge rules" (`:456`) gains a bullet that a merge keeps a concurrent value it
   discards (a pointer to commands.md) and a "Mixed versions" paragraph like the fields one (`:482-489`): a 0.3.x merge
   can still drop a value and a discarded version's burn; a merge here can miss a value on a record whose lineage an
@@ -1177,7 +1187,7 @@ entry).
   be upgraded** (I-10, design §1.6 at e874448); that two folders that each converted the same format 2 value can keep
   different ciphertexts of one set-aside value after `vault merge` each way (design §1.4a claim 4's exception), and
   one more merge each way converges on the ordinally smaller section (GLM r7 I-1 a); folders made by `init` (format 3)
-  don't have this. It also carries the `--clear` output's last two sentences (a machine still
+  don't have this. One more sentence for the mixed-versions paragraph (round 9, MiMo r8 M-2): `:discarded` markers and tokens need this release; an older `check` reads the marker as the plain name, and older `apply`/`run` refuse it. It also carries the `--clear` output's last two sentences (a machine still
   holding the value as its current value loses it with no warning, or, if it rotates first, keeps it as its previous
   value until its next rotation after that). Then, **numbered**:
   "Upgrading a shared folder: 1. Upgrade every machine that shares the folder (required: once the folder holds a format 3
