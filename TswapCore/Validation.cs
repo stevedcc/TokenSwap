@@ -297,7 +297,8 @@ public static class Validation
     private static int? WrappedCommand(IReadOnlyList<string> argv, int i, int end, string program)
     {
         WrapperValued.TryGetValue(program, out var valued);
-        var skipLeading = WrapperLeadingPositional.Contains(program);
+        // Brief T64 code review round 1 (C1): taskset's attached CPU list, as CheckWrapper reads it.
+        var skipLeading = WrapperLeadingPositional.Contains(program) && !TasksetListAttached(program, argv.Skip(i + 1).Take(end - i - 1));
         for (var j = i + 1; j < end; j++)
         {
             var arg = argv[j];
@@ -998,6 +999,15 @@ public static class Validation
         return new(null, Ended: false);
     }
 
+    // taskset -c LIST (or -cLIST, --cpu-list=LIST): an attached list is the leading positional itself, so nothing more
+    // is skipped; a separate list is skipped as usual. Shared by CheckWrapper and WrappedCommand (brief T64 review C1).
+    // Only taskset's own options count, before its first other word or '--' (util-linux parses them with a leading '+'
+    // in its getopt string): a '-c...' word of the command never makes the mask the command (review C1, fail closed).
+    private static bool TasksetListAttached(string program, IEnumerable<string> args) =>
+        program.Equals("taskset", StringComparison.OrdinalIgnoreCase)
+        && args.TakeWhile(a => a != "--" && a.StartsWith('-')).Any(a => (a.StartsWith("-c", StringComparison.Ordinal) && a.Length > 2 && !a.StartsWith("--", StringComparison.Ordinal))
+            || a.StartsWith("--cpu-list=", StringComparison.Ordinal));
+
     // Wrapper options that take a separate value, so the value isn't taken for the command.
     private static readonly Dictionary<string, string[]> WrapperValued = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -1092,11 +1102,7 @@ public static class Validation
 
         WrapperValued.TryGetValue(program, out var valued);
         var skipLeading = WrapperLeadingPositional.Contains(program);
-        // taskset -c LIST (or -cLIST, --cpu-list=LIST): an attached list is the leading
-        // positional itself, so nothing more is skipped; a separate list is skipped as usual.
-        if (program.Equals("taskset", StringComparison.OrdinalIgnoreCase)
-            && args.Any(a => (a.StartsWith("-c", StringComparison.Ordinal) && a.Length > 2 && !a.StartsWith("--", StringComparison.Ordinal))
-                || a.StartsWith("--cpu-list=", StringComparison.Ordinal)))
+        if (TasksetListAttached(program, args))
             skipLeading = false;
         for (var i = 0; i < args.Count; i++)
         {

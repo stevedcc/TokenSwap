@@ -108,6 +108,12 @@ public class BashLauncherRefusalTests
         Add(["timeout", "5", @"C:\Windows\System32\bash.exe", "./x.sh", "{{x}}"], true, "WSL", "bash");
         Add(["bwrap", "--tmpfs", "/x", "bash", "./x.sh", "{{x}}"], true, "WSL", "bash");
         Add(["runuser", "-u", "x", "bash", "./x.sh", "{{x}}"], true, "Git", "bash");
+        // Code review round 1 C1: taskset's attached CPU list is the mask, so the next word is the command.
+        Add(["taskset", "-c0-3", "bash.exe", "./x.sh", "{{x}}"], true, "WSL", "bash");
+        Add(["taskset", "--cpu-list=0-3", "bash.exe", "./x.sh", "{{x}}"], true, "WSL", "bash");
+        Add(["taskset", "-c0-3", "bash.exe", "./x.sh", "{{x}}"], false, "null", "bash.exe");
+        Add(["taskset", "--cpu-list=0-3", "bash.exe", "./x.sh", "{{x}}"], false, "null", "bash.exe");
+        Add(["taskset", "-c", "0-3", "bash.exe", "./x.sh", "{{x}}"], false, "null", "bash.exe");
         Add(["runuser", "-w", "PATH", "-u", "x", "bash", "./x.sh", "{{x}}"], true, "Git", "bash");
         Add(["command", "bash", "./x.sh", "{{x}}"], true, "WSL", "bash");
         Add(["command", "-v", "bash"], true, "WSL", null);

@@ -159,6 +159,16 @@ public sealed class RunBashLauncherTests : IDisposable
     }
 
     [Fact]
+    public void OffWindows_BashExeBehindTasksetWithAnAttachedCpuList_IsRefusedBeforeUnlock()
+    {
+        Secrets(("pw", Value));
+
+        var (exit, stdout, stderr) = Run(OSPlatform.Linux, null, "taskset", "--cpu-list=0-3", "bash.exe", "./capture.sh", "{{pw}}");
+
+        AssertRefusedBeforeUnlock(exit, stdout, stderr, BashLauncherRefusalTests.OffWindowsReason, windows: false);
+    }
+
+    [Fact]
     public void OffWindows_Bash_StartsAsGiven()
     {
         Secrets(("pw", Value));
