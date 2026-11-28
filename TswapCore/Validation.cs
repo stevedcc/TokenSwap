@@ -528,7 +528,10 @@ public static class Validation
           "xvfb-run", "dbus-run-session", "systemd-run", "firejail", "bwrap", "unshare", "nsenter",
           "chroot", "caffeinate", "uv", "uvx", "poetry", "pipenv", "pdm", "hatch", "conda", "pixi",
           "npx", "pnpx", "bunx", "npm", "pnpm", "yarn", "bundle", "docker", "podman", "nerdctl",
-          "kubectl", "oc", "lxc", "incus", "flatpak", "snap", "machinectl", "toolbox", "distrobox", "wsl" };
+          "kubectl", "oc", "lxc", "incus", "flatpak", "snap", "machinectl", "toolbox", "distrobox", "wsl",
+          // Brief T64 Task 2a: so the shared walk (ProgramPositions) reaches runuser's command. GetBlockedInvocation
+          // checks ShellAsUser first, so runuser keeps its -c refusal.
+          "runuser" };
 
     // Run their -c/--command argument through the target user's shell.
     private static readonly HashSet<string> ShellAsUser = new(StringComparer.OrdinalIgnoreCase)
@@ -681,9 +684,7 @@ public static class Validation
         if (BlockedCommands.Contains(program))
             return new(program, $"'{program}' would expose secret values. The 'run' command is for programs that *use* secrets, not display them.");
 
-        if (Wrappers.Contains(program))
-            return CheckWrapper(program, args);
-
+        // Brief T64 Task 2a: before the Wrappers branch, which also holds runuser, so its -c refusal runs first.
         if (ShellAsUser.Contains(program))
         {
             // runuser [-u user] cmd runs cmd: after the -c check below, treat it like a wrapper.
@@ -699,6 +700,9 @@ public static class Validation
             return program.Equals("runuser", StringComparison.OrdinalIgnoreCase) ? CheckWrapper(program, args)
                 : new(program, $"'{program}' without -c starts a shell reading stdin, which can transform and print secrets past redaction. {WayOut}");
         }
+
+        if (Wrappers.Contains(program))
+            return CheckWrapper(program, args);
 
         if (CodeRunners.Contains(program))
             return new(program, $"'{program}' runs code or commands given on its command line, which can transform and print secrets past redaction. {WayOut}");
@@ -817,7 +821,7 @@ public static class Validation
         ["nsenter"] = ["-t", "--target"],
         ["chroot"] = ["--userspec", "--groups"],
         ["chrt"] = ["-s", "-T", "-D", "--sched-runtime", "--sched-period", "--sched-deadline"],
-        ["runuser"] = ["-u", "-g", "-G", "--user", "--group", "--supp-group", "-s", "--shell"],
+        ["runuser"] = ["-u", "-g", "-G", "--user", "--group", "--supp-group", "-s", "--shell", "-w", "--whitelist-environment"],
         ["npx"] = ["-p", "--package"],
         ["systemd-run"] = ["-p", "--property", "-u", "--unit", "-E", "--setenv", "-M", "--machine"],
         // Review fix F19: wsl's -e/--exec take no value of their own: the word after them is the command. Brief T51:
