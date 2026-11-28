@@ -23,7 +23,7 @@ Read AGENTS.md and CLAUDE.md first (AGENTS.md "The record store", "Privilege Bou
 `:98-103`, `LoadConfig` `:181`, `SaveConfig` `:189-205`, `WriteMachineConfig` `:234-244`, `ReadKeyringWithCopies`
 `:254-286`, `WriteKeyring` `:294-306`, `LoadSecrets` `:490`, `OpenSecret` `:570-655`, `BeginWrite` `:672`,
 `OpenFromMetadata` `:731`, `CommitWrites` `:828`, `LoadRecords` `:1127-1167`, `FoldConflictCopies` `:1217`, `Reindex`
-`:1401`, `LoadMetadata` `:1667`, `MergeRecords` `:1895`, `WriteAll` `:1981-2047`); `TswapCore/VaultWriter.cs` (all);
+`:1401`, `LoadMetadata` `:1675`, `MergeRecords` `:1903`, `WriteAll` `:1989-2055`, these three at f2e3a5a); `TswapCore/VaultWriter.cs` (all);
 `TswapCore/Vault/VaultUnlocker.cs` (`FindOwnMachineSlot` `:1139`, `HardwareSlotOpens` `:1194`, `UnlockKeyring`
 `:1302-1348`); `TswapCore/Keyring/KeyringUnion.cs`; `TswapCore/FileOwnership.cs` (`WriteAtomic` `:159`);
 `TswapCli/Commands/VaultCommand.cs`; `TswapCore/Broker/BrokerSecrets.cs:66-128`; `TswapTests/FleetMachine.cs`,
@@ -69,12 +69,12 @@ config folder, `MigrateToRecordsTests.cs:107-116` and `SecureEnclaveTouchChoiceT
 ## What is wrong (evidence)
 
 - A record file replaced by an older copy is read as the current state, silently: `LoadRecords`
-  (`RecordVaultStore.cs:1127-1167`) and `LoadMetadata` (`:1667`) fold the main file and its copies and report only
+  (`RecordVaultStore.cs:1127-1167`) and `LoadMetadata` (`:1675` at f2e3a5a) fold the main file and its copies and report only
   unreadable records, copies and far-future stamps. A deleted secret is listed again, a burn disappears from `burned`.
 - A record file deleted outright is a secret that never existed: `OpenSecret` returns null when there is no main file
   and no copy (`:608-609`).
 - The only per-machine memory is `LastHlc`, one high-water mark (`Models.cs` `Config.LastHlc`, saved at
-  `RecordVaultStore.cs:2043-2045`): it can't say which record went back.
+  `WriteAll`'s config save, `RecordVaultStore.cs:2051-2053` at f2e3a5a): it can't say which record went back.
 - A keyring that lost slots is read as it is (`ReadKeyringWithCopies`, `:254-286`). When this machine's own slot is the
   one lost, the unlock says `Config is corrupted: keyring has no machine slot matching this machine. Restore config.json
   from backup or re-run 'tswap init'.` (`VaultUnlocker.cs:1342-1343`, also `:1197-1198`): wrong advice, since
@@ -87,7 +87,7 @@ config folder, `MigrateToRecordsTests.cs:107-116` and `SecureEnclaveTouchChoiceT
   list `T`** (`ValueLineage.Retired`, version stamps a person dropped) and its **entries** (`ValueLineage.Discarded`,
   each a `DiscardedValue`: its `Version`, and burned iff `DiscardedValue.Burn != null`, T60's decoded form of the codec's
   `flags` bit `0x01`), read with `ValueLineageCodec.Read(extensions)`; names as T60's brief gives them.
-  `forgotten`, `S`, `asOf` and `exactFrom` are not used here. Where this brief says "the record's entries" and "the
+  `forgotten`, `S` (T60's `Superseded`), `asOf` and `exactFrom` are not used here. Where this brief says "the record's entries" and "the
   record's retired list" it means T60's decoded members for those (a record without the extension has neither). A
   malformed lineage makes the record unreadable (T60), so T61 never sees one.
 - T60's write staging in `VaultWriter` for `conflicts --ack`, `conflicts --clear` and `restore --discarded`
@@ -128,6 +128,15 @@ config folder, `MigrateToRecordsTests.cs:107-116` and `SecureEnclaveTouchChoiceT
   these members, stop and report**; don't write one here.
 
 If T60 as merged names any of these differently, use T60's names; if one is missing, stop and report.
+
+## Amendments (brief round 7: MiMo r6, at 2b8dc07)
+
+- **I-1:** the `Format` pre-pass classifies each value on its own (`ValueKind == Number && TryGetInt64`, else "not a
+  whole number"; nothing throws), in document order, and decides after the loop; rows. **I-2:** copies decoded at
+  save join the record's raise (`PersistedLineage` and the merged state); a row and a break-it-once.
+- M-1: an explicit null-member check; the repeated-`Records` row asserts the generic reason ("listed twice" dropped).
+  M-2: the fill wording. M-3: both `restore-slots` step 1 cases. M-4: three departures added. M-5: citations fixed
+  by member at f2e3a5a.
 
 ## Amendments (brief round 6: GLM r3, at 25eca57)
 
@@ -343,6 +352,12 @@ below; this list says where.
 - `restore-slots` step 1 offers only the `VaultId` file (MiMo M7) and gains the keyring-differs exit (I-7).
 - At save, a new or changed copy that can't be decoded or merged is left out of the check (Task 2), not refused.
 - R2 on the all-records paths for a floored record with only unusable copies (R-5).
+- The own-slot "missing" texts come from `OwnBackend`'s pre-check, `HardwareSlotOpens` and `:1342`; Appendix A's third
+  site, the end of `Unlock`, is dropped, as no lost own slot reaches it without passing `OwnBackend` (Task 3).
+- The cap refusal's parenthetical ` (on a rolled-back record, accept it first)` is a text Appendix A lacks (it says
+  only that the order sentence is appended).
+- The `restore-slots` "needs no unlock" row is built with `router.Tpm = null` and no key plugged in (exit 0 proves no
+  unlock ran), not the design's "the unlocker seam counts none": equivalent evidence, another construction.
 
 ## Task 1: the floor model and the two files
 
@@ -468,7 +483,7 @@ The JSON (`System.Text.Json` through a source-generated context declared in this
 `{"Format":1,"Vault":"<16 hex>","Records":{"<file>":{"Write":"…","Version":"…","Burn":"…","Deleted":true,"Discarded":[{"Stamp":"…","Burned":true}],"Retired":["…"]}}}`
 (design §2.3); `Deleted`, `Burn`, `Discarded`, `Burned` and `Retired` omitted when false, null or empty. Written
 compact, the `Records` keys in ordinal order (members in the order shown), `Discarded` and `Retired` ascending by stamp, so equal floors give equal bytes. A stamp is `<ms>.<logical>@<32 hex>`: write it with
-`Hlc.ToString()` (`Hlc.cs:56-57`), `@`, `Convert.ToHexStringLower(origin)` (or T60's full-form formatter if it added
+`Hlc.ToString()` (`TswapCore/Keyring/Hlc.cs:57-58`), `@`, `Convert.ToHexStringLower(origin)` (or T60's full-form formatter if it added
 one: the same text).
 
 **Three ways a file can fail, kept apart** (round 3, I-6 and M-6):
@@ -483,17 +498,22 @@ one: the same text).
 
 **`Format` is read first, in a tolerant pre-pass** (round 4, MiMo r3 I-1), before any strict rule:
 `JsonDocument.Parse` of the bytes (which keeps repeated properties), then every root property named exactly `Format`
-(`EnumerateObject`, not `GetProperty`, so a repeated `Format` is seen whole), each read with
-`JsonElement.TryGetInt64`. In this order, the first that applies (GLM r3 M-7; the safer state wins, since only a
-Damaged file is overwritten):
+(`EnumerateObject`, not `GetProperty`, so a repeated `Format` is seen whole), walked in document order. **Each value
+is classified on its own** (MiMo r6 I-1): only when `ValueKind == JsonValueKind.Number && TryGetInt64(out n)` is it
+an integer `n` (`TryGetInt64` **throws** `InvalidOperationException` on a value that isn't a number, so it is never
+called on one; it returns false for `1.0`, `1e3` and a number beyond `long`). Every other value (`"1"`, `true`,
+`null`, an object, `1.0`, `1e3`, beyond `long`) is "not a whole number". `JsonDocument.Parse` failing (a
+`JsonException`) is "not JSON". Nothing in the pre-pass throws. **After the loop**, the first of these that applies
+decides (GLM r3 M-7; the safer state wins, since only a Damaged file is overwritten, so the order of repeated
+members never matters):
 - not JSON: **Damaged**, reason `it is not valid JSON`; the root not an object: **Damaged**, `it is not a JSON object`;
   no `Format`: **Damaged**, `it has no Format`;
-- any `Format` an integer above 1 (read as `long`, so `5000000000` is too): **Newer**, whatever else the file holds
-  (unknown members, other stamp spellings, another `Format` beside it);
-- any `Format` not an integer (`1.0`, `"1"`, `true`, a number beyond `long`): **Damaged**, `its Format is not a whole
-  number`;
-- any `Format` below 1: **Damaged**, reason `its Format is <n>, not 1` (`<n>` the first such value in the file);
-- otherwise (every `Format` is 1): the strict parse below, which rejects a repeated `Format`.
+- any value an integer above 1 (so `5000000000` too): **Newer**, whatever else the file holds (unknown members,
+  other stamp spellings, another `Format` beside it, before or after);
+- any value not a whole number: **Damaged**, `its Format is not a whole number`;
+- any integer below 1: **Damaged**, reason `its Format is <n>, not 1` (`<n>` the first such value in document order);
+- otherwise (every value is the integer 1, concluded only here): the strict parse below, which rejects a repeated
+  `Format`.
 
 Only files whose names match `^seen-records-[0-9a-f]{16}\.json$` and `^seen-keyring-[0-9a-f]{16}$` are ever read
 (`WriteAtomic`'s temp files, `<name>.<12 hex>.tmp`, `FileOwnership.cs:163`, never match).
@@ -507,11 +527,16 @@ format 1 at <path>`, `<path>` being `JsonException.Path` (`$` when null); the fi
 stamps, so the path reveals nothing. `Format`, `Vault` and `Records` are required (absent: damaged, reason `it has no
 <member>`; an empty `Records` object is fine). `Vault` must be 16 characters of `[0-9a-f]` (otherwise reason `its
 Vault is not a vault id`) and equal the file name's 16 hex (a mismatch: `it names another vault (<16 hex>)`).
-`"Burn": null` (or any member written as `null`) is damaged, reason `record <file>'s <field> is null` (the writer omits
-such members). **Duplicate keys inside `Records`**: `AllowDuplicateProperties = false` is already used on a
-source-generated context here (`TswapCore/Broker/BrokerConfig.cs:222-226`); a row checks that it also rejects a
-repeated `Records` key. If it doesn't, check the keys while reading (`Utf8JsonReader` over the `Records` object);
-reason `record <file> is listed twice`. A `Records` key must be exactly 64 characters of
+**Explicit `null` members** (MiMo r6 M-1): the options above deserialise `"Burn": null` into a nullable member
+silently, which would read as "no burn" (fail-open: R1's "the burn is gone" lost). So the reader checks the
+`JsonDocument` of the pre-pass before the strict parse: any member whose `ValueKind` is `Null`, at the root, in a
+`Records` entry, in a `Discarded` item, or as a `Records`, `Discarded` or `Retired` element, makes the file damaged,
+reason `record <file>'s <field> is null` (`<field>` the member's name; at the root, `it has a null <member>`); the
+writer never writes `null`. **Duplicate keys inside `Records`**: `AllowDuplicateProperties = false` (already used on
+a source-generated context here, `TswapCore/Broker/BrokerConfig.cs:222-229`) is applied by `System.Text.Json` to the
+whole document, nested objects included, so a repeated `Records` key is a `JsonException` and gets the generic
+reason `it doesn't follow format 1 at <path>`; there is no separate "listed twice" reason and no reader fallback. If
+the row shows the option doesn't reject it, stop and report. A `Records` key must be exactly 64 characters of
 `[0-9a-f]`. A stamp must match `^[0-9]{1,19}\.[0-9]{1,10}@[0-9a-f]{32}$`, its milliseconds must fit a `long` (19
 digits can exceed `long.MaxValue`) and its logical part a `uint`, and it must be the canonical form (formatting it back
 gives the same text, so `007.0@…` is damaged). Two `Discarded` entries of one stamp, a stamp twice in `Retired`, a stamp in both lists, or
@@ -520,7 +545,7 @@ gives the same text, so `007.0@…` is damaged). Two `Discarded` entries of one 
 `KeyringCodec.Decode` (`TswapCore/Keyring/Keyring.cs:217`) throws or its vault id doesn't match its file name's prefix
 (both checked in `SeenState.ReadKeyring`). **A `seen-keyring` whose format version or `K` differs from the folder
 keyring's is evidence, not damage** (round 3, I-7): the file name pins the vault id, and no tswap changes a keyring's
-format version or `K` (`KeyringFormat.cs:111-116`: a vault keeps its keyring version for life), so one of the two
+format version or `K` (`KeyringFormat.cs:111-116`: a vault keeps its keyring version for life; `K` and the vault id: `Keyring.cs:109-111` and `KeyringUnion.RequireSameVault`, `KeyringUnion.cs:41-44`), so one of the two
 was damaged or replaced; which one can't be told from here (GLM r3 M-9: the seen copy's header may be the damaged
 one). `ReadKeyringWithCopies` then leaves `seen-keyring` untouched (no slot added, never overwritten), checks no
 slot against it, and warns, once per command: `Warning: the vault folder's keyring (<vault folder>/keyring) and the
@@ -536,7 +561,7 @@ Texts (stderr, each at most once per command and file):
   (for `seen-keyring`: `…; this machine starts tracking the keyring's slots again from now.`), reasons: `it is not
   valid JSON`, `it is not a JSON object`, `it has no Format`, `its Format is not a whole number`, `its Format is <n>,
   not 1`, `it doesn't follow format 1 at <path>`, `it has no <member>`, `record <file> lists a stamp twice`, `its Vault is not a vault id`, `record
-  <file>'s <field> is null`, `record <file> is listed twice`, `record <file>'s <field> is not a stamp`, `a key is not a record file
+  <file>'s <field> is null`, `it has a null <member>`, `record <file>'s <field> is not a stamp`, `a key is not a record file
   name`, `it isn't a keyring this tswap reads (<codec message>)`, `it holds another vault's keyring`, `it names another
   vault (<16 hex>)`. Then a fresh
   baseline: the damaged file is overwritten at the next save; `SaveRecords` gives `apply` empty floors for a damaged
@@ -576,7 +601,9 @@ Tests (`SeenStateTests`, files in a temp config folder; `MachineConfigVaultIdTes
 | `Format` 2 with an unknown property and a stamp in another spelling | Newer (the pre-pass decides before the strict parse); bytes unchanged after a write command |
 | `Format` 5000000000 | Newer |
 | `Format` 0; `Format` `1.0`; `Format` `"1"`; no `Format` | Damaged, reasons `its Format is 0, not 1`, `its Format is not a whole number` (twice), `it has no Format` |
-| a `Records` key repeated | Damaged, the duplicate reason |
+| a `Records` key repeated | Damaged, reason starting `it doesn't follow format 1 at $.Records` (the generic reason; MiMo r6 M-1) |
+| `{"Format":"x","Format":2}`; `{"Format":null}`; `{"Format":"1"}`; `{"Format":1e3}` | Newer (the other order is in the row below); Damaged `its Format is not a whole number` (each; no exception escapes) |
+| `"Discarded":[{"Stamp":"…","Burned":null}]` at `Format` 1; `"Vault": null` | Damaged `record <file>'s Burned is null`; Damaged `it has a null Vault` |
 | root `[]`; `{"Format":1,"Format":2,…}`; `{"Format":2,"Format":"x"}`; `{"Format":1,"Format":1,…}`; `{"Format":1,"Format":0,…}` | Damaged `it is not a JSON object`; Newer; Newer; Damaged `it doesn't follow format 1 at $…`; Damaged `its Format is 0, not 1` |
 | at `Format` 1, an unknown member `X` | Damaged, `it doesn't follow format 1 at <path>` naming `X`'s path |
 | an operation that raises nothing, with no `seen-records` file | no file written |
@@ -618,7 +645,7 @@ keyring once keeps the id, so a keyring deleted under it doesn't switch detectio
 An **operation** is one call to a public or internal store member that authenticates records: `LoadSecrets`,
 `LoadRecordStates` (for this folder), `LoadMetadata`, one `OpenSecret`/`ReadSecretValue`, one write session
 (`BeginWrite` to `CommitWrites` or `EndWrite`), `MergeRecords`, `Reindex`, `AcceptRollback`. `SaveSecrets`
-(`:1472`, a test oracle; `StaleWriteGuardTests.cs:67` and others call it) is not an operation: its `WriteAll` has no
+(`:1472`, a test oracle; `StaleWriteGuardTests.cs:70` and others call it) is not an operation: its `WriteAll` has no
 `SeenSession` and raises nothing (`WriteAll` treats a null session as "raise nothing"). Each creates one private
 `SeenSession`: it reads `seen-records` once at its start (no copy is kept
 between operations, so the broker's long-lived store, `BrokerSecrets.cs:66-128`, reads it per operation), collects what
@@ -659,10 +686,18 @@ check first on each: every floored record is `Missing`. The all-records paths pr
 for one), and the write session's `RollbackOf` gives `Missing` for a floored name, so `create x` refuses until the
 repair.
 
-`WriteAll` (`:1981-2047`) adds what it wrote to the operation's `SeenSession` (from its returned metadata: the written
-state is both the merged state and its persisted lineage) and, when the config has no `VaultId`, writes it with
-`LastHlc` (`:2043-2045`). Every `VaultId` fill (here, `SaveConfig`, and the seen-records save of R-8) re-reads
-`config.json` just before writing and writes only if the file still lacks `VaultId`, changing nothing else, so a
+`WriteAll` (`:1989-2055` at f2e3a5a) adds what it wrote to the operation's `SeenSession` (from its returned metadata: the written
+state is the merged state, and its lineage is persisted). **The copies decoded at save join the raise** (MiMo r6
+I-2; design §2.3: `Discarded` takes every entry seen in an authenticated file): a new or changed conflicted copy that
+step 2 decoded and merged, which the write didn't fold and so leaves on disk, is one of the record's authenticated
+input files, so its entries and retirements join that record's `PersistedLineage` (union by stamp, `Burned` OR-ed,
+`T` a union), exactly as a load's inputs do, and its state joins the merged state the raise takes `Write` and the
+pair from; a copy left out of the check (undecodable or unmergeable) raises nothing. When the config lacks a valid
+`VaultId` for that keyring, `WriteAll` writes it with
+`LastHlc` (`:2051-2053` at f2e3a5a). Every `VaultId` fill (here, `SaveConfig`, and the seen-records save of R-8) re-reads
+`config.json` just before writing and writes only if the file still lacks a valid `VaultId` for the keyring whose
+records were just authenticated (absent, invalid, or another vault's: R-8's correction; MiMo r6 M-2), changing
+nothing else, so a
 concurrent `slot approve` or `vault move` isn't reverted (round 3, Claude M-11).
 
 **R1 is checked again at save** (design §2.3, round 8 Claude 8), in `WriteAll` for writes from `CommitWrites` and
@@ -696,7 +731,7 @@ concurrent `slot approve` or `vault move` isn't reverted (round 3, Claude M-11).
 A record that only moved forward (a newer conflicted copy arrived, another process raised the floor from it) passes
 step 3, and the write goes on: the new copy is not one the write folded, so it stays and folds later, as today.
 `BurnWrite` is exempt as at staging (`Refused` null); `MergeRecords` is never checked (it is the repair). A `vault merge` refused by the stale-write guard
-(`CheckUnchanged`, `:2183-2194`) writes nothing, so only this folder's load raised anything. The raise of a written
+(`CheckUnchanged`, `:2198-2210` at f2e3a5a, called from `MergeRecords` at `:1942`) writes nothing, so only this folder's load raised anything. The raise of a written
 record is checked like any other: a merge that wrote a state still older than the floor leaves it flagged; one that
 only moved the write stamp past it clears the flag (§2.5).
 
@@ -726,7 +761,7 @@ merge <a newer copy>', or keep this version with 'sudo tswap vault accept-rollba
 ```
 
 (One line; wrapped here.) `<state>`, the first that applies (machine = first 8 hex of the origin, as `Stamp.ToString`
-gives it, `Hlc.cs:136`; times `yyyy-MM-ddTHH:mm:ssZ` of `Hlc.ToDisplayDate(physical)`, `Hlc.cs:81-89`; a stamp that
+gives it, `TswapCore/Keyring/Hlc.cs:136`; times `yyyy-MM-ddTHH:mm:ssZ` of `Hlc.ToDisplayDate(physical)`, `Hlc.cs:81-89`; a stamp that
 `ToDisplayDate` clamps prints `far future`, as `names` does through `Hlc.Display` (`:94-95`), never a made-up date; a
 time at or below the epoch prints as the epoch, as there. This holds for every time in every text of this brief; MiMo
 r4 M-5):
@@ -765,17 +800,17 @@ R4, one line per finding (design §2.4/§2.5 texts, plus R-13's sentence):
 ### The refusal (`VaultWriter.cs`)
 
 `VaultWriter` asks the store after each open: `internal Rollback RollbackOf(WriteSession session, string name)` (`Older`
-or `Missing` from that session's checks, else `None`). `Stageable` (`:222-234`) gains a parameter:
+or `Missing` from that session's checks, else `None`). `Stageable` (`:242-254` at f2e3a5a) gains a parameter:
 `Stageable(string name, RefusedWrite? refused)`. With `refused` non-null and the name flagged, it records
 `(Rollback, RefusedWrite)` in a new `SortedDictionary<string, (Rollback Rollback, RefusedWrite Write)>
 _rolledBackStaged` and stages nothing; it records **before** looking at the entry, so a name with no file (R2) is
 recorded too. `internal enum RefusedWrite { Value, Fields, Delete, Lineage, Restore }` tells `Commit` which lines to
-add; the entry's metadata, when there is one, says whether the cap sentence applies. `Burn` (`:129-133`; at 66c3620
+add; the entry's metadata, when there is one, says whether the cap sentence applies. `Burn` (`:149-153` at f2e3a5a; at 66c3620
 it calls `Stageable` at `VaultWriter.cs:151`) passes `refused: null`: it stages as today and records nothing, so a
 flagged `burn` writes (the design's one carve-out). **Every other staging path passes its kind**: `SetValue`,
 `SetFields`, `Delete`, `Restore` (which today stages through `Stage` directly, `VaultWriter.cs:192` at 66c3620: route
 it through `Stageable`), and T60's `Acknowledge`, `ClearDiscarded` and `RestoreDiscarded` (if T60 stages one through
-`Stage` directly, route it through `Stageable` rather than leaving it unchecked). `Commit` (`:181-195`) throws, after
+`Stage` directly, route it through `Stageable` rather than leaving it unchecked). `Commit` (`:201-215` at f2e3a5a) throws, after
 the unreadable refusal and before `CommitWrites`, for the ordinally first name, exit 1, nothing written:
 
 - `Older`: `Refused: the record of '<name>' is older than the copy this machine saw (see the warning above), so
@@ -895,6 +930,7 @@ Tests (`RollbackDetectionTests`: `FleetMachine` A, B, C sharing or copying one v
 | the same through `names`, `x` never seen (no floor) | only the copy warning, as today |
 | on a vault where every record is floored: `add a` of a new value (format 3), and `rotate b` of a format 2 record, with the `RecordDecrypted` and `ValueDecrypted` seams watched as `WriteCommandDecryptionTests` does | the same lists as without T61 (`add a`: `[a's file]` once; format 2 `rotate b`: `b`'s file once in each); the existing `WriteCommandDecryptionTests` pass unchanged (GLM r3 I-1) |
 | P1 opens `x` for `rotate`; `BeforeSaveCheck` plants a new conflicted copy of `x`; P1 commits | `RecordDecrypted` lists `x`'s main file once (at open) and the new copy once (at save), nothing else |
+| P1 opens `x` for `rotate`; `BeforeSaveCheck` plants a new conflicted copy of `x` holding entry `c` (a value a merge set aside, persisted in that copy); P1 commits (the write doesn't fold it); the copy is then deleted before any other load; `names` | R4 "is gone" for `c` (the save floored it; MiMo r6 I-2), with R1 as well when the copy's write stamp was above P1's |
 | P1 opens `x` for `rotate`; `BeforeSaveCheck` plants a copy of `x` that can't be decoded, or one whose merge throws | written, no refusal; the copy kept; the next `names` reports it as today (GLM r3 M-5) |
 | a `BareRecordVault` (no `keyring` file, `config.json` with `LastHlc`): `LoadSecrets`, a `VaultWriter` create and commit, `SaveSecrets` | no exception; no `seen-*` file in the config folder; no notice or other text on the warnings writer; `config.json` gets no `VaultId` (GLM r3 I-2) |
 | the "`Older` refusal at save (step 3)" row above, for `delete x` instead of a write | the `Older` refusal with the delete line (the save-time text matches staging's) |
@@ -911,7 +947,7 @@ Tests (`RollbackDetectionTests`: `FleetMachine` A, B, C sharing or copying one v
 | the same for a delete, then a stale machine writes a newer value | no R1 (the limit) |
 | `run` of another secret | no warning about `x` |
 | a `run` with `{{x}}` on an R1 record after `names` printed the summary | the full R1 text once |
-| every new text on a vault of inert markers | no marker, seed or URI on either stream, in any form `Redaction.Variants` lists |
+| every new text on a vault of inert markers | no marker, seed or URI on either stream, in any form `Redaction.Variants` (`TswapCore/Redaction.cs:22`, production code) lists |
 
 How the 0.3.2-shaped rows are built (`Older032`, T60 at 0a4d63a; `R(m, x)` = `RecordVaultTestSupport.ReadRecord(m,
 vaultKey, "x")`; "fold and write" = `Older032.MergeAll([...]) with { Write = <a new stamp of machine O, above every
@@ -934,7 +970,7 @@ entries and `T` together" case is documented in Task 5, not tested); if one is w
 list.
 
 Break-it-once: compare the main file instead of the merged state (the conflict row warns); treat a missing file with
-no copies as unchanged (the R2 rows are silent); let R4 accept a stamp through `S` instead of the retired list (the
+no copies as unchanged (the R2 rows are silent); let R4 accept a stamp through `S` (`Superseded`) instead of the retired list (the
 clear-then-0.3.2-merge row warns, the dropped-entry row is silent); let a write go on over R1 (the `rotate`-refused row
 fails); keep the floors read at the start and write them back at save (the P1/P2 rows lose the accept); raise floors
 in a detached store (the `vault merge <other>` row finds a file); raise `Discarded` from the merged state instead of
@@ -945,7 +981,7 @@ P1 row is refused); skip the R2 check when `records/` is missing (the `records/`
 a newer-format lineage (that row warns); let `DeleteCommand` return "not found" before asking (the R2 `delete` row
 prints "not found"); decode every file at save instead of only the changed ones (the `add a` decryption row lists
 `a`'s file twice); call `ReadKeyring()` without the `FileExists` guard (the `BareRecordVault` row throws "has no
-keyring file").
+keyring file"); raise a written record from its written state only (the planted-copy R4 row is silent).
 
 ## Task 3: the keyring check, the unlock texts and `restore-slots`
 
@@ -1048,8 +1084,9 @@ through new store methods `public Keyring.Keyring? ReadFolderKeyring()` (null: n
 `public Keyring.Keyring? ReadSeenKeyring(byte[] vaultId)`, `public IReadOnlyList<string> SeenKeyringFiles()` and
 `public void RestoreSlots(IReadOnlyList<Slot> slots)` (through `WriteKeyring`'s union, as the vault folder's owner).
 
-1. No `keyring` file: today's text (`RecordVaultStore.cs:257-260`) plus, per file in `SeenKeyringFiles()` (only the
-   file of `config.json`'s `VaultId` when it has a valid one, so another vault's copy is never offered; MiMo M7), `This machine kept a copy of
+1. No `keyring` file: today's text (`RecordVaultStore.cs:257-260`) plus one line per offered file (MiMo r6 M-3): when `config.json` has a
+   valid `VaultId`, only that vault's file, if it exists (another vault's copy is never offered; MiMo M7); when it has
+   none or an invalid one, every file in `SeenKeyringFiles()`, in ordinal order. Each line: `This machine kept a copy of
    every slot it saw: <path>. It is a complete keyring; to put it back, copy it to <vault folder>/keyring.` Exit 1,
    nothing written. A `keyring` the codec refuses takes the same shape, with `The keyring file <vault folder>/keyring
    can't be read: <codec message>.` in place of today's text.
@@ -1083,7 +1120,7 @@ does):
 |---|---|
 | `keyring` replaced by a copy without the desktop's slot; `names` on the router | the lost-slot line naming the desktop's `<id8> (YubiKey)` |
 | `keyring` replaced by a crafted copy that holds only the recovery slot (neither the router's nor the desktop's); `names` on the router | the "though this machine saw it" text; the lost-slot line naming the desktop's slot; no "Config is corrupted" |
-| then `sudo vault restore-slots --yes` on the router with `router.Tpm = null` and `_keys.PluggedIn = []` (so any unlock would throw) | exit 0; both slots back; with `Tpm` set again the router unlocks and the desktop (key A) does too |
+| then `sudo vault restore-slots --yes` on the router with `router.Tpm = null` and `_keys.PluggedIn = []` (`SimulatedYubiKeyService.PluggedIn`, `:43`) (so any unlock would throw) | exit 0; both slots back; with `Tpm` set again the router unlocks and the desktop (key A) does too |
 | a **TPM-only** machine (`init --tpm`: its TPM slot and the recovery slot, no YubiKey or FIDO2 slot) whose own slot is lost | the "though this machine saw it" text; no "Config is corrupted" and no `ForeignHardwareSlotHint` sentence; the simulated TPM is not asked (the pre-check runs first) |
 | the same, no `seen-keyring` | the "may have been replaced" text, no hint |
 | a TPM-only machine whose own slot is present with other bytes than `seen-keyring`'s | the "differs" unlock text, no hint |
