@@ -136,5 +136,5 @@ public sealed class IcuFactAttribute : FactAttribute
     public IcuFactAttribute() => Skip = HasIcu ? null : SkipReason;
 
     /// <summary>Whether this process normalises Unicode (false in invariant mode).</summary>
-    public static bool HasIcu => "José".Normalize(System.Text.NormalizationForm.FormD).Length == 5;
+    public static bool HasIcu => "Jos\u00e9".Normalize(System.Text.NormalizationForm.FormD).Length == 5;
 }

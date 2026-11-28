@@ -196,12 +196,14 @@ public static class MsysTarget
     // not hold. Accepted over-refusals: nonoglob, --glob, no-glob, "no"glob and glob:"x" leave globbing on but count as
     // changed.
     // The scan is linear (brief T62): s is the word without its quotes, and boundary[i] marks 0, s.Length and every
-    // position where a '"' stood. P[x] (prefix[x]) is the length of the greedy run of "no" and '-' units at x. A run
-    // s[a..b] (a and b boundaries) changes the option exactly when, with g = a + P[a] and s[g..g+4] "glob" and e = g +
-    // 4, either P[a] > 0 and (boundary[e] or s[e] is ':' or '='), or P[a] == 0, s[e] is ':' or '=' and boundary[e + 1]:
-    // greedy stripping is deterministic, "glob" starts with neither 'n' nor '-', and a prefixed run with a separator
-    // can always be extended to the word's end, so only a run's start matters. step (tests only) is called once per
-    // position visited.
+    // position where a '"' stood. P[x] (prefix[x]) is the length of the greedy run of "no" and '-' units at x. Some run
+    // starting at a boundary a changes the option exactly when, with g = a + P[a], s[g..g+4] "glob" (case ignored) and
+    // e = g + 4, either P[a] > 0 and (boundary[e] or s[e] is ':' or '='), or P[a] == 0, s[e] is ':' or '=' and
+    // boundary[e + 1]; the word changes it when that holds for some a. The condition is about a start, not one run: in
+    // -"glob:x (s = -glob:x, boundaries 0, 1 and 7) it holds at a = 0 through the run s[0..7], while the run s[0..1]
+    // ("-") changes nothing. Greedy stripping is deterministic, "glob" starts with neither 'n' nor '-', and a prefixed
+    // run with a separator can always be extended to the word's end, so only the start matters. step (tests only) is
+    // called once per position visited.
     private static bool ChangesGlobOption(string? msys) => ChangesGlobOption(msys, null);
 
     internal static bool ChangesGlobOption(string? msys, Action? step) =>

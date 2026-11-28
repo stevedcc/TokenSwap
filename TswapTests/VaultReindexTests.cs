@@ -185,7 +185,7 @@ public sealed class VaultReindexTests : IDisposable
     /// recomputation here has is not current: reindex recomputes it (a full load: the value is known). Write commands
     /// that decrypt no value (T16-S2b) keep the set as it is.
     /// </summary>
-    [Fact]
+    [IcuFact]
     public void Reindex_AVersionTwoSetWithoutItsFormEntries_IsRecomputed()
     {
         WriteMarker(_m);
