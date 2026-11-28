@@ -283,33 +283,42 @@ public static class Validation
             }
             if (!Wrappers.Contains(program) || SubcommandTools.Contains(program))
                 yield break;
-            WrapperValued.TryGetValue(program, out var valued);
-            var skipLeading = WrapperLeadingPositional.Contains(program);
-            var next = -1;
-            for (var j = i + 1; j < argv.Count && next < 0; j++)
-            {
-                var arg = argv[j];
-                if (arg == "--")
-                    continue;
-                if (arg.StartsWith('-'))
-                {
-                    if (valued is not null && valued.Contains(arg, StringComparer.Ordinal))
-                        j++;
-                    continue;
-                }
-                if (arg.Contains('=') && !arg.StartsWith('/') && program.Equals("sudo", StringComparison.OrdinalIgnoreCase))
-                    continue; // sudo VAR=value
-                if (skipLeading)
-                {
-                    skipLeading = false;
-                    continue;
-                }
-                next = j;
-            }
-            if (next < 0)
+            if (WrappedCommand(argv, i, argv.Count, program) is not { } next)
                 yield break;
             i = next;
         }
+    }
+
+    /// <summary>
+    /// The position of the command the simple wrapper <paramref name="program"/> at <paramref name="i"/> runs, looking no
+    /// further than <paramref name="end"/>: its options and the values in <see cref="WrapperValued"/> skipped, and a
+    /// leading positional (<see cref="WrapperLeadingPositional"/>); null when it has none.
+    /// </summary>
+    private static int? WrappedCommand(IReadOnlyList<string> argv, int i, int end, string program)
+    {
+        WrapperValued.TryGetValue(program, out var valued);
+        var skipLeading = WrapperLeadingPositional.Contains(program);
+        for (var j = i + 1; j < end; j++)
+        {
+            var arg = argv[j];
+            if (arg == "--")
+                continue;
+            if (arg.StartsWith('-'))
+            {
+                if (valued is not null && valued.Contains(arg, StringComparer.Ordinal))
+                    j++;
+                continue;
+            }
+            if (arg.Contains('=') && !arg.StartsWith('/') && program.Equals("sudo", StringComparison.OrdinalIgnoreCase))
+                continue; // sudo VAR=value
+            if (skipLeading)
+            {
+                skipLeading = false;
+                continue;
+            }
+            return j;
+        }
+        return null;
     }
 
     /// <summary>
@@ -803,6 +812,192 @@ public static class Validation
         return null;
     }
 
+    /// <summary>
+    /// Brief T64 (#411): the refusal of a bash that may be WSL's launcher, or null. WSL's bash.exe (System32's, or the WSL
+    /// app's bash.exe alias) runs its whole command line as /bin/bash -c "/bin/bash &lt;command line&gt;" (microsoft/WSL
+    /// 65719878ad3c, WslClient.cpp BashMain), so a substituted value is parsed again. It looks at program positions only,
+    /// the ones CheckWrapper checks (run's program, a wrapper's or runner's command), and, in wsl's exec mode, at wsl's
+    /// command, which runs inside the distribution, where a bash.exe is the launcher again through interop.
+    /// </summary>
+    /// <remarks>
+    /// On Windows a word naming bash is allowed only when it resolves (<see cref="MsysTarget.Resolve"/>, the raw word) to
+    /// a file <see cref="MsysTarget.IsMsys2"/> accepts, and behind a wrapper or runner only as an absolute path. Off
+    /// Windows, and for the words of a container tool or of wsl's exec command, any word naming bash.exe is refused.
+    /// A word with quote characters, white space at either end, a trailing <c>.</c>, <c>\</c> or <c>/</c>, or an NTFS
+    /// stream after a bash or wsl name is refused outright.
+    /// </remarks>
+    public static BlockedInvocation? BashLauncherRefusal(IReadOnlyList<string> argv, bool windows, MsysTarget.Probe? probe) =>
+        argv.Count == 0 ? null : BashLauncherWalk(argv, 0, argv.Count, windows, probe).Verdict;
+
+    private const string BashLauncherWindowsReason =
+        @"'bash' here is not a bash.exe that 'run' recognises as Git Bash or MSYS2 (msys-2.0.dll beside it, or Git's bin\bash.exe launcher). It may be WSL's launcher (System32's bash.exe, or the WSL app's bash.exe alias), which runs its whole command line through the Linux shell (/bin/bash -c), so a substituted value is parsed again and can transform and print secrets past redaction. A bash at a program position (run's own program, or the command of a wrapper or runner such as sudo or uv run) is refused unless it is Git Bash or MSYS2's bash; behind a wrapper or runner it must be given by its full path. For WSL give the command after -e: 'wsl -e ./deploy.sh {{secret}}'; for Git Bash name it by its path: 'run ""C:\Program Files\Git\bin\bash.exe"" ./deploy.sh {{secret}}'.";
+
+    private const string BashLauncherReason =
+        @"'bash.exe' is a Windows program: under WSL it is System32's bash.exe, WSL's launcher, reached through Windows interop, which runs its whole command line through the Linux shell (/bin/bash -c), so a substituted value is parsed again and can transform and print secrets past redaction. Run the Linux shell instead: 'run bash ./deploy.sh {{secret}}'.";
+
+    private const string PaddedWslReason =
+        @"'wsl' written with quote characters, surrounding white space or a trailing dot can't be checked: run reads it as another program, but Windows starts wsl.exe, which runs its command line through the Linux shell. Write it plainly: 'wsl -e ./deploy.sh {{secret}}'.";
+
+    private static readonly BlockedInvocation BashLauncherWindowsRefusal = new("bash", BashLauncherWindowsReason);
+    private static readonly BlockedInvocation BashLauncherRefusalOffWindows = new("bash.exe", BashLauncherReason);
+    private static readonly BlockedInvocation PaddedWslRefusal = new("wsl", PaddedWslReason);
+
+    /// <summary>A walk's verdict; <paramref name="Ended"/> when a wsl word was reached, whose walk owns the rest.</summary>
+    private readonly record struct BashWalk(BlockedInvocation? Verdict, bool Ended);
+
+    private enum BashWord { Other, Bash, Wsl }
+
+    /// <summary>
+    /// What a word at a program position names (bash on Windows, bash.exe off Windows, or wsl), and whether it is padded
+    /// (refused outright). The word is read with every <c>"</c> removed (cmd.exe's quote toggling), white space trimmed at
+    /// both ends and trailing <c>.</c>, <c>\</c> and <c>/</c> trimmed; a file-name part holding <c>:</c> is cut at its
+    /// first <c>:</c> (an NTFS stream), and a head naming bash or wsl is padded too.
+    /// </summary>
+    private static (BashWord Kind, bool Padded) NameBashWord(string word, bool windows)
+    {
+        // Fail closed: white space, '.', '\' and '/' trimmed from the end until none is left (bash. \ names bash too).
+        var n = word.Replace("\"", "", StringComparison.Ordinal).TrimStart();
+        while (n.Length > 0 && (char.IsWhiteSpace(n[^1]) || n[^1] is '.' or '\\' or '/'))
+            n = n[..^1];
+        var padded = word.Contains('"')
+            || (word.Length > 0 && (char.IsWhiteSpace(word[0]) || char.IsWhiteSpace(word[^1]) || word[^1] is '.' or '\\' or '/'));
+
+        // The stream cut (round 6 I-1): the file-name part is after the last separator, or after an X: drive prefix.
+        var separator = n.LastIndexOfAny(['\\', '/']);
+        var nameStart = separator >= 0 ? separator + 1
+            : n.Length >= 2 && char.IsAsciiLetter(n[0]) && n[1] == ':' ? 2 : 0;
+        var colon = n.IndexOf(':', nameStart);
+        if (colon >= 0)
+        {
+            var head = n[..colon];
+            var headKind = Names(head);
+            if (headKind != BashWord.Other)
+                return (headKind, true);
+        }
+        return (Names(n), padded);
+
+        BashWord Names(string name) =>
+            ProgramName(name).Equals("wsl", StringComparison.OrdinalIgnoreCase) ? BashWord.Wsl
+            : windows ? (ProgramName(name).Equals("bash", StringComparison.OrdinalIgnoreCase) ? BashWord.Bash : BashWord.Other)
+            : WindowsFileName(name).Equals("bash.exe", StringComparison.OrdinalIgnoreCase) ? BashWord.Bash : BashWord.Other;
+    }
+
+    // C:\..., c:/..., \\server\..., \\?\C:\... ; not \Program Files\... (rooted on the current drive), .\bash or sub\bash.exe.
+    private static bool IsAbsoluteWindowsPath(string word) =>
+        (word.Length >= 3 && char.IsAsciiLetter(word[0]) && word[1] == ':' && word[2] is '\\' or '/')
+        || (word.Length >= 2 && word[0] is '\\' or '/' && word[1] is '\\' or '/');
+
+    /// <summary>
+    /// The rule for a word naming bash at a program position: <paramref name="runProgram"/> is run's own program
+    /// (argv[0]), <paramref name="windows"/> false the off-Windows rule (also a container tool's words, wsl's command).
+    /// </summary>
+    private static BlockedInvocation? BashRule(string word, bool padded, bool runProgram, bool windows, MsysTarget.Probe? probe)
+    {
+        if (!windows)
+            return BashLauncherRefusalOffWindows;
+        if (padded || probe is null)
+            return BashLauncherWindowsRefusal;
+        if (!runProgram && !IsAbsoluteWindowsPath(word))
+            return BashLauncherWindowsRefusal;
+        return MsysTarget.Resolve(word, probe) is { } file && MsysTarget.IsMsys2(file, probe.FileExists)
+            ? null : BashLauncherWindowsRefusal;
+    }
+
+    /// <summary>Rule 4: a wsl word at <paramref name="k"/>, its command checked by the off-Windows rule in exec mode.</summary>
+    private static BlockedInvocation? WslRule(IReadOnlyList<string> argv, int k, int end)
+    {
+        var args = argv.Skip(k + 1).Take(end - k - 1).ToList();
+        var walk = WalkWsl("wsl", args);
+        if (walk.Ended || !walk.Exec || walk.Command >= args.Count)
+            return null;
+        var inner = args.Skip(walk.Command).ToList();
+        return BashLauncherWalk(inner, 0, inner.Count, windows: false, probe: null).Verdict is { } refusal
+            ? refusal with { Reason = $"'wsl' runs '{refusal.Program}': {refusal.Reason}" }
+            : null;
+    }
+
+    /// <summary>
+    /// Rules 2 and 3: every word of <paramref name="argv"/> from <paramref name="from"/> to <paramref name="end"/> that
+    /// names bash, by the rule of <paramref name="windows"/> as a position behind a wrapper; at the first word naming wsl
+    /// the scan stops and that word's walk decides (round 4 M-5).
+    /// </summary>
+    private static BashWalk BashScan(IReadOnlyList<string> argv, int from, int end, bool windows, MsysTarget.Probe? probe)
+    {
+        for (var w = from; w < end; w++)
+        {
+            var (kind, padded) = NameBashWord(argv[w], windows);
+            if (kind == BashWord.Wsl)
+                return new(padded ? PaddedWslRefusal : WslRule(argv, w, end), Ended: true);
+            if (kind == BashWord.Bash && BashRule(argv[w], padded, runProgram: false, windows, probe) is { } refusal)
+                return new(refusal, Ended: false);
+        }
+        return new(null, Ended: false);
+    }
+
+    // The container, remote and sandbox tools: their command runs elsewhere, taken to be Linux (round 4 M-2).
+    private static readonly HashSet<string> ElsewhereRunners = new(StringComparer.OrdinalIgnoreCase)
+        { "docker", "podman", "nerdctl", "kubectl", "oc", "lxc", "incus", "machinectl", "toolbox", "distrobox", "flatpak", "snap" };
+
+    /// <summary>
+    /// Rule 1: the program positions of <paramref name="argv"/> from <paramref name="start"/> to <paramref name="end"/>,
+    /// as <see cref="ProgramPositions"/> walks them (simple wrappers, <c>find -exec</c>), stopping at <c>command -v</c>,
+    /// with rules 2 to 4 at each.
+    /// </summary>
+    private static BashWalk BashLauncherWalk(IReadOnlyList<string> argv, int start, int end, bool windows, MsysTarget.Probe? probe)
+    {
+        var i = start;
+        while (i < end)
+        {
+            var (kind, padded) = NameBashWord(argv[i], windows);
+            if (kind == BashWord.Wsl)
+                return new(padded ? PaddedWslRefusal : WslRule(argv, i, end), Ended: true);
+            if (kind == BashWord.Bash)
+                return new(BashRule(argv[i], padded, runProgram: i == 0, windows, probe), Ended: false);
+
+            var program = ProgramName(argv[i]);
+            if (program.Equals("find", StringComparison.OrdinalIgnoreCase))
+            {
+                for (var j = i + 1; j < end; j++)
+                {
+                    if (!FindExecOptions.Contains(argv[j]))
+                        continue;
+                    var sliceEnd = j + 1;
+                    while (sliceEnd < end && argv[sliceEnd] is not (";" or "+"))
+                        sliceEnd++;
+                    if (BashLauncherWalk(argv, j + 1, sliceEnd, windows, probe).Verdict is { } refusal)
+                        return new(refusal, Ended: false);
+                }
+                return new(null, Ended: false);
+            }
+            if (program.Equals("command", StringComparison.OrdinalIgnoreCase)
+                && argv.Skip(i + 1).Take(end - i - 1).Any(a => a is "-v" or "-V"))
+                return new(null, Ended: false); // command -v only looks the name up
+            if (!Wrappers.Contains(program))
+                return new(null, Ended: false);
+
+            if (SubcommandTools.Contains(program))
+            {
+                var rule = windows && !ElsewhereRunners.Contains(program);
+                // Rule 3: an option before the subcommand hides where it is (uv --directory /x run): every later word.
+                if (i + 1 < end && argv[i + 1].StartsWith('-'))
+                    return BashScan(argv, i + 1, end, rule, probe);
+                if (i + 1 < end && ExecSubcommands.Contains(argv[i + 1]))
+                    return BashScan(argv, i + 2, end, rule, probe);
+                return new(null, Ended: false);
+            }
+
+            // Rule 2: behind a wrapper whose options this check doesn't know completely, every later word.
+            if (!TrustedWrappers.Contains(program) && BashScan(argv, i + 1, end, windows, probe) is var scan
+                && (scan.Ended || scan.Verdict is not null))
+                return scan;
+
+            if (WrappedCommand(argv, i, end, program) is not { } next)
+                return new(null, Ended: false);
+            i = next;
+        }
+        return new(null, Ended: false);
+    }
+
     // Wrapper options that take a separate value, so the value isn't taken for the command.
     private static readonly Dictionary<string, string[]> WrapperValued = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -976,6 +1171,28 @@ public static class Validation
     /// </summary>
     private static BlockedInvocation? CheckWsl(string program, List<string> args)
     {
+        var walk = WalkWsl(program, args);
+        if (walk.Ended)
+            return walk.Verdict;
+        var (exec, command) = (walk.Exec, walk.Command);
+        if (command >= args.Count)
+            return exec ? null : NoCommandShell(program); // exec mode with no command: E_INVALIDARG, nothing runs
+        if (!exec)
+            return new(program, WslShellModeReason);
+        var inner = GetBlockedInvocation(WithImageProgram(args.Skip(command).ToList()));
+        return inner is null ? null : inner with { Reason = $"'{program}' runs '{inner.Program}': {inner.Reason}" };
+    }
+
+    /// <summary>
+    /// Brief T64: <see cref="CheckWsl"/>'s option walk, shared with <see cref="BashLauncherRefusal"/>. <c>Ended</c>: the
+    /// walk decided on its own (an unknown option, a <c>--shell-type</c> other than <c>none</c>, <c>login</c> or
+    /// <c>standard</c>, a management option, <c>--debug-shell</c> or <c>--install</c>), with <c>Verdict</c>; otherwise
+    /// <c>Exec</c> (exec mode) and <c>Command</c>, the index in <paramref name="args"/> where the command begins.
+    /// </summary>
+    private readonly record struct WslWalk(bool Ended, BlockedInvocation? Verdict, bool Exec, int Command);
+
+    private static WslWalk WalkWsl(string program, List<string> args)
+    {
         var exec = false;
         var command = args.Count;
         for (var i = 0; i < args.Count; i++)
@@ -994,7 +1211,7 @@ public static class Validation
                 else if (mode is "login" or "standard")
                     exec = false;
                 else
-                    return new(program, WslUnknownReason);
+                    return new(true, new(program, WslUnknownReason), false, 0);
                 continue;
             }
             if (word == "--system")
@@ -1011,21 +1228,15 @@ public static class Validation
                 break;
             }
             if (WslManagement.Contains(word))
-                return null;
+                return new(true, null, false, 0);
             if (word is "--debug-shell" or "--install")
-                return NoCommandShell(program);
+                return new(true, NoCommandShell(program), false, 0);
             if (word.StartsWith('-'))
-                return new(program, WslUnknownReason);
+                return new(true, new(program, WslUnknownReason), false, 0);
             command = i;
             break;
         }
-
-        if (command >= args.Count)
-            return exec ? null : NoCommandShell(program); // exec mode with no command: E_INVALIDARG, nothing runs
-        if (!exec)
-            return new(program, WslShellModeReason);
-        var inner = GetBlockedInvocation(WithImageProgram(args.Skip(command).ToList()));
-        return inner is null ? null : inner with { Reason = $"'{program}' runs '{inner.Program}': {inner.Reason}" };
+        return new(false, null, exec, command);
     }
 
     private static BlockedInvocation NoCommandShell(string program) =>
