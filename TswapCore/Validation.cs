@@ -1259,7 +1259,7 @@ public static class Validation
     private static string WslQuotedValueReason(string name) =>
         $"'{name}': an option's value is empty or holds white space or a double quote, which run's command line quotes, " +
         $"but {name}.exe reads an option's value up to the first space or tab and keeps the quotes, so it can't be told " +
-        $"where {name}'s command begins (the rest would run through the Linux shell). Give the value without them (cd in " +
+        $"where {name}'s command begins (it would take the rest as its command line). Give the value without them (cd in " +
         "a script instead of --cd). " + WayOut;
 
     /// <summary>The words RedactingPty's Windows command line quotes: empty, or holding white space or a <c>"</c>.</summary>

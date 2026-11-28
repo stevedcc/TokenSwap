@@ -33,7 +33,7 @@ public class WslgWalkTests
     internal static string QuotedValue(string name) =>
         $"'{name}': an option's value is empty or holds white space or a double quote, which run's command line quotes, " +
         $"but {name}.exe reads an option's value up to the first space or tab and keeps the quotes, so it can't be told " +
-        $"where {name}'s command begins (the rest would run through the Linux shell). Give the value without them (cd in " +
+        $"where {name}'s command begins (it would take the rest as its command line). Give the value without them (cd in " +
         "a script instead of --cd). " + Unix;
 
     private static string NoCommand(string p) =>
@@ -206,7 +206,7 @@ public class WslgWalkTests
                 "'wslg': an option or a value this check doesn't know (wslg.exe takes only -d, --distribution, -u, --user, --cd, --shell-type (login, standard or none) and --, matched exactly, and has no -e), so it can't tell what wslg runs. Give the command after --shell-type none: 'wslg --shell-type none ./deploy.sh {{secret}}'. Put the commands in a script file and run that instead, e.g. 'run ./script.sh {{secret}}' (the script reads the value as $1)."),
             Validation.GetBlockedInvocation(["wslg", "-e", "./deploy.sh", "{{x}}"]));
         Assert.Equal(new Validation.BlockedInvocation("wslg",
-                "'wslg': an option's value is empty or holds white space or a double quote, which run's command line quotes, but wslg.exe reads an option's value up to the first space or tab and keeps the quotes, so it can't be told where wslg's command begins (the rest would run through the Linux shell). Give the value without them (cd in a script instead of --cd). Put the commands in a script file and run that instead, e.g. 'run ./script.sh {{secret}}' (the script reads the value as $1)."),
+                "'wslg': an option's value is empty or holds white space or a double quote, which run's command line quotes, but wslg.exe reads an option's value up to the first space or tab and keeps the quotes, so it can't be told where wslg's command begins (it would take the rest as its command line). Give the value without them (cd in a script instead of --cd). Put the commands in a script file and run that instead, e.g. 'run ./script.sh {{secret}}' (the script reads the value as $1)."),
             Validation.GetBlockedInvocation(["wslg", "-d", "My Distro", "--shell-type", "none", "./deploy.sh", "{{x}}"]));
         Assert.Equal(new Validation.BlockedInvocation("wslg",
                 @"'wslg' written with quote characters, surrounding white space, or a trailing dot, '\' or '/' can't be checked: run reads it as another program, but Windows starts wslg.exe, which runs its command line through the Linux shell. Write it plainly: 'wslg --shell-type none ./deploy.sh {{secret}}'."),
