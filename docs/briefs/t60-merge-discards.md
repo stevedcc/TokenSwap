@@ -48,7 +48,7 @@ of the ownership list; R1's wording; citations.
 **Brief round 6 (MiMo r5):** main is now f2e3a5a, with `RunCommand.cs` and `docs/security-model.md` named as moved and
 their lines given there (I-1; the two other SHAs the review quotes are not in this brief); R17 and R19 listed as design
 departures with their reasons (M-1, M-2); `sameAs` in R18 (M-3); `Merge`'s null condition (M-4); the hint lines with
-several secrets (M-5); `delete` exempt from the entry count cap, R20, with its rows (M-6); `SecretMatcher.BaseName`
+several secrets (M-5); `delete` at the entry cap needs no exemption, R20, with its rows (M-6); `SecretMatcher.BaseName`
 strips `:discarded` (M-7); `--stamp` matches parsed values (M-8); the `Need`, `Restore` and `MergeBothWays` citations (M-9).
 
 **Base.** Main at 686f1fe (T58, cd1a5e7, and T62, #439, merged), already merged into `brief/t60`; the implementer
@@ -161,9 +161,9 @@ gives the common base, not A's value (`VaultView.ResolveToken`, `VaultView.cs:18
 
 ## Rulings where the design was silent or the code disagreed
 
-These are decided here; each is marked where it is used. Three of them depart from the design's body, which is
-otherwise authoritative: **R17** (§1.8's command table), **R19** (§1.5's entry count) and **R20** (§1.4 Bounds' cap
-exemptions). The implementer's report names all three, and the controller carries them into the design's next round.
+These are decided here; each is marked where it is used. Two of them depart from the design's body, which is
+otherwise authoritative: **R17** (§1.8's command table) and **R19** (§1.5's entry count). The implementer's report
+names both, and the controller carries them into the design's next round.
 - **R1, unsealed entries.** A full load can set aside a format 2 copy's value, which has no value section yet
   (format 2 keeps no sections, `WriteAll` `:2030-2036`). In memory its entry has `sectionLength` 0 and its plaintext is
   held by reference in `SecretRecord.UnsealedDiscards`: the same array as the owning decoded input's value, never a
@@ -253,15 +253,10 @@ exemptions). The implementer's report names all three, and the controller carrie
   entry count `export` needs): `Secret` and `ToSecret` gain no entry count; `export` counts from metadata, tombstones
   included (Task 5). Reason: `ToSecret` can't see tombstones, so a count there would leave a deleted secret's entries
   out of the export warning that design §1.10 says names the secrets (`x (deleted)`).
-- **R20, `delete` at the entry cap** (design §1.4 Bounds departure, MiMo r5 M-6: the design exempts only `burn`, from
-  the entry count, and `conflicts --clear` and `restore --discarded`, from both caps): `delete` is exempt from the entry
-  count cap, as `burn` is (`CapExemption.EntryCount`), and still bound by the 64 KiB and the codec's 255. Reason: a
-  delete empties the visible value and adds no entry: its current and previous values join `Superseded`, and every
-  entry it saw is dropped into `Retired` (design §1.5's table, Task 3's delete row), so the tombstone it writes holds no
-  entries and it shrinks the list as `--clear` does. Refusing it would strand a user who wants the secret gone behind a
-  `conflicts --clear` first. Fail-closed is not at stake: nothing becomes readable that wasn't. Since the tombstone
-  holds no entries, the check can't bind a delete today; the exemption states the rule, so a later change to what a
-  delete writes can't start refusing it.
+- **R20, `delete` at the entry cap** (MiMo r5 M-6; no departure: design §1.4 Bounds refuses only a write that would
+  store more): `delete` keeps `CapExemption.None`. No exemption is needed because a delete stores an empty list: its
+  current and previous values join `Superseded` and every entry it saw is dropped into `Retired` (design §1.5's table,
+  Task 3's delete row), so the tombstone it writes holds no entries and the cap check can never bind it.
 
 ## Interfaces T61 relies on
 
@@ -609,7 +604,7 @@ before any file is touched (so `RemoveRedundantCopies`, which gets only `(path, 
 - The cap (§1.4 "Bounds"), in `WriteAll` (`:1989`), so every write path has it: `CommitWrites`, `MergeRecords` (`vault
   merge`, `:1903` → `WriteRecords` → `WriteAll`, T61 I-3) and `Reindex`. `RecordWrite` gains
   `CapExemption Cap = CapExemption.None` (`internal enum CapExemption { None, EntryCount, All }`): `CommitWrites` passes
-  `All` for a `ClearEdit` and a `restore --discarded`, `EntryCount` for a `BurnWrite` and a `DeleteWrite` (R20); `MergeRecords` and `Reindex` pass
+  `All` for a `ClearEdit` and a `restore --discarded`, `EntryCount` for a `BurnWrite` (a `DeleteWrite` keeps `None`, R20); `MergeRecords` and `Reindex` pass
   `None`. Before the first write (beside `CheckUnchanged`, `:1997`), for every record whose lineage holds more than
   `MaxEntries` entries (unless exempt) or more than `MaxEntryBytes` encoded entry bytes (unless `All`), throw (nothing
   written, once per command). A `BurnWrite` stores what a fold grew, up to the codec's 255 entries and the 64 KiB:
@@ -718,7 +713,7 @@ newer-format record (the reindex row's newer bytes are gone); let `burn` skip th
 newer-bytes check (the main-file `burn` row writes and the newer lineage is gone); re-issue the previous value's
 burn on `restore --discarded` (the burned-entry row fails); start the new life's lineage without the tombstone's
 `Retired` (the delete-then-create row brings `a` back); let a value write update a newer-format lineage (the R8 rotate
-row writes); apply the entry cap to `burn` (the burn-at-65 row is refused). The delete-at-cap rows have no break-it-once: removing `delete`'s exemption can't make them fail while the tombstone holds no entries (R20).
+row writes); apply the entry cap to `burn` (the burn-at-65 row is refused); make `delete` keep its entries instead of retiring them (the delete-at-65 row is refused with the cap text, R20).
 
 ## Task 4: what a person sees: warnings, `names`, masking
 
