@@ -27,7 +27,10 @@
     is an error: IlcTreatWarningsAsErrors is ILC's warnaserror. Release only, because the Debug publish (CI's E2E
     binary) has one known, pre-existing warning: IL2026 in Yubico.YubiKey.Cryptography.CryptographyProviders..cctor()
     (HMAC.Create(String)), which the Release publish doesn't report. Not in Directory.Build.props, which may set only the
-    lock-file properties (DependencyPinningTests). Pinned by TswapTests/Build/AotWarningTests.cs.
+    lock-file properties (DependencyPinningTests). Pinned by TswapTests/Build/AotWarningTests.cs. After a .NET SDK
+    update (global.json), redo T58's check by hand: a throwaway call of a [RequiresUnreferencedCode] method in
+    Program.cs must fail the Release publish with error IL2026. AotWarningTests can't show that the SDK still honours
+    the setting.
   -->
   <PropertyGroup Condition="'$(Configuration)' == 'Release'">
     <IlcTreatWarningsAsErrors>true</IlcTreatWarningsAsErrors>

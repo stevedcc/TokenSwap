@@ -23,6 +23,7 @@ a secret value:
 | `ingest <name>` | Import secret from stdin pipe; name max 64 chars, value up to 64 KB | None — agent constructs the pipeline but never sees the value |
 | `names` | List secret names, all or those matching a pattern | Reveals what secrets exist (names only) |
 | `run <cmd>` | Use secrets via `{{token}}`, a file with `# tswap:` markers via `{{@file}}`, or an environment variable via `--env NAME={{name}}` ([`run --env`](commands.md#run---env)) | Secrets passed to subprocess; exfiltration blocklist applies, and with `{{@file}}` printers, encoders, copiers, shells and interpreters are refused too ([limits](security-model.md#files-with-secrets-run-with-file)) |
+| `totp <name>` | Print a TOTP secret's current code (stdout) and how long it stays valid (stderr) | The code is a live credential for one period (30 s by default); the seed is never shown |
 | `burn <name> [reason]` | Mark secret as compromised | None — write-only operation |
 | `burned` | List burned secrets | Reveals names + burn metadata |
 | `check <path>` | Verify `# tswap:` markers | None — reads markers, not values |

@@ -150,8 +150,6 @@ public sealed class TotpSeed : IDisposable
         return new TotpSeed(Decode(canonical), TotpAlgorithm.Sha1, 6, 30, canonical, null, null);
     }
 
-    // Code review round 1: the six spellings in ASCII only, case ignored ordinally (no culture or invariant upper-casing,
-    // which would map U+017F to 'S').
     /// <summary><paramref name="text"/> with the raw values of its <c>secret</c> parameters left out.</summary>
     private static string OutsideTheSecret(string text)
     {
@@ -163,6 +161,8 @@ public sealed class TotpSeed : IDisposable
         return text[..(queryStart + 1)] + string.Join('&', pieces);
     }
 
+    // Code review round 1: the six spellings in ASCII only, case ignored ordinally (no culture or invariant upper-casing,
+    // which would map U+017F to 'S').
     private static TotpAlgorithm ParseAlgorithm(string text)
     {
         bool Is(string spelling) => System.Text.Ascii.EqualsIgnoreCase(text, spelling);

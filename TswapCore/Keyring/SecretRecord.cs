@@ -33,8 +33,8 @@ public sealed record PreviousValue(Stamp Version, byte[] Value, FingerprintSet? 
 
 /// <summary>
 /// Brief T16-S1 (ruling 6): one entry of a v3 metadata section's extension list. This build defines
-/// one extension type, <c>Fields</c> (issue #311; <see cref="TswapCore.Fields.FieldsExtension"/>, which
-/// also lists the types taken); it keeps the ones it doesn't know byte for byte on every rewrite, so
+/// two extension types, <c>Fields</c> (issue #311; <see cref="TswapCore.Fields.FieldsExtension"/>, which
+/// also lists the types taken) and <c>ValueKinds</c> (<c>0x0101</c>, brief T58); it keeps the ones it doesn't know byte for byte on every rewrite, so
 /// data a later build adds (tags, #221) survives an older machine's merges and burns.
 /// </summary>
 public sealed record RecordExtension(ushort Type, byte[] Data)

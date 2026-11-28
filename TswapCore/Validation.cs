@@ -329,9 +329,10 @@ public static class Validation
     }
 
     /// <summary>
-    /// Brief T47: a token <c>run</c> substituted into argv: a secret token (<c>name</c> or <c>name:previous</c>) or,
-    /// with <paramref name="IsFile"/>, a <c>{{@path}}</c> token (<paramref name="Name"/> is the path as typed); the
-    /// argv index it went into, and the text it was replaced with (the value, or the filled copy's path).
+    /// Brief T47: a token <c>run</c> substituted into argv: a secret token (<c>name</c>, <c>name:previous</c> or
+    /// <c>name:totp</c>) or, with <paramref name="IsFile"/>, a <c>{{@path}}</c> token (<paramref name="Name"/> is the
+    /// path as typed); the argv index it went into, and the text it was replaced with (the value, or the filled copy's
+    /// path).
     /// </summary>
     public readonly record struct SubstitutedToken(string Name, int ArgIndex, string Value, bool IsFile = false);
 
