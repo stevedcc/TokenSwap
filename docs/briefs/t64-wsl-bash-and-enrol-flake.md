@@ -98,7 +98,8 @@ next prompt at `:293`). The product is correct. Only the test's wait is wrong.
 (`Validation.cs:369-372`; T55 relies on the same). `MsysTarget.Resolve` (`:43-61`) models that search: tswap's folder,
 the current folder, **System32**, `System`, the Windows folder, then `PATH`, with `.exe` appended to a name without a
 dot. A bare `bash` (or `BASH`, `bash.exe`, `Bash.EXE`) therefore resolves to System32's `bash.exe` wherever WSL is
-installed, ahead of Git on `PATH`. An absolute or relative path is taken as is: `C:\Windows\System32\bash.exe`,
+installed, ahead of Git on `PATH`. A rooted or drive-absolute path is taken as is, and any other name holding a path is joined to the current
+folder (`.\x\bash.exe` → `C:\work\.\x\bash.exe`, `MsysTarget.cs:52-57`; round 6 M-2): `C:\Windows\System32\bash.exe`,
 `c:/windows/system32/BASH`, and `C:\Windows\Sysnative\bash.exe` (Sysnative is visible only to 32-bit processes; tswap
 ships win-x64 only). Whatever folder a `bash.exe` is in, it is refused unless it is MSYS2.
 
@@ -137,9 +138,16 @@ and inside a distribution, a `bash.exe` at a program position is never the Linux
   empty. Whether CreateProcess normalises `bash\.` to `bash` and then appends `.exe` is a question only Windows CI
   could answer, so the check doesn't depend on it. Before naming, it trims trailing `\`, `/` and `.` as well, so these
   name `bash`, and the word is refused outright as padded.
-- **A stream or a dotted folder** (`bash.exe::$DATA`, `bash.exe:stream`, `C:\Windows\System32\.\bash.exe`,
-  `C:\Windows\System32\..\System32\bash.exe`, `\\?\C:\Windows\System32\bash.exe`). `ProgramName` gives `bash`.
-  `Resolve` takes the path as it is, so it is either not found or not MSYS2: refused.
+- **An NTFS stream** (`bash::$DATA`, `bash:x`, `bash.exe:x`, `bash.exe::$DATA`, `wsl::$DATA`; round 6 I-1).
+  `filename::$DATA` is the canonical name of a file's unnamed data stream. Whether `CreateProcess` appends `.exe`
+  before it parses the stream, and so starts System32's `bash.exe` for `bash::$DATA`, only Windows CI can tell. If it
+  does, WSL's dispatcher takes the stem of `bash::$DATA`, which is not `bash`, and enters `WslMain`'s shell mode: the
+  same re-parse. `WindowsFileName` drops a `:stream` suffix only after a program extension (`:1447-1449`), so
+  `bash::$DATA` names neither bash nor wsl. The check doesn't depend on the answer: it cuts the file-name part at its
+  first `:` and refuses outright a word whose head names bash or wsl (Task 2).
+- **A dotted folder** (`C:\Windows\System32\.\bash.exe`, `C:\Windows\System32\..\System32\bash.exe`,
+  `\\?\C:\Windows\System32\bash.exe`). `ProgramName` gives `bash`. `Resolve` takes the path as it is, so it is
+  either not found or not MSYS2: refused.
 - **Extra text in one word** (`bash ./x.sh`, `bash;x`). At a program position these don't start bash. Both start paths
   quote a word with white space whole, and `CreateProcess` looks for `bash;x.exe` (no dot, so `.exe` is appended).
   `ProgramName` of them isn't `bash`, so they aren't checked.
@@ -236,7 +244,10 @@ Without `-u`, the first non-option word is the user, and the rest go to that use
   both sets.
 - Add `-w` and `--whitelist-environment` (valued in util-linux) to `WrapperValued["runuser"]` (`:820`), so their value
   is never taken for the command. `runuser` stays out of `TrustedWrappers`, so its later words are still scanned (F22).
-  That covers permuted options and `-lu USER` clusters, whose value the walk can't see.
+  That covers permuted options and `-lu USER` clusters, whose value the walk can't see, for the bash check and for
+  `CheckWrapper`-built checks. The `install` program-position check goes through `ProgramPositions`, which stops at
+  the first non-option word, so it still needs `-u USER` in separate words (round 6 M-1). A `RunuserWalkTests` row
+  documents `GetFileTokenRefusal(["runuser", "-lu", "app", "install", "{{@f}}", "/tmp/x"])` → null as a known miss.
 - `IsCheckedProgram` (`:1424`) already includes `ShellAsUser`, so nothing changes there.
 
 Tests (`TswapTests/RunuserWalkTests.cs`, in-process):
@@ -247,6 +258,7 @@ Tests (`TswapTests/RunuserWalkTests.cs`, in-process):
 | `ProgramPositions(["runuser", "-w", "PATH", "-u", "app", "--", "tool"])` | `[0, 6]` |
 | `GetBlockedInvocation(["runuser", "-c", "echo {{x}}"])`, `(["runuser", "root", "--command=echo {{x}}"])`, `(["runuser", "-lc", "echo {{x}}"])` | refused with `InlineReason` (unchanged) |
 | `GetFileTokenRefusal(["runuser", "-u", "app", "install", "{{@f}}", "/tmp/x"])` | refused, `'install' copies files` (new: it was allowed) |
+| `GetFileTokenRefusal(["runuser", "-lu", "app", "install", "{{@f}}", "/tmp/x"])` | null (known miss: the walk takes `app` for the command; round 6 M-1) |
 
 Break-it-once: put the `ShellAsUser` branch back below the `Wrappers` branch. The three `-c` rows must fail
 (allowed). `runuser` then reaches `CheckWrapper` first, and `echo {{x}}` is one word, so it names no checked program
@@ -283,6 +295,12 @@ trailing `.`, `\` and `/`.
 - On Windows the word **names bash** when `ProgramName(n)` is `bash` (ignoring case, so `bash`, `BASH.EXE`,
   `bash.exe.`, `bash.exe::$DATA`, `"ba"sh`, `bash\.` and `bash.com` all count). It is **padded** when the word holds `"`, starts or
   ends with white space, or ends with `.`, `\` or `/`.
+- **Stream cut** (round 6 I-1, both OSes). The **file-name part** of `n` is the text after its last `\` or `/` (when
+  `n` has no separator, after an `X:` drive prefix if it starts with one). If the file-name part holds `:`, cut it at
+  the first `:`. The **head** is `n` up to that point (the folder kept). If the head names bash (Windows), bash.exe
+  (off Windows) or wsl, the word is **refused outright**, as a padded word is. So `bash::$DATA`, `bash:x`,
+  `bash.exe:x`, `C:\Windows\System32\bash.exe::$DATA` and `wsl::$DATA` are refused. `C:\Program Files\Git\bin\bash.exe`
+  (a colon only in its drive prefix) and `\\?\C:\…\bash.exe` (no colon in the file-name part) are named as before.
 - Off Windows the word **names bash.exe** when `WindowsFileName(n)` is `bash.exe` (ignoring case).
 - On both, the word **names wsl** when `ProgramName(n)` is `wsl` (round 5 I2). A word that names wsl and is padded
   (`"wsl.exe"`, `"w"sl`, ` wsl`, `wsl.exe.`) is **refused outright**, as padded bash words are. Neither T51's
@@ -402,7 +420,11 @@ script argument is `./x.sh {{x}}` unless shown otherwise. A path shown in `"…"
 | `C:\msys64\usr\bin\bash.exe.`, `C:\msys64\usr\bin\bash.exe ` | true | Win32 | refused (padded, outright; without that rule these would resolve to MSYS2 and be allowed) |
 | `"C:\Windows\System32\bash.exe"`, `"ba"sh` (quotes in the word) | true | WSL | refused (padded) |
 | `"C:\Program Files\Git\bin\bash.exe"` (quotes in the word) | true | WSL | refused (outright: T55 would not recognise it) |
-| `bash.exe::$DATA`, `bash.exe:stream`, `C:\Windows\System32\.\bash.exe`, `\\?\C:\Windows\System32\bash.exe`, `C:\WINDOW~1\System32\bash.exe` | true | WSL | refused (not found by the exact fake probe; on Windows not found or not MSYS2) |
+| `bash::$DATA`, `bash:x`, `bash.exe:x`, `bash.exe::$DATA`, `bash.exe:stream`, `C:\Windows\System32\bash.exe::$DATA` | true | Git | refused (stream cut, outright) |
+| `wsl::$DATA ./deploy.sh {{x}}`, `wsl.exe:x -e ./deploy.sh {{x}}` | true | WSL | refused (stream cut, outright; `Program` `wsl`) |
+| `bash.exe:x`, `wsl::$DATA` | false | null | refused (stream cut, outright) |
+| `C:\Program Files\Git\bin\bash.exe ./x.sh {{x}}` | true | Git | null (unchanged: the only `:` is the drive's) |
+| `C:\Windows\System32\.\bash.exe`, `\\?\C:\Windows\System32\bash.exe`, `C:\WINDOW~1\System32\bash.exe` | true | WSL | refused (not found by the exact fake probe; on Windows not found or not MSYS2) |
 | `bash ./x.sh` (one word), then `{{x}}`; `bash;x` then `{{x}}` | true | WSL | null (doesn't start bash at a program position) |
 | `sudo bash ./x.sh {{x}}`, `timeout 5 bash ./x.sh {{x}}`, `npx bash ./x.sh {{x}}` | true | Git | refused (bare, behind a wrapper) |
 | `sudo "C:\Program Files\Git\bin\bash.exe" ./x.sh {{x}}` | true | Git | null |
@@ -469,6 +491,8 @@ Break-it-once:
    (allowed).
 10. Drop the outright refusal of padded wsl words. The `"wsl.exe"` and ` wsl` rows must fail (allowed: the raw
     word names no wsl and no bash).
+11. Drop the stream cut. The `bash::$DATA`, `bash:x` and `wsl::$DATA` rows must fail (allowed: their whole word names
+    neither bash nor wsl), and the plain Git Bash row must still pass.
 
 ## Task 3 (#411): `run` applies it before unlock and after substitution
 
@@ -530,7 +554,8 @@ one ingested value `v$(echo pwned)k7Qz`.
   `out.txt` holds the value exactly. Write the branch and `resolved` with `_output.WriteLine`.
 
 **Only Windows CI can confirm:** the probe on a real machine; which file a bare `bash` resolves to on the runner (the
-leg-2 branch); that .NET passes a quoted or space-padded `FileName` to `CreateProcess` as described; whether `bash\.` would start `bash.exe` (refused either way); that `File.Exists` is true for an App Execution Alias (0-byte reparse point); and that
+leg-2 branch); that .NET passes a quoted or space-padded `FileName` to `CreateProcess` as described; whether `bash\.` would start `bash.exe` (refused either way); whether a stream spelling (`bash::$DATA`,
+`bash.exe:x`, `wsl::$DATA`) starts the program (refused either way); that `File.Exists` is true for an App Execution Alias (0-byte reparse point); and that
 the real `CreateProcess` order matches `Resolve`. WSL's re-parse comes from source, not from a run, because the runners
 have no WSL distribution to run it in. Name the CI branch in the report once it has run.
 
@@ -553,7 +578,9 @@ have no WSL distribution to run it in. Name the CI branch in the report once it 
   runner gets the runner's quoting, not T55's MSYS2 quoting, so a value can still arrive altered there (as before)."
   In the same cell's "Accepted over-refusals" list, add: "on Windows, a `bash` at a program position that isn't MSYS2
   (Cygwin's included) or isn't found; such a `bash` that holds `"`, white space at either end, or a trailing `.`, `\`
-  or `/`; a relative or bare Git Bash behind a wrapper or runner (`sudo .\bash`): give its absolute path; a word
+  or `/`; a relative or bare Git Bash behind a wrapper or runner (`sudo .\bash`), or a path rooted on the current drive
+  (`\Program Files\Git\bin\bash.exe`) there: give its absolute path; a program word whose file-name part holds `:`
+  (an NTFS stream) and names bash or wsl before it; a word
   naming bash that is really an untrusted wrapper's argument (`npx tool --name bash ./x.sh`), as the other guards'
   later-word scans already over-refuse; after a runner with an option before its subcommand, any later bash word,
   even under a subcommand that runs nothing (`uv --x y pip install bash`); and `wsl` written with quote characters,
@@ -604,7 +631,7 @@ have no WSL distribution to run it in. Name the CI branch in the report once it 
   is refused. The over-refusals are declared. M1: relative words behind a wrapper are refused. M2: Task 3's
   break-it-once note corrected. M3: the `bash.exe.` row asserts only "refused". M4: the E2E exception stated. M5: "no
   key asked" asserted. M6: `:1450` and `SlotEnrol.cs:311`. Parser-first: words with extra text (`bash;x`, `x&bash`,
-  `bash.exe:stream`) are split at cmd.exe's and sh's delimiters and refused. The pre-unlock call moved after the
+  `bash.exe:stream`) are split at cmd.exe's and sh's delimiters and refused (superseded by round 5). The pre-unlock call moved after the
   file-token check.
 - **Round 3 (controller's ruling on the round-2 open question).** A word is no longer refused for merely containing
   `bash`. Only its would-be programs count: the pieces split at cmd.exe's command starts (`& | < > ( )`, line breaks;
@@ -651,3 +678,8 @@ have no WSL distribution to run it in. Name the CI branch in the report once it 
   - DeepSeek M2: annotated. With the branch moved back, the `-c` rows are allowed, not refused by the echo check,
     because `echo {{x}}` is one word.
   - Citations corrected: `Resolve` `:43-61`, `IsMsys2` `:86-98`, `CheckWsl` to `:1025`.
+- **Round 8 (MiMo round 6).** I-1: the stream cut. At a program position the file-name part is cut at its first `:`,
+  and a head naming bash, bash.exe or wsl is refused outright. Rows were added and break-it-once 11 covers it. Whether a
+  stream spelling starts the program is on the Windows-CI list. M-1: the `-lu` claim is narrowed, with a known-miss
+  row. M-2: `Resolve`'s joining of relative paths is described correctly. M-3: round 2's splitting sentence is marked
+  superseded. M-4: the rooted-path over-refusal is declared.
