@@ -72,9 +72,15 @@ public sealed class RunTotpTests : IDisposable
         Assert.DoesNotContain("otpauth://", text, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static string Refusal(string shown, string reason) =>
+    /// <summary>
+    /// The refusal as the machine's commands give it: its last sentence follows the OS the context reports (the real one
+    /// unless a test sets <see cref="FleetMachine.Os"/>), as the product's platform switch does. On Windows there is no sudo.
+    /// </summary>
+    private string Refusal(string shown, string reason) =>
         $"{shown}: secret 't' holds no TOTP seed tswap can use ({reason}), so nothing was substituted. " +
-        "The user can see the value with 'sudo tswap get t' and store a corrected one with 'sudo tswap add t'.";
+        ((_m.Os ?? TswapCore.Vault.YubiKeyAccessTexts.CurrentOs()) == System.Runtime.InteropServices.OSPlatform.Windows
+            ? "The user can see the value with 'tswap get t' and store a corrected one with 'tswap add t', from an elevated command prompt."
+            : "The user can see the value with 'sudo tswap get t' and store a corrected one with 'sudo tswap add t'.");
 
     // ── codes ──────────────────────────────────────────────────────────────────────
 
@@ -171,7 +177,10 @@ public sealed class RunTotpTests : IDisposable
 
         Assert.True(exit == 0, err);
         Assert.Equal(["tool", "050471"], _pty.Argv!);
-        Assert.Contains("Warning: 't:totp' is a burned value — using it anyway; rotate it after use.", err);
+        Assert.Contains(
+            "Warning: 't:totp' is a burned value — using it anyway; the seed was seen; ask the service for a new one and pipe its URI to tswap ingest --rotate t.",
+            err);
+        Assert.DoesNotContain("rotate it after use", err);
     }
 
     [Fact]
@@ -188,6 +197,63 @@ public sealed class RunTotpTests : IDisposable
         Assert.Equal("c: \"050471\"  # tswap: t:totp\n", copy);
         Assert.DoesNotContain("previous", err);
         Assert.Single(_values);
+    }
+
+    [Fact]
+    public void FileMarker_OnABurnedTotpRecord_WarnsWithoutSayingRotate()
+    {
+        Store("t", Sha1Uri);
+        _m.Ok("", "burn", "t", "seen");
+        File.WriteAllText(_m.PathOf("f.yaml"), "code: \"\"  # tswap: t\n");
+
+        var (exit, _, err) = Run("tool", "-f", "{{@f.yaml}}");
+
+        Assert.True(exit == 0, err);
+        Assert.Contains(
+            "Warning: Secret 't' is burned (line 1) — applying anyway; the seed was seen; ask the service for a new one and pipe its URI to tswap ingest --rotate t",
+            err);
+        Assert.DoesNotContain("rotate this secret after use", err);
+    }
+
+    [Fact]
+    public void PlainBurnedValue_StillSaysRotate()
+    {
+        Store("t", "plain-password-1");
+        _m.Ok("", "burn", "t", "seen");
+
+        var (exit, _, err) = Run("tool", "{{t}}");
+
+        Assert.True(exit == 0, err);
+        Assert.Contains("Warning: 't' is a burned value — using it anyway; rotate it after use.", err);
+    }
+
+    // Code review round 1 (Claude M-2): an unusable previous value names no get or add, which act on the current value.
+    [Fact]
+    public void PreviousToken_OnAnUnusablePreviousValue_RefusesWithoutGetOrAdd()
+    {
+        Store("t", HotpUri);
+        _m.Ok("", "burn", "t", "rotating");
+        _m.Ok(Sha1Uri, "ingest", "--rotate", "t");
+        File.WriteAllText(_m.PathOf("f.yaml"), "code: \"\"  # tswap: t:previous\n");
+
+        var token = Run("tool", "{{t:previous}}");
+        var marker = Run("tool", "-f", "{{@f.yaml}}");
+
+        Assert.Equal(1, token.Exit);
+        Assert.Contains(
+            "'{{t:previous}}': the previous value of secret 't' isn't a usable otpauth URI (HOTP (counter-based) URIs aren't supported) " +
+            "and can give no code, so nothing was substituted.", token.Err);
+        Assert.Equal(1, marker.Exit);
+        Assert.Contains(
+            "'# tswap: t:previous' (line 1): the previous value of secret 't' isn't a usable otpauth URI (HOTP (counter-based) URIs aren't supported) " +
+            "and can give no code, so nothing was substituted.", marker.Err);
+        Assert.Equal(0, _pty.Starts);
+        foreach (var err in new[] { token.Err, marker.Err })
+        {
+            Assert.DoesNotContain(" get t", err);
+            Assert.DoesNotContain(" add t", err);
+            AssertNoSeed(err, HotpUri);
+        }
     }
 
     // ── masking ────────────────────────────────────────────────────────────────────

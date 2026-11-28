@@ -103,6 +103,84 @@ public partial class TotpParseTests
     [Fact]
     public void Refusals_CoverTwentyFiveRows() => Assert.Equal(25, Refusals().Count);
 
+    // Code review round 1 (Claude I-1, controller ruling): a value holding more than the one URI is refused.
+    private const string R0Text = "the value holds an otpauth URI among other text; store the URI alone";
+    private const string UriB = "otpauth://totp/New:bob?secret=JBSWY3DPEHPK3PXP&issuer=New";
+    private const string SecretLast = "otpauth://totp/Example:alice?issuer=Example&secret=" + Sha1Seed;
+
+    public static TheoryData<string, string, string> MoreThanOneUri() => new()
+    {
+        { "a newline, then URI B", Sha1 + "&issuer=Old\n" + UriB, R0Text },
+        { "a CR LF, then URI B", Sha1 + "\r\n" + UriB, R0Text },
+        { "a newline, then notes", Sha1 + "&issuer=Old\n\nbackup codes: 1234 5678", R0Text },
+        { "a tab inside", Sha1 + "&issuer=A\tB", R0Text },
+        { "two URIs joined by a space", Sha1 + " " + UriB, R0Text },
+        { "two URIs joined directly", Sha1 + UriB, R0Text },
+        { "a second OTPAUTH: in upper case", Sha1 + "&issuer=OTPAUTH:x", R0Text },
+        { "notes on the same line after the secret", SecretLast + "  notes", "the secret parameter contains a space (a URI's secret is Base32 without spaces)" },
+    };
+
+    [Theory]
+    [MemberData(nameof(MoreThanOneUri))]
+    public void MoreThanTheOneUri_IsRefused_NeverTheFirstUrisCode(string row, string value, string reason)
+    {
+        var ex = Assert.Throws<TotpSeedException>(() => TotpSeed.FromUri(value));
+        Assert.True(reason == ex.Message, $"{row}: expected '{reason}', got '{ex.Message}'");
+        Assert.Equal(ValueKind.OtpAuthUnusable, TotpCodes.Classify(value));
+    }
+
+    // Controller ruling (code review round 1): any raw space outside the secret is refused (RFC 3986 allows none).
+    private const string SpaceText =
+        "white space is not allowed in an otpauth URI; store the URI alone, with any white space in the label or issuer percent-encoded (a space as %20)";
+
+    public static TheoryData<string, string, string> RawSpaces() => new()
+    {
+        { "notes after &issuer=Acme", "otpauth://totp/Example:alice?secret=" + Sha1Seed + "&issuer=Acme  notes", SpaceText },
+        { "a raw space in the label", "otpauth://totp/Acme Co:alice?secret=" + Sha1Seed + "&issuer=Acme", SpaceText },
+        { "a raw space in the issuer", "otpauth://totp/Acme:alice?secret=" + Sha1Seed + "&issuer=Acme Co", SpaceText },
+        { "spaces in the secret and the issuer", "otpauth://totp/X?secret=GEZD GNBV&issuer=Acme Co", SpaceText },
+        // Fix round 3 (MiMo minor): any char.IsWhiteSpace outside the secret, not only U+0020.
+        { "NBSP and notes after &issuer=Acme", "otpauth://totp/Example:alice?secret=" + Sha1Seed + "&issuer=Acme\u00A0notes", SpaceText },
+        { "U+2028 between two parts", "otpauth://totp/Example:alice\u2028?secret=" + Sha1Seed + "&issuer=Acme", SpaceText },
+        { "U+2003 in the label", "otpauth://totp/Acme\u2003Co:alice?secret=" + Sha1Seed, SpaceText },
+        { "U+3000 in the issuer", "otpauth://totp/Acme:alice?secret=" + Sha1Seed + "&issuer=Acme\u3000Co", SpaceText },
+    };
+
+    [Fact]
+    public void NonAsciiIssuerWithoutWhiteSpace_IsAccepted() =>
+        Assert.Equal("050471", CodeOf("otpauth://totp/Acme:alice?secret=" + Sha1Seed + "&issuer=Acme\u00DCnicorn"));
+
+    [Theory]
+    [MemberData(nameof(RawSpaces))]
+    public void RawSpaceOutsideTheSecret_IsRefused(string row, string value, string reason)
+    {
+        var ex = Assert.Throws<TotpSeedException>(() => TotpSeed.FromUri(value));
+        Assert.True(reason == ex.Message, $"{row}: expected '{reason}', got '{ex.Message}'");
+        Assert.Equal(ValueKind.OtpAuthUnusable, TotpCodes.Classify(value));
+    }
+
+    [Fact]
+    public void SpaceInTheLabel_WrittenAsPercent20_GivesTheCode() =>
+        Assert.Equal("050471", CodeOf("otpauth://totp/Acme%20Co:alice?secret=" + Sha1Seed + "&issuer=Acme%20Co"));
+
+    [Theory]
+    [InlineData("\n")]
+    [InlineData("\r\n")]
+    [InlineData(" \t\n")]
+    public void TrailingWhitespace_IsTrimmed_AndGivesTheCode(string tail) =>
+        Assert.Equal("050471", CodeOf(Sha1 + tail));
+
+    // Code review round 1 (Claude M-1): the algorithm's six spellings are matched in ASCII only.
+    [Theory]
+    [InlineData("%C5%BFHA256")] // U+017F LATIN SMALL LETTER LONG S, which upper-cases to 'S'
+    [InlineData("%E2%84%AAHA1")] // not an algorithm either way
+    [InlineData("SHA%E2%80%91256")] // a non-breaking hyphen
+    public void Algorithm_OutsideTheSixAsciiSpellings_IsRefused(string algorithm)
+    {
+        var ex = Assert.Throws<TotpSeedException>(() => TotpSeed.FromUri(Sha1 + "&algorithm=" + algorithm));
+        Assert.Equal("algorithm must be SHA1, SHA256 or SHA512 (or SHA-1, SHA-256, SHA-512)", ex.Message);
+    }
+
     [Theory]
     [InlineData("gezd gnbv gy3t qojq gezd gnbv gy3t qojq", "050471")]
     [InlineData("GeZd GnBv Gy3T QoJq GeZd GnBv Gy3T QoJq", "050471")]

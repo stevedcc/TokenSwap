@@ -152,7 +152,8 @@ public sealed partial class RunCommand : ICliCommand
                 resolved[token] = values.ResolveToken(token);
                 // Warn about a burned value (current or previous), as apply does.
                 if (values.IsBurnedToken(token))
-                    ctx.Console.Error.WriteLine($"Warning: '{token}' is a burned value — using it anyway; rotate it after use.");
+                    ctx.Console.Error.WriteLine($"Warning: '{token}' is a burned value — using it anyway; " +
+                        $"{(values.GaveCode(token) ? values.BurnedSeedAdvice(token) : "rotate it after use")}.");
             }
 
             // Brief T26: the child's environment, kept apart from the argv tokens' values: an env value is

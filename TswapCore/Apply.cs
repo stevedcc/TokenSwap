@@ -129,7 +129,7 @@ public static class Apply
                     quote = "\"";
                 var escapedValue = EscapeForQuote(value, quote);
                 if (burned)
-                    warnings.WriteLine($"Warning: Secret '{secretName}' is burned (line {i + 1}) — applying anyway; rotate this secret after use");
+                    warnings.WriteLine($"Warning: Secret '{secretName}' is burned (line {i + 1}) — applying anyway; {BurnedAdvice(db, secretName)}");
                 // Ensure at least one space before the marker so '#' is a valid YAML comment
                 // (without whitespace, key: "value"# tswap: name is not a comment in YAML)
                 var sep = whitespace.Length > 0 ? whitespace : " ";
@@ -149,7 +149,7 @@ public static class Apply
                     RefuseControlCharactersOnEnvLine(prefix, value, secretName, i + 1);
                     var escapedValue = EscapeForQuote(value, "\"");
                     if (burned)
-                        warnings.WriteLine($"Warning: Secret '{secretName}' is burned (line {i + 1}) — applying anyway; rotate this secret after use");
+                        warnings.WriteLine($"Warning: Secret '{secretName}' is burned (line {i + 1}) — applying anyway; {BurnedAdvice(db, secretName)}");
                     lines[i] = $"{prefix}\"{escapedValue}\"  {markerPart}";
                     Report(secretName, value, escapedValue);
                 }
@@ -164,6 +164,13 @@ public static class Apply
         return (string.Join('\n', lines),
             applied.Select(r => (r.Name, r.Raw, (IReadOnlyList<string>)r.WrittenForms)).ToList());
     }
+
+    /// <summary>
+    /// The end of a burned line's warning: rotate, or for a marker that gave a TOTP code (code review round 1), the
+    /// advice to replace the seed, which can't be rotated.
+    /// </summary>
+    private static string BurnedAdvice(ISecretLookup db, string marker) =>
+        db is Totp.CommandValues values && values.GaveCode(marker) ? values.BurnedSeedAdvice(marker) : "rotate this secret after use";
 
     /// <summary>
     /// Brief T20 (#315): a line whose separator (the last non-space character of the prefix) is

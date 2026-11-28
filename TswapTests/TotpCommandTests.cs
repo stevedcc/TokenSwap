@@ -38,7 +38,7 @@ public sealed class TotpCommandTests : IDisposable
     private static string[] Lines(string text) => text.Split('\n', StringSplitOptions.RemoveEmptyEntries);
 
     [Fact]
-    public void LastMillisecondOfAStep_OneMoreSecond_Singular()
+    public void LastSecondOfAStep_OneMoreSecond_Singular()
     {
         _m.Ok(Sha1Uri, "ingest", "t");
 
@@ -96,7 +96,8 @@ public sealed class TotpCommandTests : IDisposable
         Assert.True(exit == 0, err);
         Assert.Equal("050471\n", outText);
         var lines = Lines(err).ToList();
-        var warning = lines.IndexOf("Warning: 't' is a burned value — using it anyway; rotate it after use.");
+        var warning = lines.IndexOf(
+            "Warning: 't' is a burned value — using it anyway; the seed was seen; ask the service for a new one and pipe its URI to tswap ingest --rotate t.");
         var validity = lines.IndexOf("Valid for 29 more seconds (a new code every 30 seconds).");
         Assert.True(warning >= 0 && validity > warning, err);
     }

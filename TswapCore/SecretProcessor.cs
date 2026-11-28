@@ -15,6 +15,14 @@ public sealed record MultiLineDiff(int LineNumber, int LastLineNumber, string Be
     : LineDiff(LineNumber, Before, After);
 
 /// <summary>
+/// Brief T63 (#419): a continuation line of a replaced value that <c>tocomment</c> would have removed, commented out
+/// (<c># </c> after its indentation) because it holds a stored value. Its text can hold a fragment of the replaced
+/// value, as a removed line can, so it is never printed (<c>--dry-run</c> shows
+/// <c>[continuation line holding a stored value]</c>).
+/// </summary>
+public sealed record CommentedLineDiff(int LineNumber, string Before, string After) : LineDiff(LineNumber, Before, After);
+
+/// <summary>
 /// Brief T22 (#319): a line <c>tocomment</c> left as it was because it is YAML block-scalar content
 /// holding an encoded form (base64, base64url, whitespace-stripped) of the value of <see cref="Token"/>
 /// (<c>name</c> or <c>name:previous</c>): a marker is filled with the plain value, so replacing it would
@@ -31,6 +39,12 @@ public enum SkippedReason
 
     /// <summary>A plain value on a line of YAML block-scalar content that T22 leaves whole, or a multi-line value inside one.</summary>
     InBlockScalar,
+
+    /// <summary>
+    /// Brief T63 (#419): a continuation line of a replaced value (indented deeper, base64-like) that tocomment would have
+    /// removed; it holds a stored value, so it was commented out instead.
+    /// </summary>
+    ContinuationLine,
 }
 
 /// <summary>

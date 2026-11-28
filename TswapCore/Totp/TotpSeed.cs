@@ -22,6 +22,8 @@ public enum TotpAlgorithm
 public sealed class TotpSeed : IDisposable
 {
     internal const string R0 = "the value holds an otpauth URI among other text; store the URI alone";
+    internal const string R0Space =
+        "white space is not allowed in an otpauth URI; store the URI alone, with any white space in the label or issuer percent-encoded (a space as %20)";
     internal const string R1 = "the URI doesn't start with otpauth://";
     internal const string R2 = "HOTP (counter-based) URIs aren't supported";
     internal const string R3 = "the URI's type isn't totp";
@@ -89,6 +91,15 @@ public sealed class TotpSeed : IDisposable
     {
         var text = value.Trim();
         if (!text.StartsWith("otpauth:", StringComparison.OrdinalIgnoreCase)) throw new TotpSeedException(R0);
+        // Code review round 1 (controller ruling, fail closed): the value is the one URI and nothing else. A control
+        // character (a line break, a tab) or a second otpauth: means more text, such as a replacement URI or notes, so
+        // the first URI's code is never given from it.
+        if (text.Any(char.IsControl) || text.IndexOf("otpauth:", 1, StringComparison.OrdinalIgnoreCase) >= 0)
+            throw new TotpSeedException(R0);
+        // Controller ruling (code review round 1): RFC 3986 allows no raw space. One in the secret's value keeps R14 (its
+        // own text, checked with the values); one anywhere else is R0's space text. Fix round 3: any white space
+        // (char.IsWhiteSpace: NBSP, U+2000-200A, U+2028/2029, U+3000, ...), not only U+0020; %20 is not white space.
+        if (OutsideTheSecret(text).Any(char.IsWhiteSpace)) throw new TotpSeedException(R0Space);
         if (!text.StartsWith("otpauth://", StringComparison.OrdinalIgnoreCase)) throw new TotpSeedException(R1);
 
         var rest = text["otpauth://".Length..];
@@ -139,13 +150,27 @@ public sealed class TotpSeed : IDisposable
         return new TotpSeed(Decode(canonical), TotpAlgorithm.Sha1, 6, 30, canonical, null, null);
     }
 
-    private static TotpAlgorithm ParseAlgorithm(string text) => text.ToUpperInvariant() switch
+    // Code review round 1: the six spellings in ASCII only, case ignored ordinally (no culture or invariant upper-casing,
+    // which would map U+017F to 'S').
+    /// <summary><paramref name="text"/> with the raw values of its <c>secret</c> parameters left out.</summary>
+    private static string OutsideTheSecret(string text)
     {
-        "SHA1" or "SHA-1" => TotpAlgorithm.Sha1,
-        "SHA256" or "SHA-256" => TotpAlgorithm.Sha256,
-        "SHA512" or "SHA-512" => TotpAlgorithm.Sha512,
-        _ => throw new TotpSeedException(R10),
-    };
+        var queryStart = text.IndexOf('?');
+        if (queryStart < 0)
+            return text;
+        var pieces = text[(queryStart + 1)..].Split('&')
+            .Select(p => p.StartsWith("secret=", StringComparison.Ordinal) ? "secret=" : p);
+        return text[..(queryStart + 1)] + string.Join('&', pieces);
+    }
+
+    private static TotpAlgorithm ParseAlgorithm(string text)
+    {
+        bool Is(string spelling) => System.Text.Ascii.EqualsIgnoreCase(text, spelling);
+        return Is("SHA1") || Is("SHA-1") ? TotpAlgorithm.Sha1
+            : Is("SHA256") || Is("SHA-256") ? TotpAlgorithm.Sha256
+            : Is("SHA512") || Is("SHA-512") ? TotpAlgorithm.Sha512
+            : throw new TotpSeedException(R10);
+    }
 
     private static int ParseDigits(string text) => text switch
     {
