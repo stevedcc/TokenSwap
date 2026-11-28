@@ -31,7 +31,8 @@ test failure text contains a value, a seed or an export link's data.
 
 **Test first, every task:** for each test below, write the test, run it and quote the failure, then write the code.
 Where a task changes only comments or docs, say so in the commit message and show the grep or test run that proves
-the result instead.
+the result instead. Where a test pins behaviour that already exists (Task 2's gap tests), it passes as soon as it is
+written; then its break-it-once mutation is the evidence: quote the failure under the mutation instead.
 
 **One task per issue; each commit closes its issue** (`Closes #n` in the message), except Task 2, which says
 `Part of #435` (one item moves after T60, see Task 2). The tasks are independent: any order; the suggested order is 1,
@@ -138,7 +139,7 @@ No docs. Release note: none (tests and comments).
 | Test (file) | Setup | Outcome |
 |---|---|---|
 | `Reindex_Twice_TheSecondRewritesNothing` (`ValueKindsTests`) | as `RecordAsOldBuildsWriteIt_…`: ingest `t` = `Sha1Uri`, `p1`, `p2`; `Unmark("t")`; `Reindex()`; then read the bytes of every record file; `Reindex()` again | the second output contains `✓ Reindexed: 0 record(s) rewritten`; every record file's bytes are unchanged; `NamesTail("t")` is ` [TOTP]` |
-| `Reindex_AFormatTwoTotpRecord_IsMarked` (`VaultReindexTests`, its format 2 fixture; add `using static TswapTests.Totp.OtpNetContractTests;` for `Sha1Uri`) | `_m.Ok(Sha1Uri, "ingest", "t")`; assert the file is format 2 (`SecretRecordCodec.FormatVersionOf`) and `ValueKinds.Entries(ReadRecord(_m, _key, "t").Extensions)` is null; `vault reindex` | the file is format 3 and `ValueKinds.Entries(...)` is `[new Entry(record.Version, 1)]` |
+| `Reindex_AFormatTwoTotpRecord_IsMarked` (`VaultReindexTests`, its format 2 fixture; add `using static TswapTests.Totp.OtpNetContractTests;` for `Sha1Uri` and `using TswapCore.Totp;` for `ValueKinds`) | `_m.Ok(Sha1Uri, "ingest", "t")`; assert the file is format 2 (`SecretRecordCodec.FormatVersionOf`) and `ValueKinds.Entries(ReadRecord(_m, _key, "t").Extensions)` is null; `vault reindex` | the file is format 3 and `ValueKinds.Entries(...)` is `[new Entry(record.Version, 1)]` |
 | `Period1_PrintsEverySecond` (`TotpCommandTests`, existing) | unchanged | **add** `Assert.Equal("073950\n", outText);` after the existing `Assert.Matches` (kept) |
 | `ToComment_AnExistingTotpMarker_IsConsumed` (new file `TswapTests/Totp/TotpMarkerRegexTests.cs`) | a `SecretsDb` as `RedactEngineTests.Db` builds it, `pw` = `s3cr3t-value1`; `Redact.ToComment("password: \"s3cr3t-value1\"  # tswap: other:totp", db)` | content `password: ""  # tswap: pw`, one change |
 | `ToComment_AMultiLineValue_ConsumesATotpMarker` (same file) | `s` = `line-one\nline-two`; `Redact.ToCommentReport("token: line-one\nline-two  # tswap: old-name:totp\n", db)` | `Content` is `token: ""  # tswap: s\n`, `Skipped` empty |
@@ -230,10 +231,14 @@ either case.
 
 ### Tests
 
-Values: `Link = "otpauth-migration://offline?data=bm90IGEgcmVhbCBwYXlsb2Fk"` (base64 of `not a real payload`; no real
-seed is needed, since nothing decodes it) and `Data = "bm90IGEgcmVhbCBwYXlsb2Fk"`.
+Values: `internal const string Link = "otpauth-migration://offline?data=bm90IGEgcmVhbCBwYXlsb2Fk"` (base64 of `not a
+real payload`; no real seed is needed, since nothing decodes it) and `internal const string Data =
+"bm90IGEgcmVhbCBwYXlsb2Fk"`, both in `ExportLinkTests` (below); `TotpParseTests` and `BrokerTotpTests` use them as
+`ExportLinkTests.Link`.
 
-`ExportLink_IsRefused_WithItsOwnReason(string value)` (`TotpParseTests`, new theory): `TotpSeed.FromUri(value)`
+`ExportLink_IsRefused_WithItsOwnReason(string value)` (`TotpParseTests`, new theory over a
+`public static TheoryData<string> ExportLinks()`, as the file's other theories take `MemberData`, since row 2 is no
+constant): `TotpSeed.FromUri(value)`
 throws `TotpSeedException` with `Reason == RExport`, and `TotpCodes.Classify(value)` is `OtpAuthUnusable`:
 
 | # | Value |
@@ -285,7 +290,8 @@ Break it once:
   authenticator's export link, such as Google Authenticator's "Transfer accounts" QR code, which holds the seeds of
   several accounts): it is refused wherever tswap gives a value or a code (`run`, `apply`, `totp`, the broker),
   with or without sudo; only `sudo tswap get` and `sudo tswap export` show it, and its payload is never read. Store
-  each account's `otpauth://totp/` URI on its own."
+  each account's `otpauth://totp/` URI on its own. An `otpauth://totp/` URI whose label or issuer holds
+  `otpauth-migration:` is refused too (percent-encode it)."
 - `docs/security-model.md:385`: "a value holding `otpauth:` or `otpauth-migration:` (an export link, refused
   wherever a value or a code is given; only `sudo tswap get` and `export` show it) is an otpauth record".
 - `docs/BROKER.md:947`: "(a value holding `otpauth:` or `otpauth-migration:`, #374, #436)".
@@ -294,7 +300,8 @@ Release note: "A value holding an authenticator export link (`otpauth-migration:
 QR code) is now refused wherever tswap gives a value or a code (`run`, `apply`, `totp`, the broker); only `sudo tswap
 get` and `export` show it. `run`, `totp` and `rotate` refuse it at once; `names` marks it ` [OTPAUTH: unusable]` from
 the record's next write or `sudo tswap vault reindex`. An older tswap on another machine still hands it out, so update
-every machine. Store each account's otpauth URI on its own." Not in scope: a sudo-only import that splits a link into one record per
+every machine. Store each account's otpauth URI on its own. An `otpauth://totp/` URI whose label or issuer holds
+`otpauth-migration:` is now refused too (percent-encode it)." Not in scope: a sudo-only import that splits a link into one record per
 account (the issue's "optionally, later"; it would need a protobuf reader).
 
 ## Task 4 (#434): `redact` and `run` take a lone CR as a line break; the T63 review Minors
@@ -364,8 +371,9 @@ views already scanned):
   the view array returned with `clearArray: true`).
 - **One hit per raw start and candidate, the earliest view's** (as `Entries` does for `redact`). Each found hit
   carries its view's index internally: 0 raw, 1 folded, 2 unfolded, 3 `\n`, 4 `\r\n`, 5 `\r` (the order `Scan`
-  scans them, the same as `ViewHits`); `ScanState.Hits` keeps the index with each hit, so a carried hit keeps its
-  own. Before today's sort (`:310-320`; the whitespace-run hits of `TryFoldedWhitespaceRun` count as folded, 1), of hits with equal `Start`, `Name`, `IsPrevious` and `Kind`, keep only the
+  scans them, the same as `ViewHits`); `ScanState.Hits` keeps the hits before this deduplication (as it keeps
+  them before the whole-token filter today), each with its index and its entry length, so a carried hit keeps both. Before today's sort (`:310-320`; the whitespace-run hits of `TryFoldedWhitespaceRun` count as folded, 1), of hits with equal `Start`, `Name`, `IsPrevious`, `Kind` and entry length (the view window's length `L`, which
+  `redact`'s `Entries` also keys on through the entry's text), keep only the
   one with the lowest view index (the first found on a tie); then sort and drop equal spans as today. Two such hits
   are the same entry found over the same value text, so either covers every character of the value; they differ only
   in which break characters the span takes. Without this, `Scan_LineEndings_ExactlyOneHit`'s row
@@ -378,9 +386,12 @@ views already scanned):
   `held − state.Pending` (0 when that is negative; the continuation check compares those `carried` characters), and
   a hit is carried only when `hit.Start >= state.Pending && hit.Start + hit.Length <= held`. A raw window ending at
   that `\r` is then tried again, and a view hit ending there comes only from the new window's own views. Without this,
-  a window ending in the `\r` of a `\r\n` carries a hit in which that `\r` stood for a whole break (the `\n` view of
-  `abc\r` matches `abc\n`), which a fresh scan of the next window, seeing `abc\r\n`, doesn't report: the carried
-  state would no longer give a fresh scan's hits. `ScanState`'s summary (`:195-202`) says the next window "continues
+  a window ending in the `\r` of a `\r\n` carries a hit in which that `\r` stood for a whole break, which a fresh scan
+  of the next window, seeing the `\r\n`, reports with the longer span. When the hit holds no other lone `\r`, the
+  folded view (index 1) finds the longer span too and the deduplication drops the stale one, so nothing shows. When it
+  does hold one (`line-one-secret\rline-two-secret\r` cut before the final `\n`), only the `\n` view (index 3) finds
+  either span: the carried `(2, 32)` and the fresh `(2, 33)` tie on the view index, the carried one is found first, and
+  it is kept. Then the carried state no longer gives a fresh scan's hits, and `run` lets the `\n` through. `ScanState`'s summary (`:195-202`) says the next window "continues
   it up to `held` (the last window without a trailing `\r`)" instead of "starts with the held end of the last one".
 - **The window rule stays exact.** `MaxRawLength`, the caps, `PendingFromCore` and `FingerprintStreamMatcher`'s
   `MaxMatchLength` don't change, because every new hit obeys the bounds they already assume. Take a free entry of
@@ -415,8 +426,12 @@ form with every line break as a lone `\r`; a spelling with only lone `\r` breaks
   corpus change does, apply the owner-sanctioned T63 rule written in brief T63 (Task 1, "Oracle") to
   `PlaintextRedactOracle`: a continuation candidate that holds a value is commented out (or kept in block content),
   never removed." `PlaintextRedactOracle.cs` doesn't change.
+- `FingerprintScannerTests.Scan_RawHits_EqualFingerprintIndexScan`'s summary: "Its only other hits are folded,
+  unfolded (brief T50a) or, brief T65, from the views with every break written as `\n`, `\r\n` or `\r`". Its
+  assertions stay; if it fails on a hit from a new view, stop and report.
 - `FieldSecretCheck.cs`: re-wrap the class summary (`:7-17`) at 120 columns; no word changes.
-- `ToCommentContinuationCommandTests`: **add** `Assert.Single(Regex.Matches(dryErr, "Warning: line 2: "));` and the
+- `ToCommentContinuationCommandTests` (add `using System.Text.RegularExpressions;`): **add**
+  `Assert.Single(Regex.Matches(dryErr, "Warning: line 2: "));` and the
   same for `stderr`, after the existing assertions (they stay).
 
 ### Tests
@@ -454,9 +469,11 @@ Facts:
   index.
 - `HasLoneCr`: `"a\rb"`, `"a\r"`, `"\r\r\n"` → true; `"a\r\nb"`, `"a\nb"`, `""` → false.
 - `Scan_CarriedState_WindowEndingInACr_SameHitsAsFreshScan` (`FingerprintScannerTests`): stored
-  `"line-one-secret\nline-two-secret\n"`; text `"x line-one-secret\r\nline-two-secret\r\n y"`. For every cut `c` from 1
-  to `text.Length − 1`: a fresh state; scan `text[..c]` with it, take `PendingFrom(text[..c], state)`, then scan
-  `text[..c][pending..] + text[c..]` with the state; the hits equal a fresh `Scan` of that window.
+  `"line-one-secret\nline-two-secret\n"`; text `"x line-one-secret\rline-two-secret\r\n y"` (the first break a lone `\r`, so only the `\n` view
+  finds the value). For every cut `c` from 1 to `text.Length − 1`: a fresh state; scan `text[..c]` with it, take
+  `PendingFrom(text[..c], state)`, then scan `text[..c][pending..] + text[c..]` with the state; the hits equal a fresh
+  `Scan` of that window. The cut that pins the rule is `c = 34` (the window ends in the `\r` at index 33): the window's
+  hit is `(2, 32)`, the next window's fresh hit `(2, 33)`.
 - `Scan_CarriedState_MixedBreaks_SameHitsAsFreshScan`: `Scan_CarriedState_SameHitsAsFreshScan`'s loop (seed 5150,
   120 rounds, its `RandomVault`/`PlantedText`), with each line break of the planted text (`\r\n`, a lone `\r`, `\n`)
   rewritten as one of the three at random (`rng.Next(3)`) before chunking.
@@ -491,6 +508,9 @@ Facts:
   150 rounds, `RandomVault`) over a `PlantedText` copy that rewrites each line break of every planted form and filler
   piece (`\r\n`, a lone `\r`, `\n`) as one of the three at random before appending it, so the planted spans stay
   right; for every planted `[start, end)` and every cut inside it, `scanner.PendingFrom(text.AsSpan(0, cut)) <= start`.
+  Each round's vault also holds `long` = two lines of 127 characters of `Word` (as `RandomVault` draws them) joined by
+  `\n` (`L` = 255, `W` = 1, so `L + W` = 256 and `_capFree` is 256: the cap is reached), planted once as its CRLF
+  form (256 characters, every break `\r\n`, not rewritten) besides its rewritten forms.
 
 Break it once:
 1. drop the three new views from `ViewHits`: `Redact_…` rows 1-6 and 8 must fail;
@@ -498,28 +518,37 @@ Break it once:
    length);
 3. drop the three new views from `FingerprintScanner.Scan`: `Scanner_…` rows 1-6 and 8,
    `Run_AnotherVaultValue_…` and the chunked test must fail;
-4. drop the trailing-`\r` rule from the carry: `Scan_CarriedState_WindowEndingInACr_…` must fail (if
-   `Scan_CarriedState_MixedBreaks_…` fails too, say so);
+4. drop the trailing-`\r` rule from the carry: `Scan_CarriedState_WindowEndingInACr_…` must fail at `c = 34`, and
+   `Run_ChunkedThroughTheMatcher_SameOutputForEveryChunkSize` at chunk sizes 1, 2, 17 and 34 (a chunk boundary between
+   the first occurrence's final `\r` and `\n`, index 34); if `Scan_CarriedState_MixedBreaks_…` fails too, say so;
 5. drop the `\r` form from `Redaction.Variants`: `Variants_HoldTheLoneCrForm` must fail
    (`Run_ItsOwnValue_…` still passes, since the vault's fingerprints mask it too; say so);
 6. write the warnings twice in `ToCommentCommand` (call `WriteWarnings` a second time at `:94`): the
    `ToCommentContinuationCommandTests` additions must fail;
 7. drop the scanner's per-start deduplication: `Scan_LineEndings_ExactlyOneHit`'s `abc def-gh\r` row and
    `Matcher_AValueEndingInACr_PrintedWithLf_KeepsTheLineFeed` must fail;
-8. in `PendingFromCore`, count a `\r` of a `\r\n` as whitespace too (drop the pair test at `:384`) or hold one
-   character less (`n - (_capFree - 1)` to `n - (_capFree - 2)`): `PendingFrom_IsSound_MixedBreaks` must fail for at
-   least one of the two; name which.
+8. two mutations of `PendingFromCore`'s free clause, each on its own:
+   - (a) a trailing `\r` is not held: `if (n > 0 && text[n - 1] == '\r') start = n;` before `pending = Math.Min(pending,
+     start)`. `PendingFrom_IsSound_MixedBreaks` must fail at a cut just after a `\r` inside a planted multi-line form
+     (the other classes' trailing runs end at that `\r`, so nothing else holds it); `PendingFrom_IsSound` fails too;
+   - (b) one character less: `n - (_capFree - 1)` to `n - (_capFree - 2)`. `PendingFrom_IsSound_MixedBreaks` must fail
+     on `long`'s CRLF form at the cut `start + 255`: the free clause then gives `start + 1`, and the whitespace-free and
+     base64 clauses give at least the start of the trailing line (`start + 129`).
 
 After the task, run
 `TSWAP_PERF=1 dotnet test TswapTests -c Release --filter Category=Perf --logger "console;verbosity=detailed"` (the
 test's own Release command) once on this commit and once on the commit before Task 4's (the tasks may land in any
-order), and put both throughput lines in the report (measured, not asserted; the `\r` view adds one scan per window with a line break when
-the vault has multi-line values).
+order), and put both throughput lines in the report (measured, not asserted). The `\r` view adds one scan of every window that holds a `\n` whenever the vault has a
+free entry (a value with any whitespace, a space is enough), and the `\n` and `\r\n` views one each when a window
+holds a lone `\r`. `redact` gains up to three index scans per file; it has no perf test, so none is measured.
 
 **Docs** (small; `commands.md` and `security-model.md` are T60/T61's):
 - `docs/commands.md:84-85`: "`redact` masks a value with line breaks whatever the line breaks of the value and of the
   file (`\r\n`, `\n` or, since 0.3.3, a lone `\r`, in any mix); a value whose own breaks are mixed is
   found in its own spelling only."
+- `AGENTS.md:256` ("and a multi-line value's `\r\n`, `\n` and PTY-printed forms") and `docs/security-model.md:412-413`
+  ("its `\r\n` and `\n` forms and the form a terminal prints"): add the lone-`\r` form ("`\r\n`, `\n`, lone-`\r` and
+  PTY-printed forms"; "its `\r\n`, `\n` and lone-`\r` forms and the form a terminal prints").
 - `docs/security-model.md:298`: "the `\r\n`, `\n`, lone-`\r` and PTY-printed forms of a multi-line value";
   `:302`: "through a pipe (line breaks as stored, or all written as `\n`, `\r\n` or a lone `\r`; a value whose own
   breaks are all one kind is found whatever the output's mix)".
@@ -539,6 +568,9 @@ Release note: "`redact` and `run` now also mask a multi-line value printed with 
 - Any code change in a T60, T61 or T64 file; the broker's refusal text (`OtpAuthUri.BrokerRefusal` says "(an
   otpauth:// URI)" for an export link too; it is pinned by `BrokerTotpTests`' `Refusal` constant, so it stays).
 
+In the report, also propose a follow-up issue for the broker's and `rotate`'s refusal texts, which call an export link
+"a TOTP seed (an otpauth:// URI)" and "a TOTP seed, which comes from the issuer".
+
 In your report, give the release-note lines above (one per issue; "none" for #440 and #435), the two perf lines, and
 the proposed issues (#435.7, `tocomment` and a lone `\r`).
 
@@ -556,3 +588,14 @@ the proposed issues (#435.7, `tocomment` and a lone `\r`).
     (the Release perf command, against the commit before Task 4), M-8 (the fake's `ThrowIfUnreadable`, the `using
     static`, `Assert.Single`, `MsysTargetTests`), M-9 (the `ReferenceEquals` dependency noted in Task 2), M-10
     ("case ignored").
+- **Round 2 (MiMo r2 ready; GLM r2 not ready, 2 Important, 9 Minor; controller rulings).**
+  - I-1: `Scan_CarriedState_WindowEndingInACr_…` uses `x line-one-secret\rline-two-secret\r\n y`, which fails without
+    the carry rule at `c = 34`; the design text says why a hit without another lone `\r` hides it (the folded view
+    and the deduplication); break-it-once 4 also names the chunked matcher test at chunk sizes 1, 2, 17 and 34.
+  - I-2: break-it-once 8 uses "a trailing `\r` is not held"; `PendingFrom_IsSound_MixedBreaks` plants a 256-character
+    CRLF value (`L + W` = 256) so the cap path is reached, and the one-less mutation fails at `start + 255`.
+  - Minors: the lone-`\r` form in `AGENTS.md:256` and `security-model.md:412-413`; the percent-encode note in the
+    docs and release note; a proposed issue for the broker and `rotate` texts; `Scan_RawHits_…`' summary; `Link` and
+    `Data` in `ExportLinkTests`, `MemberData` for the theory, the missing usings; Task 2's gap tests take their
+    break-it-once as evidence; the entry length in the dedup key; `ScanState.Hits` keeps the pre-dedup hits; the perf
+    wording.
