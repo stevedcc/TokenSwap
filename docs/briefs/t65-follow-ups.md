@@ -428,8 +428,8 @@ views already scanned):
 holding a `\r` or a `\n`, and builds `[spelling, WithLineBreaks(spelling, "\r\n"), WithLineBreaks(spelling, "\n"),
 spelling.Replace("\n", "\r\n"), WithLineBreaks(spelling, "\r")]`. For a spelling without a lone `\r` the first four
 are today's four, in today's order (`WithLineBreaks(s, "\n")` is then `s.Replace("\r\n", "\n")`), so only the `\r`
-form and its encodings are new. RedactingPty's hold is the longest replacement minus one (`StreamRedactor`
-constructor, RedactingPty 1.3.0), and `FingerprintStreamMatcher`'s short-form holds come from the list
+form and its encodings are new. RedactingPty's hold is the longest `Find.Length − 1` (`StreamRedactor.cs:40`, RedactingPty
+1.3.0), and `FingerprintStreamMatcher`'s short-form holds come from the list
 (`FingerprintStreamMatcher.cs:49-56`): both follow the new forms with no change. The summary adds "and, brief T65, its
 form with every line break as a lone `\r`; a spelling with only lone `\r` breaks gets the same list".
 
@@ -637,7 +637,8 @@ All in `TswapCore/Validation.cs`; cited lines at f2e3a5a. The refusal's `Program
    lines above: `private static readonly HashSet<string> WslgValued = new(StringComparer.Ordinal) { "-d",
    "--distribution", "-u", "--user", "--cd" };`. `WalkWsl(string program, List<string> args)` keeps its signature and
    sets `var wslg = program.Equals("wslg", StringComparison.OrdinalIgnoreCase);`. For wslg: the valued set is
-   `WslgValued`; `--shell-type` and `--` as today; `--system`, `-e`/`--exec`, `WslManagement`, `--debug-shell` and
+   `WslgValued`; `--shell-type` and `--` as today, except that an invalid `--shell-type` value (rows 21-22) takes the `-` rule's verdict
+   too; `--system`, `-e`/`--exec`, `WslManagement`, `--debug-shell` and
    `--install` are **not** recognised, so they fall to the `-` rule, whose verdict is `new(program, WslgUnknownReason)`.
    For wsl every branch stays as it is.
 5. **The value rule, both grammars** (fail closed). After a valued option (the `WslValued`/`WslgValued` branch,
@@ -669,8 +670,8 @@ All in `TswapCore/Validation.cs`; cited lines at f2e3a5a. The refusal's `Program
    - `WslgShellModeReason` = `"'wslg' without --shell-type none runs its command line through the Linux shell (the
      user's login shell by default), which parses a substituted value again and can transform and print secrets past
      redaction. Give the command after --shell-type none: 'wslg --shell-type none ./deploy.sh {{secret}}'. " + WayOut`
-   - `WslgUnknownReason` = `"'wslg': an option this check doesn't know (wslg.exe takes only -d, --distribution, -u,
-     --user, --cd, --shell-type and --, matched exactly, and has no -e), so it can't tell what wslg runs. Give the
+   - `WslgUnknownReason` = `"'wslg': an option or a value this check doesn't know (wslg.exe takes only -d, --distribution, -u,
+     --user, --cd, --shell-type (login, standard or none) and --, matched exactly, and has no -e), so it can't tell what wslg runs. Give the
      command after --shell-type none: 'wslg --shell-type none ./deploy.sh {{secret}}'. " + WayOut`
    - `PaddedWslgReason` = `@"'wslg' written with quote characters, surrounding white space, or a trailing dot, '\' or
      '/' can't be checked: run reads it as another program, but Windows starts wslg.exe, which runs its command line
@@ -689,7 +690,7 @@ All in `TswapCore/Validation.cs`; cited lines at f2e3a5a. The refusal's `Program
    the rest of such a value would begin a shell-mode command."
 
 `GetBlockedInvocation` runs before `BashLauncherRefusal` in `run` (`RunCommand.cs:89`, `:97`), so a padded `wslg` that
-`ProgramName` still reads as `wslg` (`wslg.exe.`, `wslg.exe:x`) gets `CheckWsl`'s verdict first; `"wslg"`, ` wslg`,
+`ProgramName` still reads as `wslg` (`wslg.exe.`, `wslg.exe:x`, and a trailing space, which `WindowsFileName` trims, so P15-P16 only through `BashLauncherRefusal`) gets `CheckWsl`'s verdict first; `"wslg"`, ` wslg`,
 `wslg/` and `wslg::$DATA` aren't `wslg` to `ProgramName` and get `PaddedWslgReason`. The broker's templates use
 `GetBlockedInvocation` (`BrokerTemplatePolicy.cs:265`) and so refuse wslg's shell mode too; nothing there changes.
 `env … wslg` is refused as `env` already (`BlockedCommands`, `:76`).
@@ -701,8 +702,8 @@ Write each test, run it and quote the failure, then write the code.
 New file `TswapTests/WslgWalkTests.cs`, class `WslgWalkTests`, with the texts written out as test constants:
 `WslgShell`, `WslgUnknown`, `PaddedWslg` (each exactly as in Design 8, with `Validation.WayOutFor(false)` for
 `WayOut`), `QuotedValue(name)` (the function's text), `NoCommand(p)` = `$"'{p}' with no command starts a shell reading
-stdin, which can transform and print secrets past redaction. {Validation.WayOutFor(false)}"`, `WslShell` (as
-`InlineCodeBlockTests.WslShellReason`), and `Runs(p, inner)` = `$"'{p}' runs '{i.Program}': {i.Reason}"` with `i =
+stdin, which can transform and print secrets past redaction. {Validation.WayOutFor(false)}"`, `WslShell` (written out as
+`InlineCodeBlockTests.WslShellReason` writes it, `InlineCodeBlockTests.cs:982`: that constant is private, so the text is copied, not referenced, and stays private), and `Runs(p, inner)` = `$"'{p}' runs '{i.Program}': {i.Reason}"` with `i =
 Validation.GetBlockedInvocation(inner)` (asserted not null), as `Wsl_ByItsOwnWalk_IsRefused` builds its inner case.
 
 **`GetBlockedInvocation_IsRefused(string[] argv, string program, string reason)`** (`MemberData`): the refusal is
@@ -802,6 +803,8 @@ result is null, else exactly `new BlockedInvocation(program, reason)`; `Off` is
 | P12 | `find . -exec "wslg" ./x.sh ;` | true | `wslg` | `PaddedWslg` |
 | P13 | `uv run "wslg" ./x.sh {{x}}` | true | `wslg` | `PaddedWslg` |
 | P14 | `wsl -e "wslg.exe" ./x.sh {{x}}` | true | `wslg` | `"'wsl' runs 'wslg': " + PaddedWslg` |
+| P15 | `wslg  ./deploy.sh {{x}}` (the word is `wslg` and a space) | true | `wslg` | `PaddedWslg` |
+| P16 | `wslg.exe  --shell-type none ./deploy.sh {{x}}` (the word is `wslg.exe` and a space) | true | `wslg` | `PaddedWslg` |
 | E1 | `wslg --shell-type none bash.exe ./x.sh {{x}}` | true | `bash.exe` | `"'wslg' runs 'bash.exe': " + Off` |
 | E2 | `wslg -d Ubuntu -u app --cd /srv --shell-type none /mnt/c/Windows/System32/bash.exe ./x.sh {{x}}` | true | `bash.exe` | `"'wslg' runs 'bash.exe': " + Off` |
 | E3 | `wslg --shell-type none -- BASH.EXE ./x.sh {{x}}` | true | `bash.exe` | `"'wslg' runs 'bash.exe': " + Off` |
@@ -837,14 +840,14 @@ result is null, else exactly `new BlockedInvocation(program, reason)`; `Off` is
   {{d}} makes this a command 'run' refuses`, and neither `My Distro` nor `Value` is in stdout or stderr.
 
 **Break it once** (each in the commit message, with the failing rows quoted):
-1. drop `"wslg"` from `Wrappers`: rows 1-35 and 37-45 (allowed), `ProgramWords_…`, `GetFileTokenRefusal_…` and
+1. drop `"wslg"` from `Wrappers`: rows 1-45 (allowed), `ProgramWords_…`, `GetFileTokenRefusal_…` and
    `Wslg_IsRefusedBeforeUnlock` must fail;
-2. drop the `wslg` half of `CheckWrapper`'s condition (Design 3): rows 1 and 13 must fail (the generic wrapper walk
-   lets them through);
-3. give wslg wsl's grammar (make `wslg` false in `WalkWsl`): rows 13-20 must fail (13-18 allowed, 19-20
-   `NoCommand`);
+2. drop the `wslg` half of `CheckWrapper`'s condition (Design 3): rows 1, 13 and 37-45 must fail (the generic wrapper walk
+   lets them through; rows 37-45 no longer reach wslg's own walk);
+3. give wslg wsl's grammar (make `wslg` false in `WalkWsl`): rows 13-26 must fail (13-18 allowed, 19-20
+   `NoCommand`, 21-26 get wsl's own verdicts, not `WslgUnknown`);
 4. drop the value rule (Design 5): rows 31-32 and 46-53 and `ADistroNameWithASpace_…` must fail;
-5. drop the `wslg` test from `NameBashWord.Names`: P1-P14 must fail (P1-P13 get `PaddedWrapperReason("wslg")`, the
+5. drop the `wslg` test from `NameBashWord.Names`: P1-P16 must fail (P1-P13, P15 and P16 get `PaddedWrapperReason("wslg")`, the
    word now being a wrapper) and `QuotedWslg_IsRefusedBeforeUnlock`;
 6. call `WalkWsl("wsl", args)` and write `'wsl' runs` in `WslRule`: E1-E7 must fail (on the prefix; E1 also when the
    walk is wsl's);
@@ -926,6 +929,9 @@ the proposed issues (#435.7, `tocomment` and a lone `\r`, the broker template pl
     `Data` in `ExportLinkTests`, `MemberData` for the theory, the missing usings; Task 2's gap tests take their
     break-it-once as evidence; the entry length in the dedup key; `ScanState.Hits` keeps the pre-dedup hits; the perf
     wording.
+- **Round 5 (MiMo r4 ready, 6 Minor).** M-1 break-it-once lists 1-3 widened; M-2 an invalid `--shell-type` value takes
+  the `-` rule's verdict and `WslgUnknownReason` covers "a value"; M-3 `WslShell` written out; M-5 `Find.Length − 1`;
+  M-6 rows P15-P16 (trailing white space, `PaddedWslg`). M-4 no change.
 - **Round 4 (controller: add #448).** New Task 5: `wslg` checked as `wsl` by wslg.exe's own parser (microsoft/WSL
   f753835d5464 `WslgMain`: no `-e`, exec mode only `--shell-type none`, every other `-` word an error), at every
   program position and in every padded spelling; and, found reading that parser, an option value that wsl.exe or
