@@ -31,7 +31,7 @@ an assertion, stop and list it. British spelling in new text. No message or test
 Commits say `Part of #302`, not `Closes`: the issue closes after the owner's hardware check (below) passes
 (controller default; owner may change).
 
-**Review history:** none yet.
+**Review history:** round 1 MiMo (on 3bfbd6f), folded in round 2.
 
 **Parallel briefs.** T65 (in review) and T60/T61 own no file this brief touches (T65's table: `Validation.cs`,
 `RunCommand.cs`, `RecordVaultStore.cs`, docs `commands.md`, `security-model.md`, `broker-threat-model.md`, `AGENTS.md`).
@@ -67,14 +67,21 @@ OTP application over the keyboard interface returns no ISO 7816 status word. The
   = "Warning, state of non-volatile memory is unchanged." (`YubiKeyResponse.cs`; the text is also in the shipped
   `Yubico.YubiKey.dll`, `strings` shows it).
 
-So on the keyboard interface, 0x6200 means exactly: **the key's own programming sequence number did not advance**,
-i.e. the key did not take the configuration. It is the key's word, as the SDK reads it, that nothing was written. Two
-known limits, both handled by the design below: the SDK once called a successful slot deletion "unchanged"
-(Yubico.NET.SDK issue #182, the sequence reset to 0, which the `validReset` clause now accepts), and
-`after == before + 1` is computed on `int`s, so if a key's sequence number wraps from 255 to 0 with a slot still
-configured, a write that happened reads as "unchanged". A wrap can make at most one write in a row look unchanged
-(the next one goes 0 → 1); the retry below programs a fresh secret and verifies it, so a false "unchanged" followed by
-a success leaves a correct, verified slot.
+So on the keyboard interface, 0x6200 means exactly: **the key's programming sequence number did not advance** between
+the SDK's status read before the command and the status in its answer. Usually that is because the key did not take
+the configuration, so tswap treats slot 2 as unchanged; it is not proof. (The SDK once called a successful slot
+deletion "unchanged", Yubico.NET.SDK issue #182, a reset to 0 that the `validReset` clause now accepts; a slot-2
+configure can't produce that case.) Two limits remain where a write that happened reads as "unchanged":
+- **The wrap.** `after == before + 1` is computed on `int`s, so a sequence number wrapping from 255 to 0 with a slot
+  still configured fails both clauses.
+- **Another writer.** tswap's `YubiKeyLock` covers tswap only. If another program (for example `ykman`) writes the OTP
+  application between the SDK's before-read and tswap's configure command, the number goes up by two (before 5, theirs
+  6, ours 7) and reads as "unchanged" although tswap's write was taken.
+
+A retry after either draws a fresh secret, programs it and verifies it, so a false "unchanged" followed by a success
+leaves a correct, verified slot. Only a false "unchanged" on the **last** attempt is not repaired: then slot 2 may hold
+an unverified new secret. So the final message (Task 1) says what the key reported, not that slot 2 is as it was, and
+tells the user how to check (`tswap names`) and what to do if the vault no longer opens with the key.
 
 **The same-key FIDO2 check and the SDK's interface switch.** The listing returns the same `YubiKeyDevice` object for a
 key while it stays plugged in (`YubiKeyDeviceListener._internalCache`, `GetAll()`; tswap relies on this too,
@@ -101,9 +108,11 @@ secret.
 ## Task 1: "nothing was written" is its own kind and its own message
 
 **`OtpFailure.NothingWritten`** (`TswapCore/Vault/IOtpKeys.cs`, new member after `Interrupted`), summary: "Brief T66
-(#302): programming slot 2 was refused and the key reports that nothing was written: Yubico's SDK found the key's
+(#302): the key refused the slot 2 configuration: Yubico's SDK found the key's
 programming sequence number unchanged after the configure command (status word 0x6200, `SWConstants.WarningNvmUnchanged`,
-made by the SDK's `OtpErrorTransform`). Slot 2 is as it was." Also, in `ProgramSlot2`'s summary (`:24-29`), name
+made by the SDK's `OtpErrorTransform`), so tswap treats slot 2 as unchanged. Not proof: a sequence number wrapping from 255
+to 0, or another program writing the OTP application between the SDK's status read and the command, also reads as
+unchanged after a write that was taken." Also, in `ProgramSlot2`'s summary (`:24-29`), name
 `NothingWritten` among the kinds thrown before anything was written.
 
 **`YubicoOtpKeys.ConfigureFailure`** (new, `internal static OtpFailure ConfigureFailure(short statusWord)`):
@@ -124,28 +133,44 @@ so it reaches the command as `YubiKeyProgramException(NothingWritten, serial, e.
 front of this).
 
 **`YubiKeyProgramException.DefaultMessage`**: new arm `OtpFailure.NothingWritten => $"YubiKey {serial} refused to
-program slot 2 and reports that nothing was written"`; the summary (`:3-6`) lists `NothingWritten`.
+program slot 2 (its programming sequence number did not advance)"`. The summary (`:3-6`) says "failed after it started
+writing", which `NothingWritten` is not; reword it to: "<see cref="IYubiKeyService.ProgramSlot2"/> failed: <see
+cref="Kind"/> is <see cref="OtpFailure.NothingWritten"/> (the key refused the configuration; its programming sequence
+number did not advance), <see cref="OtpFailure.ProgramFailed"/> (the write failed and may have happened), <see
+cref="OtpFailure.VerifyWrong"/> or <see cref="OtpFailure.VerifyNoAnswer"/> (programmed, the check failed), and
+<c>tswap yubikey setup</c> words its message from it."
 
 **`YubiKeyCommand.Program`** (the switch at `:513-530`), new arm before `_`, exact text:
 
 ```
 OtpFailure.NothingWritten =>
-    $"Programming failed{detail}: YubiKey {serial} refused the new configuration and reports that nothing was " +
-    "written, so slot 2 and any vault slot made with it are as they were. Run " +
+    $"Programming failed{detail}: YubiKey {serial} refused the new configuration (its programming sequence number " +
+    "did not advance), so tswap treats slot 2 as unchanged. To confirm, run " +
+    $"`{ctx.Prefix} names`: a vault that uses this key's slot 2 should open with it as before, without asking for " +
+    "another key, a FIDO2 PIN or the recovery key. If it no longer opens with this key, run " +
+    $"`{ctx.Prefix} yubikey setup --replace` again, then enrol the key again: with " +
+    $"{ElevatedCommand.For(ctx.Prefix, "slot add --yubikey")} (it opens the vault through another slot), or, if only " +
+    $"the recovery key is left, with {ElevatedCommand.For(ctx.Prefix, "recover --yubikey")} (the recovery key on " +
+    "stdin). Otherwise run " +
     $"`{ctx.Prefix} yubikey setup --replace` again (with --touch or --no-touch); if it keeps failing, report it.",
 ```
 
-The `_` arm (`ProgramFailed` and anything else) is unchanged.
+`recover --yubikey` opens the vault with the recovery key on stdin and enrols the plugged-in YubiKey as a new slot
+(`docs/commands.md:551-557`); `ElevatedCommand.For` is used as in the `VerifyNoAnswer` arm (`:522-525`).
+
+The `_` arm (`ProgramFailed` and anything else) is unchanged, its "(or, if the failure came before anything was
+written, unchanged)" included: `ProgramFailed` still covers an exception thrown before the command reached the key (a
+keyboard timeout, `YubicoOtpKeys.Classify`), so that clause stays true (MiMo r1 M-5, kept).
 
 **Tests** (new methods; `SdkYubiKeyServiceTests` for the first three, `YubiKeySetupTests` for the rest):
 
 | Test | Input | Outcome |
 |---|---|---|
-| `ConfigureFailure_OnlyNvmUnchangedIsNothingWritten` (Theory) | `0x6200` | `NothingWritten` |
+| `ConfigureFailure_OnlyNvmUnchangedIsNothingWritten` (Theory; rows are `int`, cast with `(short)` in the call, since xUnit 2's binder won't convert `int` to `short`) | `0x6200` | `NothingWritten` |
 | same | `0x6300`, `0x6281`, `0x6286`, `0x6500`, `0x6A80`, `0x6985`, `0x0000` | `ProgramFailed` |
 | `ProgramSlot2_NothingWritten_ReachesTheCommandAsItsKind` | `WithKey(5)`, `ProgramOutcome[5] = NothingWritten` | `YubiKeyProgramException`, `Kind` `NothingWritten`, `Serial` 5, `Detail` `fake NothingWritten`. In Task 2 this test gets `pauses: []` from the helper (three tries, then the kind); no row is added to the existing `SdkService_ProgramSlot2_PassesKindThrough`, whose body can't take a pause list |
-| `Setup_NothingWritten_SaysNothingWasWritten` | `EmptySlot(SerialA)`, `ProgramOutcome[SerialA] = NothingWritten`, `--touch` | exit ≠ 0; `r.Err` contains, exactly, `YubiKey {SerialA} refused the new configuration and reports that nothing was written, so slot 2 and any vault slot made with it are as they were.` and ``Run `tswap yubikey setup --replace` again``; `r.Err` does **not** contain `half-written`; `r.Out` has no `HMAC-SHA1 challenge-response` line |
-| `Setup_ProgramFailed_StillSaysHalfWritten` | as above with `ProgramFailed` | `r.Err` contains `may now be empty or half-written` and not `reports that nothing was written` (the counterpart, so the two arms can't swap) |
+| `Setup_NothingWritten_SaysNothingWasWritten` | `EmptySlot(SerialA)`, `ProgramOutcome[SerialA] = NothingWritten`, `--touch` | exit ≠ 0; `r.Err` contains, exactly, `YubiKey {SerialA} refused the new configuration (its programming sequence number did not advance), so tswap treats slot 2 as unchanged.`, the text "To confirm, run `tswap names`:" and "If it no longer opens with this key, run `tswap yubikey setup --replace` again, then enrol the key again"; `r.Err` does **not** contain `half-written` or `as they were`; `r.Out` has no `HMAC-SHA1 challenge-response` line |
+| `Setup_ProgramFailed_StillSaysHalfWritten` | as above with `ProgramFailed` | `r.Err` contains `may now be empty or half-written` and not `treats slot 2 as unchanged` (the counterpart, so the two arms can't swap) |
 
 Break-it-once: in `ConfigureFailure`, compare with `SWConstants.WarningNvmChanged` instead → the `0x6200` and `0x6300`
 rows fail. Delete the `NothingWritten` arm in `YubiKeyCommand.Program` → `Setup_NothingWritten_SaysNothingWasWritten`
@@ -161,7 +186,7 @@ message).
   `YubiKeyCompatSwitches.UseOldReclaimTimeoutBehavior` (`ConnectionFactory.cs:153-155`); the issue's lead was 1-2 s.
   Worst case: 6 s of pauses before the last refusal is reported.
 - `internal static string ProgramRetryNotice(int serial, int nextAttempt) =>
-  $"YubiKey {serial} refused the new configuration and reports that nothing was written; trying again in {s} seconds (attempt {nextAttempt} of {ProgramAttempts})..."`,
+  $"YubiKey {serial} refused the new configuration (its programming sequence number did not advance); trying again in {s} seconds (attempt {nextAttempt} of {ProgramAttempts})..."`,
   where `{s}` is `ProgramRetryPause.TotalSeconds` formatted with `"0"` and `CultureInfo.InvariantCulture` (so `3`).
 
 **Seams.** Copy `YubiKeyLock`'s (`YubiKeyLock.cs:38-40`, `:66`):
@@ -181,7 +206,8 @@ serial, e.Detail)` (the last attempt's detail). **Any other outcome stops at onc
 FIDO2 check: a refusal with nothing written is safe to repeat whatever came before. It runs inside the one
 `LockedYubiKeyService.ProgramSlot2` lock hold (`LockedYubiKeyService.cs:32`), so no other tswap gets the key between
 tries. Summary on `ProgramSlot2`: what it retries, why that is safe (Task 1's evidence, one sentence, citing the SDK's
-`OtpErrorTransform`), and the 255 → 0 wrap limit.
+`OtpErrorTransform`), and both limits (the 255 → 0 wrap; another program writing between the SDK's status read and
+the command), with the one consequence: only a false "unchanged" on the last attempt goes unrepaired.
 
 **`CliHost`**: `YubiKeyService(byte[]? testKey, YubiKeyLock? hardwareLock, TextWriter? verbose, TextWriter? notices =
 null, Func<IYubiKeyService>? real = null)` passes `notices` to `new SdkYubiKeyService(verbose, notices)`; `:76` passes
@@ -194,14 +220,17 @@ applies; checked after `Busy` and before `ProgramOutcome`, and decremented per c
 `Programs`.
 
 **`SdkYubiKeyServiceTests.Service`** (`:19-20`): gains `List<TimeSpan>? pauses = null, TextWriter? notices = null` and
-always passes a pause: `pauses is null ? _ => throw new InvalidOperationException("unexpected pause") : pauses.Add`. So
-no test in the class can reach `Thread.Sleep`. (Helper input, not an assertion.)
+always passes a pause: `pauses is null ? _ => throw new InvalidOperationException("unexpected pause") : pauses.Add`, so
+a test built through the helper that reaches a pause fails loudly instead of sleeping. The tests that construct the
+service directly (`:498`, `:512`, `:522`, `:535`, `:547`, `new SdkYubiKeyService(fake, OSPlatform.Linux)`) keep the
+default `Thread.Sleep`; none programs a slot, so none reaches a pause, and a future test that sets `NothingWrittenFirst`
+must go through the helper (say so in the helper's comment). (Helper input, not an assertion.)
 
 **Tests** (new methods in `SdkYubiKeyServiceTests` unless named):
 
 | Test | Fake | Outcome |
 |---|---|---|
-| `ProgramSlot2_NothingWrittenTwice_ThenSucceeds` | `WithKey(5)`, `NothingWrittenFirst[5] = 2` | returns; `Programs` = `[(5, true), (5, true), (5, true)]`; pauses = `[3 s, 3 s]`; notices text = `ProgramRetryNotice(5, 2) + "\n" + ProgramRetryNotice(5, 3) + "\n"` with the literal `YubiKey 5 refused the new configuration and reports that nothing was written; trying again in 3 seconds (attempt 2 of 3)...` asserted once as a string literal (so the constant can't drift unseen) |
+| `ProgramSlot2_NothingWrittenTwice_ThenSucceeds` | `WithKey(5)`, `NothingWrittenFirst[5] = 2` | returns; `Programs` = `[(5, true), (5, true), (5, true)]`; pauses = `[3 s, 3 s]`; notices is a `new StringWriter { NewLine = "\n" }` (so the assertion holds on the Windows CI leg, where `WriteLine` would otherwise write `\r\n`), and its text equals `ProgramRetryNotice(5, 2) + "\n" + ProgramRetryNotice(5, 3) + "\n"`; the literal `YubiKey 5 refused the new configuration (its programming sequence number did not advance); trying again in 3 seconds (attempt 2 of 3)...` is asserted once as a string literal (so the constant can't drift unseen) |
 | `ProgramSlot2_NothingWrittenEveryTime_StopsAfterThree` | `NothingWrittenFirst[5] = 10` | `YubiKeyProgramException`, `Kind` `NothingWritten`, `Detail` `fake NothingWritten`; exactly 3 `Programs`; pauses `[3 s, 3 s]`; 2 notice lines |
 | `ProgramSlot2_OtherFailures_NeverRetried` (Theory: `ProgramFailed`, `VerifyWrong`, `VerifyNoAnswer`, `Busy`) | `ProgramOutcome[5]` = kind (for `Busy`: `Busy.Add(5)`) | one `Programs` entry; no pause (the helper's default pause throws); empty notices; the kind as today (`YubiKeyProgramException.Kind`, or `YubiKeyDeviceException.Kind` `Busy`) |
 | `ProgramSlot2_NothingWrittenThenOtherFailure_StopsThere` | `NothingWrittenFirst[5] = 1`, `ProgramOutcome[5] = ProgramFailed` | `YubiKeyProgramException` `ProgramFailed`; 2 `Programs`; pauses `[3 s]` |
@@ -217,14 +246,15 @@ check: the retry lines on stderr.)
 
 ## Task 3: docs and comments
 
-- `docs/superpowers/fido2-owner-checks.md`, B8 step 2 (`:484-486`): after "Expect setup to go on and program slot 2
+- `docs/superpowers/fido2-owner-checks.md`, B8 step 2 (`:485-487`): after "Expect setup to go on and program slot 2
   (touch for its check)." add: "Since brief T66 (#302): before that, zero to two lines `YubiKey <spare> refused the new
-  configuration and reports that nothing was written; trying again in 3 seconds (attempt N of 3)...` may show; record
-  how many. If all three tries are refused, expect `Programming failed (the key refused the configuration: Warning,
-  state of non-volatile memory is unchanged.): YubiKey <spare> refused the new configuration and reports that nothing
-  was written, so slot 2 and any vault slot made with it are as they were.` and `"$T" names` still opening through the
-  OTP slot." Then add the two optional runs of "Owner check" below as B8 steps 3 and 4, in the doc's style
-  (`$T`, `$W`, `<spare>`).
+  configuration (its programming sequence number did not advance); trying again in 3 seconds (attempt N of 3)...` may
+  show; record how many. If all three tries are refused, expect `Programming failed (the key refused the
+  configuration: Warning, state of non-volatile memory is unchanged.): YubiKey <spare> refused the new configuration
+  (its programming sequence number did not advance), so tswap treats slot 2 as unchanged.` and the rest of that
+  message, and check it as it says: `"$T" names` should still open through the OTP slot with a touch and no PIN." Then
+  add the two optional runs of "Owner check" below as B8 steps 3 and 4, in the doc's style (`$T`, `$W`, `<spare>`), and
+  the note on leftover FIDO2 credentials from "Afterwards".
 - No user doc describes the programming failures (`grep -rn "half-written" docs` finds only plans, briefs and release
   notes); the 0.3.3 release notes, written at release, say #302 is fixed. Nothing else to change.
 
@@ -249,8 +279,10 @@ sudo --preserve-env=TSWAP_CONFIG_DIR "$T" slot add --fido2 --no-password --seria
 then zero to two `... trying again in 3 seconds (attempt N of 3)...` lines, then `YubiKey 40107596 slot 2: HMAC-SHA1
 challenge-response, touch required`, exit 0; `names` then asks for the FIDO2 PIN and opens. **Record how many retry
 lines showed**: none (the first write took), one or two (the retry is what fixed it: the issue's cause is timing), or
-three refusals (still failing; then expect the "nothing was written ... as they were" message, and `names` must still
-open through the OTP slot without the PIN: that is the fail-safe outcome, not a pass). Optional step 0, for the
+three refusals (still failing; then expect the "tswap treats slot 2 as unchanged" message, and `names` must still
+open through the OTP slot without the PIN, as the message says to check: that is the fail-safe outcome, not a pass;
+if `names` asks for the FIDO2 PIN instead, slot 2 was changed after all, which is the last-attempt limit in "What is
+wrong", and is a finding to report). Optional step 0, for the
 root cause: run the same setup command first with a build of f2e3a5a, expecting the old failure (`may now be empty or
 half-written`); `names` must still open through the OTP slot.
 
@@ -263,9 +295,12 @@ lines (the spare saw no FIDO2 traffic) and the same pass lines; record them.
 **Optional: macOS** (B8 step 4). Steps 1-2 on macOS with a macOS build of this branch (`libtswapse.dylib` next to
 `tswap`); same pass criteria; record the retry count.
 
-**Afterwards:** set the spare's slot 2 back to how its unattended tests expect it (no touch):
+**Afterwards:** set the spare's slot 2 to the touch setting you keep it at, for example
 `TSWAP_CONFIG_DIR="$W/no-vault" "$T" yubikey setup --replace --no-touch --serial 40107596` (a folder with no vault:
-setup warns that it couldn't check and goes on), and remove `$W`. Paste back: the commit built, the OS, all output, and
+setup warns that it couldn't check and goes on). The hardware suite needs no start state: B6
+(`SpareKey_ProgrammedSlotMatchesYkmanSemantics`) reprograms slot 2 itself and leaves it touch-required. Then remove
+`$W`. The runs leave FIDO2 credentials on the spare (and on the Token2 after the optional run), as the doc's C checks
+do; they are harmless on test keys, and tswap never resets a key (a FIDO2 reset with `ykman` removes them if wanted). Paste back: the commit built, the OS, all output, and
 what was touched or typed.
 
 ## Report
@@ -287,4 +322,8 @@ the final `./runtests.sh` summary line.
 
 ## Amendment history
 
-None yet.
+- Round 2 (MiMo r1): I-1, the notices writer's `NewLine = "\n"`; I-2, the "nothing written" wording now says what 0x6200
+  shows (the sequence number did not advance) with both limits (wrap, another writer) and tells the user to check with
+  `tswap names` and what to do if the vault no longer opens with the key, retry unchanged; M-1 restore note; M-2 helper
+  claim narrowed; M-3 `YubiKeyProgramException` summary reworded; M-4 leftover credentials; M-5 kept (reason in Task 1);
+  the xUnit `short` row note.
