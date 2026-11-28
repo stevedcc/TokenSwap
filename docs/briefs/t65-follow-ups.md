@@ -1,9 +1,12 @@
-# Brief T65: the remaining 0.3.3 follow-ups: a lone CR in redact and run, T58's and T62's loose ends, export links refused (#434, #435, #436, #440)
+# Brief T65: the remaining 0.3.3 follow-ups: a lone CR in redact and run, T58's and T62's loose ends, export links refused, wslg guarded (#434, #435, #436, #440, #448)
 
 This body is authoritative; the amendment history at the end is a record only.
 
 Milestone 0.3.3. Base: `origin/main` at 66c3620 (T58, T62 and T63 merged; this brief's branch, `brief/t65`, starts
-there). Read AGENTS.md and CLAUDE.md first, then the four issues with their comments
+there), with `origin/main` at f2e3a5a (T64 merged) merged into it. T64 moved `TswapCore/Validation.cs` (16 lines down
+from `:316`) and `TswapCli/Commands/RunCommand.cs` (6 lines down from `:91`): citations in those two files are at
+f2e3a5a, every other citation at 66c3620 (no other cited file changed). Read AGENTS.md and CLAUDE.md first, then the
+five issues with their comments
 (`gh issue view <n> -R stevedcc/TokenSwap --comments`), and: `TswapCore/Fingerprints/LineEndingViews.cs` (all);
 `TswapCore/SecretMatcher.cs` (`ViewHits`, `AddViewHits` `:52-88`, `SelectMultiLine` `:334-375`, `Select` `:496-512`);
 `TswapCore/Fingerprints/FingerprintScanner.cs` (the summary `:5-41`, `RawLength`/`MaxRawLength` `:96-117`, `Scan`
@@ -13,7 +16,11 @@ there). Read AGENTS.md and CLAUDE.md first, then the four issues with their comm
 `FingerprintScannerTests` (`Scan_CarriedState_SameHitsAsFreshScan`, `Matcher_CarriedState_SameOutputForEveryChunkSize`
 and their helpers), `RunVaultRedactionTests` (the fixture), `RunTotpTests` (the fixture, `Refusal`, `AssertNoSeed`,
 `R0Value_InEveryForm_IsRefused`), `TotpParseTests.Classify`, `BrokerTotpTests`, `ValueKindsTests` (the fixture,
-`RecordAsOldBuildsWriteIt_IsUnmarked_UntilReindex_WhichRewritesOnlyIt`), `VaultReindexTests` (the fixture).
+`RecordAsOldBuildsWriteIt_IsUnmarked_UntilReindex_WhichRewritesOnlyIt`), `VaultReindexTests` (the fixture). For Task 5:
+`TswapCore/Validation.cs` (`ProgramPositions`, `WrappedCommand` `:269-327`, `Wrappers` `:541-550`, `BashLauncherRefusal`
+to `BashLauncherWalk` `:821-1031`, `WrapperValued` `:1057-1080`, `CheckWrapper` `:1102-1194`, `WslValued` to
+`NoCommandShell` `:1196-1300`), `TswapTests/BashLauncherRefusalTests.cs`, `InlineCodeBlockTests.cs` (`Wsl_…`, `:960-1100`),
+`RunBashLauncherTests.cs`, `RunuserWalkTests.cs` and `docs/briefs/t64-wsl-bash-and-enrol-flake.md`.
 
 One commit per task, test first, a break-it-once check per key test (name in the commit message which line you
 changed and which test failed), `./runtests.sh --unit` after each task, the full `./runtests.sh` at the end. No
@@ -24,7 +31,7 @@ methods and rows to existing test files, and these named additions to existing t
 assertion: new `InlineData` rows in `BrokerTotpTests.IsOtpAuth_OnBytes_AgreesWithTheStringForm` and
 `TotpParseTests.Classify` (Task 3); one added assertion in `TotpCommandTests.Period1_PrintsEverySecond` (Task 2) and
 two in `ToCommentContinuationCommandTests.ToCommentCommand_ContinuationLineHoldingAValue_CommentedOut_Warned_NoLeak`
-(Task 4); `[Fact]` to `[IcuFact]` on `VaultReindexTests.Reindex_AVersionTwoSetWithoutItsFormEntries_IsRecomputed`
+(Task 4); new test methods in `RunBashLauncherTests` (Task 5); `[Fact]` to `[IcuFact]` on `VaultReindexTests.Reindex_AVersionTwoSetWithoutItsFormEntries_IsRecomputed`
 (Task 1). Task 4's deduplication exists so that `FingerprintScannerTests.Scan_LineEndings_ExactlyOneHit` keeps its
 assertion (see Task 4). If any other existing test fails on an assertion, stop and list it. No production message and no custom
 test failure text contains a value, a seed or an export link's data.
@@ -36,25 +43,29 @@ written; then its break-it-once mutation is the evidence: quote the failure unde
 
 **One task per issue; each commit closes its issue** (`Closes #n` in the message), except Task 2, which says
 `Part of #435` (one item moves after T60, see Task 2). The tasks are independent: any order; the suggested order is 1,
-2, 3, 4.
+2, 3, 4, 5. Task 2 and Task 5 both touch `Validation.cs`, in places 500 lines apart (Task 2 one comment at `:332`,
+Task 5 the members at `:269-327` and `:541-1300`); neither depends on the other.
 
 **File ownership and merge order.** T60 and T61 (briefs in review) will own `RecordMerge`, `RecordWrites`,
 `RecordVaultStore`, `SecretRecordCodec`, `VaultWriter`, `SecretEntry`, `PendingWrite`, `FieldCommand`, `VaultCommand`,
 `ConflictsCommand`, `RestoreCommand`, `CommandValues`, `VaultView`, `SecretsDb`, `NamesCommand`, `Validation`,
-`Prompt.cs`, `docs/commands.md`, `docs/multi-machine.md` and `docs/security-model.md`. T64 (in review) owns
-`Validation.cs`, `RunCommand.cs`, `EndToEndTests.cs` and `docs/scripts.md`. This brief changes **no code** in any of
-them. It changes only these lines there, all comments or doc sentences:
+`Prompt.cs`, `docs/commands.md`, `docs/multi-machine.md` and `docs/security-model.md`. T64 is merged (f2e3a5a). This
+brief changes no code in any of them **except Task 5's in `Validation.cs`**, which T60 also edits (its token grammar:
+`TokenRegex` and `Validation.cs:1-60`, `:160-180` at its base; T60 brief, "Grammar"), far from Task 5's members, so a
+plain text merge is expected. Everything else it changes there is a comment or a doc sentence:
 
 | File | Lines (at 66c3620) | Task | What |
 |---|---|---|---|
 | `TswapCore/RecordVaultStore.cs` | `:1602-1605` (the `Tombstone` summary) | 2 | comment |
-| `TswapCore/Validation.cs` | `:316` (`SubstitutedToken`'s summary) | 2 | comment |
-| `TswapCli/Commands/RunCommand.cs` | `:526-527` (`EncodedToken`'s summary) | 2 | comment |
+| `TswapCore/Validation.cs` | `:332` at f2e3a5a (`SubstitutedToken`'s summary) | 2 | comment |
+| `TswapCore/Validation.cs` | at f2e3a5a: `:541-550` (`Wrappers`), `:821-1031` (the bash launcher walk), `:1057-1080` (`WrapperValued`), `:1113-1115` (`CheckWrapper`'s wsl branch), `:1196-1300` (the wsl walk) | 5 | code |
+| `TswapCli/Commands/RunCommand.cs` | `:533-534` at f2e3a5a (`EncodedToken`'s summary) | 2 | comment |
 | `AGENTS.md` | `:284-291` | 2 | two phrases |
 | `docs/commands.md` | `:84-85` (Task 4), `:629` (Task 3) | 3, 4 | one sentence each |
-| `docs/security-model.md` | `:298`, `:302` (Task 4), `:385` (Task 3) | 3, 4 | a few words each |
+| `docs/security-model.md` | `:298`, `:302` (Task 4), `:385` (Task 3), `:172`, `:186` (Task 5) | 3, 4, 5 | a few words or a clause each |
 
-Expected order: T64 first, then T65, then T60/T61. Whichever lands second gets a text merge of a comment or a sentence;
+Task 5 also changes `docs/broker-threat-model.md:530-531` (no other brief's). Expected order: T64 (merged), then T65,
+then T60/T61. Whichever lands second gets a text merge of a comment or a sentence;
 if a cited line moved, find it by content. No change here depends on the order, except Task 2's moved item, which
 goes after T60. `CommandValues.cs` and `NamesCommand.cs` are **not** touched: Task 3 works through `OtpAuthUri` and
 `TotpSeed`, which both already call.
@@ -84,6 +95,7 @@ goes after T60. `CommandValues.cs` and `NamesCommand.cs` are **not** touched: Ta
 | #440.1 | open | `MsysTarget.cs:199-204` |
 | #440.2 | open | `PlatformFacts.cs:139` writes `"José"` with a literal `é` |
 | #440.3 | open | `VaultReindexTests.cs:188` is `[Fact]`; its NFD assertion can't hold where `Normalize` is a no-op |
+| #448 (at f2e3a5a) | open | `wslg` is in no set: `Wrappers` (`Validation.cs:541-550`) and `NameBashWord.Names` (`:887-898`, `wsl` only) don't know it, so `GetBlockedInvocation(["wslg", "./deploy.sh", "{{x}}"])` and `BashLauncherRefusal` give null; `docs/security-model.md:186` names `wsl.exe` only. Also open, found reading WSL's parser: `WalkWsl` (`:1251-1296`) skips a valued option's value as one word, which wsl.exe splits at a space (Task 5, "The parser") |
 
 ## Task 1 (#440): three T62 Minors
 
@@ -118,8 +130,9 @@ No docs. Release note: none (tests and comments).
   `FieldsExtension`, which also lists the types taken) and `ValueKinds` (`0x0101`, brief T58)".
 - `RecordVaultStore.cs:1602-1605`: "(burns kept as history; no `Fields` extension, issue #311, and no `ValueKinds`
   one, brief T58; every other extension kept)", as `RecordWrites.Tombstone`'s summary (`RecordWrites.cs:118-119`) says.
-- `Apply.cs:41`: "`name`, `name:previous` or `name:totp`". `RunCommand.cs:526-527`: "(`{name}`, `{name:previous}`,
-  `{name:totp}` or `{@path}`)". `Validation.cs:316`: "(`name`, `name:previous` or `name:totp`)".
+- `Apply.cs:41`: "`name`, `name:previous` or `name:totp`". `RunCommand.cs:533-534` (at f2e3a5a): "(`{name}`,
+  `{name:previous}`, `{name:totp}` or `{@path}`)". `Validation.cs:332` (at f2e3a5a): "(`name`, `name:previous` or
+  `name:totp`)".
 - `TotpSeed.cs:153-154`: move the two comment lines to directly above `ParseAlgorithm` (`:166`).
 - `docs/agent-integration.md`, after the `run <cmd>` row: `| \`totp <name>\` | Print a TOTP secret's current code
   (stdout) and how long it stays valid (stderr) | The code is a live credential for one period (30 s by default); the
@@ -153,7 +166,7 @@ Break it once (each in the commit message):
   makes the reindex rewrite an unchanged TOTP record under the new code, and name it in the commit message.
 - `PrepareV3` (`RecordVaultStore.cs:2092`): `Extensions = record.Extensions` always. `Reindex_AFormatTwoTotpRecord_…`
   must fail. (A test-time edit of a T60 file; revert it.)
-- drop `|:totp` from `ToCommentProcessor.cs:16`, then from `SecretMatcher.cs:327`, then from `RunCommand.cs:512`: the
+- drop `|:totp` from `ToCommentProcessor.cs:16`, then from `SecretMatcher.cs:327`, then from `RunCommand.cs:518` (at f2e3a5a): the
   matching test of the three must fail each time (the first two leave `:totp` behind the marker).
 - `Apply.cs:98`: drop `previous &&`. `Apply_ATotpMarker_…` must fail (two recorded tokens).
 
@@ -556,6 +569,315 @@ holds a lone `\r`. `redact` gains up to three index scans per file; it has no pe
 Release note: "`redact` and `run` now also mask a multi-line value printed with lone CR line breaks (old Mac tools,
 `\r`-redrawn output), or stored with them and printed with LF or CRLF."
 
+## Task 5 (#448): `wslg` is checked as `wsl` is, by wslg.exe's own parser; an option value WSL would split is refused
+
+### The parser (parser-first)
+
+Read at microsoft/WSL **f753835d5464** (master, 2026-11-26), `src/windows/common/WslClient.cpp` (`WslgMain`, the
+dispatcher), `src/windows/inc/wsl.h` (the option names) and `src/windows/common/helpers.cpp` (`ParseArgument`). The
+implementer checks these citations before writing code; if the file has moved, stop and report.
+
+- **Dispatch** (`WslClient.cpp:1885-1922`; `CommandLineToArgvW` at `:1887`, the stem at `:1890-1891`): `CommandLineToArgvW` of the command line, then
+  `std::filesystem::path(argv[0]).stem()`, lower-cased: `bash` → `BashMain`, `wslconfig` → management only, `wslg` →
+  `WslgMain`, anything else → `WslMain`. So `wslg`, `WSLG.EXE` and `C:\Program Files\WSL\wslg.exe` all run `WslgMain`.
+  The name is argv[0] as the caller writes it, not the file's: a copy or link under another name is the residual T51
+  and T64 already declare. (`wslg.exe.` has the stem `wslg.exe` and runs `WslMain`: a shell launcher either way, and
+  refused below as padded.)
+- **`WslgMain`** (`:1376-1475`): `ParseLegacyArguments` first (`:1029-1064`: a GUID, then `~`, each consumed when it
+  is the next word). Then the loop (`:1387-1441`), words split by `ParseArgument` and compared exactly and
+  case-sensitively:
+  - `-d`, `--distribution` (`:1395-1405`), `-u`, `--user` (`:1414-1421`), `--cd` (`:1422-1427`): take the next word as
+    their value;
+  - `--shell-type` (`:1406-1413`) with `login` or `standard` (shell mode) or `none` (**exec mode**), the last one
+    winning; any other value, or none, is an error (`ParseShellOptionArg`, `:88-107`);
+  - `--` (`:1428-1432`) ends the options;
+  - **any other word starting with `-` is an error** (`WSL_E_INVALID_USAGE`, `:1435`): wslg has **no `-e`/`--exec`**
+    and none of wsl's `--system`, `--distribution-id`, `--parent-console`, management options, `--debug-shell` or
+    `--install`; such a word runs nothing;
+  - any other word begins the command.
+- **Modes** (`:1443-1474`): an empty command is an error (`:1444`, present since the first public commit, 697572d664c9;
+  what older closed-source builds did can't be read). Exec mode (only `--shell-type none`) runs
+  `CommandLineToArgvW(rest)` directly (`:1450-1459`); otherwise the whole rest goes to the user's shell, by default a
+  login shell (`DefaultUseShell = true`, `DefaultLogin = IsUseShell()`, `:1466-1467`), which parses a substituted
+  value again.
+- **How the words are split** (`helpers.cpp:664-684`): `ParseArgument` cuts the remaining command line at its first
+  space or tab and keeps quote characters, except for `--cd`'s value (`HandleQuotes = true`), which, when it starts
+  with `"`, runs to the next `"`. `run` builds the command line with RedactingPty 1.3.0's `WindowsCommandLine.Build`
+  (`WindowsCommandLine.cs`, `QuoteArgument`: a word that is empty or holds any `char.IsWhiteSpace` or `"` is quoted,
+  `"` escaped as `\"`). So a value with a space or tab (`-d "My Distro"`) is read as `"My`, and `Distro"` begins the
+  command **in shell mode**, while the guard's walk, which sees one word, carries on in exec mode; a `--cd` value
+  with a `"` ends at the escaped quote the same way. `WslMain` (`:1533-1843`, what T51's `CheckWsl` models) splits its
+  values with the same `ParseArgument`, so **this is a fail-open of `wsl` too**, T51's: `tswap run wsl -d "a b" -e
+  ./deploy.sh {{secret}}` passes every guard today and the value reaches `$SHELL -c`. Task 5 closes both (fail
+  closed; found while reading the parser for #448; the commit message says so).
+
+**The whole word list.** A second `--shell-type` is honoured (last wins; rows 9 and A4); a repeated `-d` is an error in
+wslg (nothing runs; allowed, no row); a legacy `~` or GUID is taken for the command, as T51 takes it for `wsl` (an
+over-refusal, rows 11-12); a lone `-` is an unknown option (row 26); an empty word before the command is quoted as `""`
+by RedactingPty and read as the two characters `""` (a value: consumed whole; an option position: the command begins
+in both readings); text after the command is never an option.
+
+### Design
+
+All in `TswapCore/Validation.cs`; cited lines at f2e3a5a. The refusal's `Program` stays the word's `ProgramName`
+(as typed, `.exe` dropped) on the `GetBlockedInvocation` path, as for `wsl` today, and the set's spelling (`"wsl"` or
+`"wslg"`) on the `BashLauncherRefusal` path.
+
+1. **`Wrappers`** (`:541-550`): add `"wslg"` after `"wsl"`, with the comment `// Brief T65 (#448): WSL's second entry
+   point, checked by CheckWsl as wsl is.` This makes it a checked program everywhere `Wrappers` is read:
+   `GetBlockedInvocation` (`:720`) reaches `CheckWrapper`; `IsCheckedProgram` (`:1694-1699`), so a wrapper's,
+   `find -exec`'s or a runner's command `wslg` is checked; `ProgramPositions` (`:269-298`) walks into its command
+   (for `GetFileTokenRefusal`); `NameBashWord`'s wrapper lookup.
+2. **`WrapperValued`** (`:1057-1080`): `["wslg"] = ["-d", "--distribution", "-u", "--user", "--cd", "--shell-type"]`,
+   with the comment `// Brief T65 (#448): wslg.exe's options that take the next word (WslgValued, and --shell-type).`
+3. **`CheckWrapper`** (`:1113-1115`): `if (program.Equals("wsl", StringComparison.OrdinalIgnoreCase) ||
+   program.Equals("wslg", StringComparison.OrdinalIgnoreCase)) return CheckWsl(program, args);`, the comment naming
+   brief T65 (#448).
+4. **The wslg grammar.** Below `WslValued` (`:1196-1199`), with a comment citing f753835d5464 `WslgMain` and the
+   lines above: `private static readonly HashSet<string> WslgValued = new(StringComparer.Ordinal) { "-d",
+   "--distribution", "-u", "--user", "--cd" };`. `WalkWsl(string program, List<string> args)` keeps its signature and
+   sets `var wslg = program.Equals("wslg", StringComparison.OrdinalIgnoreCase);`. For wslg: the valued set is
+   `WslgValued`; `--shell-type` and `--` as today; `--system`, `-e`/`--exec`, `WslManagement`, `--debug-shell` and
+   `--install` are **not** recognised, so they fall to the `-` rule, whose verdict is `new(program, WslgUnknownReason)`.
+   For wsl every branch stays as it is.
+5. **The value rule, both grammars** (fail closed). After a valued option (the `WslValued`/`WslgValued` branch,
+   `:1258-1262`), when `i + 1 < args.Count` and the value `args[i + 1]` is empty, or holds a `"` or any character for
+   which `char.IsWhiteSpace` is true (the words RedactingPty quotes), the walk ends: `new(true, new(program,
+   WslQuotedValueReason(wslg ? "wslg" : "wsl")), false, 0)`. `--cd` included, although wsl.exe reads a quoted `--cd`
+   value without a `"` whole: one rule, an over-refusal, declared. `--shell-type`'s value is already matched exactly.
+6. **`CheckWsl`** (`:1229-1241`): the shell-mode verdict is `new(program, wslg ? WslgShellModeReason :
+   WslShellModeReason)` (`wslg` computed as in `WalkWsl`). The no-command line (`:1235`) stays: shell mode with no
+   command gives `NoCommandShell(program)` (reused; over-refusal for today's wslg.exe, which refuses an empty command
+   itself, kept because an older build can't be read), exec mode with none gives null (`wslg --shell-type none`: an
+   error in wslg.exe, as `wsl -e` is in wsl.exe). The exec-mode inner check and its `'{program}' runs '…'` prefix are
+   reused unchanged.
+7. **The bash launcher walk.**
+   - `NameBashWord.Names` (`:887-898`): `if (ProgramName(name) is var p && (p.Equals("wsl", StringComparison.OrdinalIgnoreCase)
+     || p.Equals("wslg", StringComparison.OrdinalIgnoreCase))) return (BashWord.Wsl, p.Equals("wsl",
+     StringComparison.OrdinalIgnoreCase) ? "wsl" : "wslg");`, still before the wrapper lookup (wslg is in `Wrappers`
+     now). Rename the tuple element `Wrapper` to `Known` (the set's spelling of a wrapper, a runner, or `wsl`/`wslg`)
+     and update its two readers. The padded, quote, trailing `.`/`\`/`/` and stream rules of `NameBashWord`
+     (`:863-886`) then cover wslg with no further change.
+   - `WslRule(IReadOnlyList<string> argv, int k, int end, string name)` (`:934-944`): `WalkWsl(name, args)` and the
+     prefix `$"'{name}' runs '{refusal.Program}': …"`.
+   - `BashScan` (`:957`) and `BashLauncherWalk` (`:982`): `padded ? PaddedWslRefusalFor(known!) : WslRule(argv, i, end,
+     known!)`, with `private static BlockedInvocation PaddedWslRefusalFor(string name) => name == "wslg" ?
+     PaddedWslgRefusal : PaddedWslRefusal;` and `private static readonly BlockedInvocation PaddedWslgRefusal =
+     new("wslg", PaddedWslgReason);` beside `PaddedWslRefusal` (`:850`).
+8. **Texts** (new; `WayOut` is the existing constant, which `run` swaps on Windows; `PaddedWslReason`,
+   `WslShellModeReason`, `WslUnknownReason` and `NoCommandShell` are unchanged):
+   - `WslgShellModeReason` = `"'wslg' without --shell-type none runs its command line through the Linux shell (the
+     user's login shell by default), which parses a substituted value again and can transform and print secrets past
+     redaction. Give the command after --shell-type none: 'wslg --shell-type none ./deploy.sh {{secret}}'. " + WayOut`
+   - `WslgUnknownReason` = `"'wslg': an option this check doesn't know (wslg.exe takes only -d, --distribution, -u,
+     --user, --cd, --shell-type and --, matched exactly, and has no -e), so it can't tell what wslg runs. Give the
+     command after --shell-type none: 'wslg --shell-type none ./deploy.sh {{secret}}'. " + WayOut`
+   - `PaddedWslgReason` = `@"'wslg' written with quote characters, surrounding white space, or a trailing dot, '\' or
+     '/' can't be checked: run reads it as another program, but Windows starts wslg.exe, which runs its command line
+     through the Linux shell. Write it plainly: 'wslg --shell-type none ./deploy.sh {{secret}}'."`
+   - `private static string WslQuotedValueReason(string name) => $"'{name}': an option's value is empty or holds white
+     space or a double quote, which run's command line quotes, but {name}.exe reads an option's value up to the first
+     space or tab and keeps the quotes, so it can't be told where {name}'s command begins (the rest would run through
+     the Linux shell). Give the value without them (cd in a script instead of --cd). " + WayOut;`
+   No text holds a word of the command.
+9. **Comments.** `BashLauncherRefusal`'s summary (`:821-837`): "in wsl's exec mode, at wsl's command" → "in the exec
+   mode of wsl or wslg (brief T65, #448), at its command"; "after a bash or wsl name" → "after a bash, wsl or wslg
+   name". `CheckWsl`'s summary (`:1219-1228`) gains: "Brief T65 (#448): <c>wslg</c> by wslg.exe's walk
+   (<c>WslgMain</c>, f753835d5464): <c>WslgValued</c>, <c>--shell-type</c> and <c>--</c>, any other <c>-</c> word
+   unknown (it has no <c>-e</c>). For both, a valued option's value that is empty or holds white space or a
+   <c>"</c> is refused: wsl.exe splits its options at a space or tab and keeps quotes (<c>ParseArgument</c>), so
+   the rest of such a value would begin a shell-mode command."
+
+`GetBlockedInvocation` runs before `BashLauncherRefusal` in `run` (`RunCommand.cs:89`, `:97`), so a padded `wslg` that
+`ProgramName` still reads as `wslg` (`wslg.exe.`, `wslg.exe:x`) gets `CheckWsl`'s verdict first; `"wslg"`, ` wslg`,
+`wslg/` and `wslg::$DATA` aren't `wslg` to `ProgramName` and get `PaddedWslgReason`. The broker's templates use
+`GetBlockedInvocation` (`BrokerTemplatePolicy.cs:265`) and so refuse wslg's shell mode too; nothing there changes.
+`env … wslg` is refused as `env` already (`BlockedCommands`, `:76`).
+
+### Tests
+
+Write each test, run it and quote the failure, then write the code.
+
+New file `TswapTests/WslgWalkTests.cs`, class `WslgWalkTests`, with the texts written out as test constants:
+`WslgShell`, `WslgUnknown`, `PaddedWslg` (each exactly as in Design 8, with `Validation.WayOutFor(false)` for
+`WayOut`), `QuotedValue(name)` (the function's text), `NoCommand(p)` = `$"'{p}' with no command starts a shell reading
+stdin, which can transform and print secrets past redaction. {Validation.WayOutFor(false)}"`, `WslShell` (as
+`InlineCodeBlockTests.WslShellReason`), and `Runs(p, inner)` = `$"'{p}' runs '{i.Program}': {i.Reason}"` with `i =
+Validation.GetBlockedInvocation(inner)` (asserted not null), as `Wsl_ByItsOwnWalk_IsRefused` builds its inner case.
+
+**`GetBlockedInvocation_IsRefused(string[] argv, string program, string reason)`** (`MemberData`): the refusal is
+`new BlockedInvocation(program, reason)` exactly.
+
+| # | argv | Program | Reason |
+|---|---|---|---|
+| 1 | `wslg ./deploy.sh {{x}}` | `wslg` | `WslgShell` |
+| 2 | `wslg.exe ./deploy.sh {{x}}` | `wslg` | `WslgShell` |
+| 3 | `C:\Program Files\WSL\wslg.exe ./deploy.sh {{x}}` | `wslg` | `WslgShell` |
+| 4 | `WSLG.EXE ./deploy.sh {{x}}` | `WSLG` | `WslgShell` |
+| 5 | `wslg.exe. ./deploy.sh {{x}}` | `wslg` | `WslgShell` |
+| 6 | `wslg -d Ubuntu -u app --cd /srv ./deploy.sh {{x}}` | `wslg` | `WslgShell` |
+| 7 | `wslg --shell-type login ./x.sh {{x}}` | `wslg` | `WslgShell` |
+| 8 | `wslg --shell-type standard ./x.sh {{x}}` | `wslg` | `WslgShell` |
+| 9 | `wslg --shell-type none --shell-type login ./x.sh {{x}}` | `wslg` | `WslgShell` |
+| 10 | `wslg -- ./x.sh {{x}}` | `wslg` | `WslgShell` |
+| 11 | `wslg ~ --shell-type none ./x.sh {{x}}` (over-refusal) | `wslg` | `WslgShell` |
+| 12 | `wslg {00000000-0000-0000-0000-000000000000} --shell-type none ./x.sh {{x}}` (over-refusal) | `wslg` | `WslgShell` |
+| 13 | `wslg -e ./deploy.sh {{x}}` | `wslg` | `WslgUnknown` |
+| 14 | `wslg --exec ./deploy.sh {{x}}` | `wslg` | `WslgUnknown` |
+| 15 | `wslg --system --shell-type none ./x.sh {{x}}` | `wslg` | `WslgUnknown` |
+| 16 | `wslg --distribution-id 1 --shell-type none ./x.sh {{x}}` | `wslg` | `WslgUnknown` |
+| 17 | `wslg --parent-console 1 --shell-type none ./x.sh {{x}}` | `wslg` | `WslgUnknown` |
+| 18 | `wslg --list` | `wslg` | `WslgUnknown` |
+| 19 | `wslg --debug-shell` | `wslg` | `WslgUnknown` |
+| 20 | `wslg --install` | `wslg` | `WslgUnknown` |
+| 21 | `wslg --shell-type bogus ./x.sh {{x}}` | `wslg` | `WslgUnknown` |
+| 22 | `wslg --shell-type None ./x.sh {{x}}` | `wslg` | `WslgUnknown` |
+| 23 | `wslg --Shell-Type none ./x.sh {{x}}` | `wslg` | `WslgUnknown` |
+| 24 | `wslg --shell-type=none ./x.sh {{x}}` | `wslg` | `WslgUnknown` |
+| 25 | `wslg -D Ubuntu --shell-type none ./x.sh {{x}}` | `wslg` | `WslgUnknown` |
+| 26 | `wslg -` | `wslg` | `WslgUnknown` |
+| 27 | `wslg` | `wslg` | `NoCommand("wslg")` |
+| 28 | `wslg -d Ubuntu` | `wslg` | `NoCommand("wslg")` |
+| 29 | `wslg --` | `wslg` | `NoCommand("wslg")` |
+| 30 | `wslg -d` | `wslg` | `NoCommand("wslg")` |
+| 31 | `wslg -d "My Distro" --shell-type none ./deploy.sh {{x}}` (one word `My Distro`) | `wslg` | `QuotedValue("wslg")` |
+| 32 | `wslg --cd "C:\My Dir" --shell-type none ./deploy.sh {{x}}` (over-refusal) | `wslg` | `QuotedValue("wslg")` |
+| 33 | `wslg --shell-type none python3 /dev/stdin` | `python3` | `Runs("wslg", ["python3", "/dev/stdin"])` |
+| 34 | `wslg --shell-type none bash -c "echo {{x}}"` | `bash` | `Runs("wslg", ["bash", "-c", "echo {{x}}"])` |
+| 35 | `wslg -d Ubuntu --shell-type none -- sh -c x` | `sh` | `Runs("wslg", ["sh", "-c", "x"])` |
+| 36 | `wslg --shell-type none wsl ./x.sh {{x}}` | `wsl` | `"'wslg' runs 'wsl': " + WslShell` |
+| 37 | `wsl -e wslg ./x.sh {{x}}` | `wslg` | `"'wsl' runs 'wslg': " + WslgShell` |
+| 38 | `timeout 5 wslg ./x.sh {{x}}` | `wslg` | `"'timeout' runs 'wslg': " + WslgShell` |
+| 39 | `sudo -u app wslg ./x.sh {{x}}` | `wslg` | `"'sudo' runs 'wslg': " + WslgShell` |
+| 40 | `taskset -c 0 wslg ./x.sh {{x}}` | `wslg` | `"'taskset' runs 'wslg': " + WslgShell` |
+| 41 | `runuser -u app wslg ./x.sh {{x}}` | `wslg` | `"'runuser' runs 'wslg': " + WslgShell` |
+| 42 | `nice -n 5 wslg.exe ./x.sh {{x}}` | `wslg` | `"'nice' runs 'wslg': " + WslgShell` |
+| 43 | `find . -exec wslg ./x.sh {} ;` | `wslg` | `"'find -exec' runs 'wslg': " + WslgShell` |
+| 44 | `npx wslg ./x.sh {{x}}` | `wslg` | `"'npx' runs 'wslg': " + WslgShell` |
+| 45 | `uv run wslg ./x.sh {{x}}` | `wslg` | `"'uv' runs 'wslg': " + WslgShell` |
+| 46 | `wsl -d "My Distro" -e ./deploy.sh {{x}}` | `wsl` | `QuotedValue("wsl")` |
+| 47 | `wsl -u "a b" -e ./deploy.sh {{x}}` | `wsl` | `QuotedValue("wsl")` |
+| 48 | `wsl --cd "C:\My Dir" -e ./deploy.sh {{x}}` (over-refusal) | `wsl` | `QuotedValue("wsl")` |
+| 49 | `wsl -d "a\tb" -e ./x.sh {{x}}` (a tab) | `wsl` | `QuotedValue("wsl")` |
+| 50 | `wsl -d "a\"b" -e ./x.sh {{x}}` (a `"`) | `wsl` | `QuotedValue("wsl")` |
+| 51 | `wsl -d "" -e ./x.sh {{x}}` (empty) | `wsl` | `QuotedValue("wsl")` |
+| 52 | `wsl --distribution-id "x y" -e ./x.sh {{x}}` | `wsl` | `QuotedValue("wsl")` |
+| 53 | `sudo wsl -d "My Distro" -e ./x.sh {{x}}` | `wsl` | `"'sudo' runs 'wsl': " + QuotedValue("wsl")` |
+
+**`GetBlockedInvocation_IsAllowed(string[] argv)`**: null for
+
+| # | argv |
+|---|---|
+| A1 | `wslg --shell-type none ./deploy.sh {{x}}` |
+| A2 | `wslg.exe -d Ubuntu -u app --cd /srv --shell-type none ./deploy.sh {{x}}` |
+| A3 | `wslg --distribution Ubuntu --user app --shell-type none -- ./deploy.sh {{x}}` |
+| A4 | `wslg --shell-type login --shell-type none ./deploy.sh {{x}}` |
+| A5 | `wslg --shell-type none` (no command: wslg.exe refuses it, nothing runs) |
+| A6 | `wslg --shell-type none bash ./x.sh {{x}}` |
+| A7 | `wslg --shell-type none ./x.sh "a b" {{x}}` (the command's words may hold spaces) |
+| A8 | `timeout 5 wslg --shell-type none ./deploy.sh {{x}}` |
+| A9 | `wsl -d Ubuntu-22.04 -e ./deploy.sh {{x}}` |
+| A10 | `wsl --cd C:\work -e ./deploy.sh {{x}}` |
+| A11 | `wsl -e ./x.sh "a b" {{x}}` |
+| A12 | `wslgx ./deploy.sh {{x}}`, `wslconfig /l`, `tool wslg ./x.sh {{x}}` (three rows) |
+
+**`BashLauncherRefusal_KnowsWslg(string[] argv, bool windows, string? program, string reason)`** (`MemberData`; the
+probe `MsysTargetTests.FakeProbe([@"C:\Windows\System32\bash.exe"])` on Windows, null off it; with `program` null the
+result is null, else exactly `new BlockedInvocation(program, reason)`; `Off` is
+`BashLauncherRefusalTests.OffWindowsReason`):
+
+| # | argv | windows | Program | Reason |
+|---|---|---|---|---|
+| P1 | `"wslg.exe" ./deploy.sh {{x}}` | true | `wslg` | `PaddedWslg` |
+| P2 | `"w"slg --shell-type none ./deploy.sh {{x}}` | true | `wslg` | `PaddedWslg` |
+| P3 | ` wslg ./deploy.sh {{x}}` | true | `wslg` | `PaddedWslg` |
+| P4 | `wslg.exe. ./deploy.sh {{x}}` | true | `wslg` | `PaddedWslg` |
+| P5 | `wslg/ ./deploy.sh {{x}}` | true | `wslg` | `PaddedWslg` |
+| P6 | `wslg::$DATA ./deploy.sh {{x}}` | true | `wslg` | `PaddedWslg` |
+| P7 | `wslg.exe:x --shell-type none ./deploy.sh {{x}}` | true | `wslg` | `PaddedWslg` |
+| P8 | `"C:\Program Files\WSL\wslg.exe" ./deploy.sh {{x}}` | true | `wslg` | `PaddedWslg` |
+| P9 | `wslg::$DATA ./deploy.sh {{x}}` | false | `wslg` | `PaddedWslg` |
+| P10 | `sudo "wslg" ./deploy.sh {{x}}` | true | `wslg` | `PaddedWslg` |
+| P11 | `timeout 5 wslg. ./deploy.sh {{x}}` | true | `wslg` | `PaddedWslg` |
+| P12 | `find . -exec "wslg" ./x.sh ;` | true | `wslg` | `PaddedWslg` |
+| P13 | `uv run "wslg" ./x.sh {{x}}` | true | `wslg` | `PaddedWslg` |
+| P14 | `wsl -e "wslg.exe" ./x.sh {{x}}` | true | `wslg` | `"'wsl' runs 'wslg': " + PaddedWslg` |
+| E1 | `wslg --shell-type none bash.exe ./x.sh {{x}}` | true | `bash.exe` | `"'wslg' runs 'bash.exe': " + Off` |
+| E2 | `wslg -d Ubuntu -u app --cd /srv --shell-type none /mnt/c/Windows/System32/bash.exe ./x.sh {{x}}` | true | `bash.exe` | `"'wslg' runs 'bash.exe': " + Off` |
+| E3 | `wslg --shell-type none -- BASH.EXE ./x.sh {{x}}` | true | `bash.exe` | `"'wslg' runs 'bash.exe': " + Off` |
+| E4 | `sudo wslg --shell-type none bash.exe ./x.sh {{x}}` | true | `bash.exe` | `"'wslg' runs 'bash.exe': " + Off` |
+| E5 | `wslg.exe --shell-type none bash.exe ./x.sh {{x}}` | false | `bash.exe` | `"'wslg' runs 'bash.exe': " + Off` |
+| E6 | `wsl -e wslg.exe --shell-type none bash.exe ./x.sh {{x}}` | true | `bash.exe` | `"'wsl' runs 'bash.exe': 'wslg' runs 'bash.exe': " + Off` |
+| E7 | `wslg --shell-type none wsl.exe -e bash.exe ./x.sh {{x}}` | true | `bash.exe` | `"'wslg' runs 'bash.exe': 'wsl' runs 'bash.exe': " + Off` |
+| N1 | `wslg --shell-type none bash ./x.sh {{x}}` | true | null | |
+| N2 | `wslg --shell-type none ./deploy.sh {{x}}` | true | null | |
+| N3 | `wslg bash.exe ./x.sh {{x}}` (shell mode: `GetBlockedInvocation`'s) | true | null | |
+| N4 | `wslg -e bash.exe ./x.sh {{x}}` (unknown: `GetBlockedInvocation`'s) | true | null | |
+| N5 | `wslgx ./x.sh {{x}}`, `tool wslg.exe ./x.sh` (two rows) | true | null | |
+
+**Facts** (same file):
+- `ProgramWords_WalkIntoWslgsCommand`: `Validation.ProgramWords(["wslg", "-u", "app", "--shell-type", "none", "timeout",
+  "5", "x"])` is `["wslg", "timeout", "x"]`.
+- `GetFileTokenRefusal_InstallBehindWslg_IsRefused`: `Validation.GetFileTokenRefusal(["wslg", "-u", "app",
+  "--shell-type", "none", "install", "{{@f}}", "/tmp/x"])` has `Program` `install` and a reason starting `'install'
+  copies files` (as `RunuserWalkTests.GetFileTokenRefusal_InstallBehindRunuser_IsRefused`).
+- `TheNewReasons_HaveTheExactText`: rows 1, 13, 31 and P1 written out in full as literals (not through the
+  constants), with the Unix way out.
+
+**`run`** (new methods in `RunBashLauncherTests`, its fixture and `AssertRefusedBeforeUnlock`):
+- `Wslg_IsRefusedBeforeUnlock`: Windows, `wslg ./capture.sh {{pw}}`; `AssertRefusedBeforeUnlock(…,
+  WslgWalkTests.WslgShell.Replace(Validation.WayOutFor(false), Validation.WayOutFor(true)), windows: true)` (exit 1,
+  no start, no key challenge, the exact stderr, the value nowhere).
+- `QuotedWslg_IsRefusedBeforeUnlock`: Windows, `"wslg.exe" ./deploy.sh {{pw}}`; `AssertRefusedBeforeUnlock(…,
+  WslgWalkTests.PaddedWslg, windows: true)`.
+- `WslgExecMode_StartsWithTheArgvAsGiven`: Windows, `wslg --shell-type none ./capture.sh {{pw}}`: exit 0, one start,
+  `_pty.Argv` is `["wslg", "--shell-type", "none", "./capture.sh", Value]`.
+- `ADistroNameWithASpace_IsRefusedAfterSubstitution_NamingTheToken`: `Secrets(("d", "My Distro"), ("pw", Value))`;
+  Windows, `wsl -d {{d}} -e ./capture.sh {{pw}}`: exit 1, no start, stderr contains `After substitution, the value of
+  {{d}} makes this a command 'run' refuses`, and neither `My Distro` nor `Value` is in stdout or stderr.
+
+**Break it once** (each in the commit message, with the failing rows quoted):
+1. drop `"wslg"` from `Wrappers`: rows 1-35 and 37-45 (allowed), `ProgramWords_…`, `GetFileTokenRefusal_…` and
+   `Wslg_IsRefusedBeforeUnlock` must fail;
+2. drop the `wslg` half of `CheckWrapper`'s condition (Design 3): rows 1 and 13 must fail (the generic wrapper walk
+   lets them through);
+3. give wslg wsl's grammar (make `wslg` false in `WalkWsl`): rows 13-20 must fail (13-18 allowed, 19-20
+   `NoCommand`);
+4. drop the value rule (Design 5): rows 31-32 and 46-53 and `ADistroNameWithASpace_…` must fail;
+5. drop the `wslg` test from `NameBashWord.Names`: P1-P14 must fail (P1-P13 get `PaddedWrapperReason("wslg")`, the
+   word now being a wrapper) and `QuotedWslg_IsRefusedBeforeUnlock`;
+6. call `WalkWsl("wsl", args)` and write `'wsl' runs` in `WslRule`: E1-E7 must fail (on the prefix; E1 also when the
+   walk is wsl's);
+7. drop `WrapperValued["wslg"]`: `ProgramWords_…` and `GetFileTokenRefusal_…` must fail (`app` taken for the
+   command).
+
+If any existing test fails on an assertion (no existing row has a `wsl` option value with white space, a `"` or
+nothing in it: checked with grep at f2e3a5a), stop and list it.
+
+**Docs.**
+- `docs/security-model.md:172`, after "and `wsl` with no command (a login shell reading stdin),": "`wslg`
+  (`wslg.exe`, WSL's second launcher, which has no `-e`) without `--shell-type none` (write `wslg --shell-type none
+  ./deploy.sh {{secret}}`) or with no command, `wsl` or `wslg` with an option value that is empty or holds white space
+  or a double quote (`wsl -d "My Distro" -e …`: wsl.exe reads an option's value up to the first space or tab, so the
+  rest would begin a command run through the Linux shell),".
+- `docs/security-model.md:186`: "in the command of `wsl -e`" → "in the command of `wsl -e` or `wslg --shell-type
+  none`"; "(or of `wsl.exe`)" → "(or of `wsl.exe` or `wslg.exe`)"; "`wsl`'s shell mode is not refused" → "`wsl`'s or
+  `wslg`'s shell mode is not refused"; "names bash or wsl before it" → "names bash, wsl or wslg before it"; "`wsl`
+  written with quote characters, surrounding white space or a trailing dot" → "`wsl` or `wslg` written with quote
+  characters, surrounding white space or a trailing dot"; and after "`wsl -d` with a missing value;": "`wsl` or
+  `wslg` with an option value that is empty or holds white space or a `"` (`wsl --cd "C:\My Dir" -e …`: cd in the
+  script instead); `wslg ~ --shell-type none ./x.sh`, `wslg -d` with a missing value, `wslg` with no command (today's
+  wslg.exe refuses it itself) and every option wslg.exe doesn't take (`-e`, `--exec`, `--system`, `--list`, …; it
+  refuses them itself);".
+- `docs/broker-threat-model.md:530-531`: "also refuses `wsl` without `-e` and `wslg` without `--shell-type none` (both
+  run that command line through the Linux shell): write `wsl -e ./deploy.sh {arg}`."
+
+Release note: "`run` and the broker's templates now check `wslg` (`wslg.exe`, WSL's second launcher) as they check
+`wsl`: without `--shell-type none` it runs its command line through the Linux shell, so it is refused; write `wslg
+--shell-type none ./deploy.sh {{secret}}` (wslg has no `-e`). `wsl` and `wslg` with an option value that holds white
+space or a double quote (`wsl -d "My Distro" -e …`) are now refused too: wsl.exe cut such a value at the space, and
+the rest ran through the Linux shell."
+
 ## Out of scope
 
 - `tocomment` and a lone `\r`: it keeps T50a's two views (`SelectMultiLine` passes `anyLineBreak: false`). It rewrites
@@ -565,14 +887,19 @@ Release note: "`redact` and `run` now also mask a multi-line value printed with 
   spellings; a value made only of whitespace (`TryFoldedWhitespaceRun`, `docs/security-model.md`'s limit, unchanged).
 - #435.7 (after T60), #435.4 (record only), #434 comment 5 (no profile), the `*.rsp` scan (already refused).
 - A sudo-only import of an export link; seeds in a bare base64 payload or a QR image.
-- Any code change in a T60, T61 or T64 file; the broker's refusal text (`OtpAuthUri.BrokerRefusal` says "(an
+- Any code change in a T60 or T61 file other than Task 5's in `Validation.cs`; the broker's refusal text (`OtpAuthUri.BrokerRefusal` says "(an
   otpauth:// URI)" for an export link too; it is pinned by `BrokerTotpTests`' `Refusal` constant, so it stays).
+- #438's padded-program refusals (T64 review M-2) and its wrapper option walks; a copy or link of `wsl.exe` or
+  `wslg.exe` under another name (declared). A broker template whose `{arg}` placeholder sits in `wsl`'s or `wslg`'s
+  option region: the broker checks a template's argv at load (`BrokerTemplatePolicy.cs:265`), not after an argument
+  is filled in, so a caller's value with a space there is not refused by Task 5. Propose a follow-up issue in the
+  report.
 
 In the report, also propose a follow-up issue for the broker's and `rotate`'s refusal texts, which call an export link
 "a TOTP seed (an otpauth:// URI)" and "a TOTP seed, which comes from the issuer".
 
 In your report, give the release-note lines above (one per issue; "none" for #440 and #435), the two perf lines, and
-the proposed issues (#435.7, `tocomment` and a lone `\r`).
+the proposed issues (#435.7, `tocomment` and a lone `\r`, the broker template placeholder in wsl's option region).
 
 ## Amendment history
 
@@ -599,3 +926,9 @@ the proposed issues (#435.7, `tocomment` and a lone `\r`).
     `Data` in `ExportLinkTests`, `MemberData` for the theory, the missing usings; Task 2's gap tests take their
     break-it-once as evidence; the entry length in the dedup key; `ScanState.Hits` keeps the pre-dedup hits; the perf
     wording.
+- **Round 4 (controller: add #448).** New Task 5: `wslg` checked as `wsl` by wslg.exe's own parser (microsoft/WSL
+  f753835d5464 `WslgMain`: no `-e`, exec mode only `--shell-type none`, every other `-` word an error), at every
+  program position and in every padded spelling; and, found reading that parser, an option value that wsl.exe or
+  wslg.exe would split at a space (or a `"`) is refused for both, closing a fail-open of T51's `wsl` walk. Base
+  merged with f2e3a5a (T64); the Validation.cs and RunCommand.cs citations of Task 2 moved to f2e3a5a; the ownership
+  table, Out of scope and the report list updated.
