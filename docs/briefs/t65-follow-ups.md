@@ -25,7 +25,8 @@ assertion: new `InlineData` rows in `BrokerTotpTests.IsOtpAuth_OnBytes_AgreesWit
 `TotpParseTests.Classify` (Task 3); one added assertion in `TotpCommandTests.Period1_PrintsEverySecond` (Task 2) and
 two in `ToCommentContinuationCommandTests.ToCommentCommand_ContinuationLineHoldingAValue_CommentedOut_Warned_NoLeak`
 (Task 4); `[Fact]` to `[IcuFact]` on `VaultReindexTests.Reindex_AVersionTwoSetWithoutItsFormEntries_IsRecomputed`
-(Task 1). If any other existing test fails on an assertion, stop and list it. No production message and no custom
+(Task 1). Task 4's deduplication exists so that `FingerprintScannerTests.Scan_LineEndings_ExactlyOneHit` keeps its
+assertion (see Task 4). If any other existing test fails on an assertion, stop and list it. No production message and no custom
 test failure text contains a value, a seed or an export link's data.
 
 **Test first, every task:** for each test below, write the test, run it and quote the failure, then write the code.
@@ -88,15 +89,15 @@ goes after T60. `CommandValues.cs` and `NamesCommand.cs` are **not** touched: Ta
 - **`MsysTarget.cs:199-204`.** Replace the sentence from "A run s[a..b] (a and b boundaries) changes the option
   exactly when," to "so only a run's start matters." with:
 
-  > Some run starting at a boundary a changes the option exactly when, with g = a + P[a], s[g..g+4] "glob" and
-  > e = g + 4, either P[a] > 0 and (boundary[e] or s[e] is ':' or '='), or P[a] == 0, s[e] is ':' or '=' and
+  > Some run starting at a boundary a changes the option exactly when, with g = a + P[a], s[g..g+4] "glob" (case
+  > ignored) and e = g + 4, either P[a] > 0 and (boundary[e] or s[e] is ':' or '='), or P[a] == 0, s[e] is ':' or '=' and
   > boundary[e + 1]; the word changes it when that holds for some a. The condition is about a start, not one run: in
   > -"glob:x (s = -glob:x, boundaries 0, 1 and 7) it holds at a = 0 through the run s[0..7], while the run s[0..1]
   > ("-") changes nothing. Greedy stripping is deterministic, "glob" starts with neither 'n' nor '-', and a prefixed
   > run with a separator can always be extended to the word's end, so only the start matters.
 
-  Comment only; no test. Evidence: `MsysQuotingTests` passes unchanged.
-- **`PlatformFacts.cs:139`.** `"José"`. Evidence: `grep -nP '[^\x00-\x7F]' TswapTests/PlatformFacts.cs` prints
+  Comment only; no test. Evidence: `MsysQuotingTests` and `MsysTargetTests` pass unchanged.
+- **`PlatformFacts.cs:139`.** `"Jos\u00e9"`. Evidence: `grep -nP '[^\x00-\x7F]' TswapTests/PlatformFacts.cs` prints
   nothing.
 - **`VaultReindexTests.cs:188`.** `[IcuFact]` instead of `[Fact]`, nothing else. Evidence, in the commit message:
   before the change, `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 dotnet test TswapTests --filter
@@ -137,15 +138,18 @@ No docs. Release note: none (tests and comments).
 | Test (file) | Setup | Outcome |
 |---|---|---|
 | `Reindex_Twice_TheSecondRewritesNothing` (`ValueKindsTests`) | as `RecordAsOldBuildsWriteIt_…`: ingest `t` = `Sha1Uri`, `p1`, `p2`; `Unmark("t")`; `Reindex()`; then read the bytes of every record file; `Reindex()` again | the second output contains `✓ Reindexed: 0 record(s) rewritten`; every record file's bytes are unchanged; `NamesTail("t")` is ` [TOTP]` |
-| `Reindex_AFormatTwoTotpRecord_IsMarked` (`VaultReindexTests`, its format 2 fixture) | `_m.Ok(Sha1Uri, "ingest", "t")`; assert the file is format 2 (`SecretRecordCodec.FormatVersionOf`) and `ValueKinds.Entries(ReadRecord(_m, _key, "t").Extensions)` is null; `vault reindex` | the file is format 3 and `ValueKinds.Entries(...)` is `[new Entry(record.Version, 1)]` |
+| `Reindex_AFormatTwoTotpRecord_IsMarked` (`VaultReindexTests`, its format 2 fixture; add `using static TswapTests.Totp.OtpNetContractTests;` for `Sha1Uri`) | `_m.Ok(Sha1Uri, "ingest", "t")`; assert the file is format 2 (`SecretRecordCodec.FormatVersionOf`) and `ValueKinds.Entries(ReadRecord(_m, _key, "t").Extensions)` is null; `vault reindex` | the file is format 3 and `ValueKinds.Entries(...)` is `[new Entry(record.Version, 1)]` |
 | `Period1_PrintsEverySecond` (`TotpCommandTests`, existing) | unchanged | **add** `Assert.Equal("073950\n", outText);` after the existing `Assert.Matches` (kept) |
 | `ToComment_AnExistingTotpMarker_IsConsumed` (new file `TswapTests/Totp/TotpMarkerRegexTests.cs`) | a `SecretsDb` as `RedactEngineTests.Db` builds it, `pw` = `s3cr3t-value1`; `Redact.ToComment("password: \"s3cr3t-value1\"  # tswap: other:totp", db)` | content `password: ""  # tswap: pw`, one change |
 | `ToComment_AMultiLineValue_ConsumesATotpMarker` (same file) | `s` = `line-one\nline-two`; `Redact.ToCommentReport("token: line-one\nline-two  # tswap: old-name:totp\n", db)` | `Content` is `token: ""  # tswap: s\n`, `Skipped` empty |
 | `BracedTokens_TakeATotpToken` (same file) | `RunCommand.BracedTokens(["x", "{a:totp}", "{a:other}"])` | `["{a:totp}"]` |
-| `Apply_ATotpMarker_ResolvesOnce_WithoutThePreviousPreCheck` (same file) | a hand-written `ISecretLookup` fake: `Contains` true, `HasPreviousValue` false, `IsBurnedToken` false, `ResolveToken` records each token and returns `123456`; `Apply.ApplySecretsReporting("c: \"\"  # tswap: t:totp\n", fake, null)` | content `c: "123456"  # tswap: t:totp\n`; the recorded tokens are exactly `["t:totp"]` |
+| `Apply_ATotpMarker_ResolvesOnce_WithoutThePreviousPreCheck` (same file) | a hand-written `ISecretLookup` fake: `Contains` true, `HasPreviousValue` false, `IsBurnedToken` false, `ThrowIfUnreadable` does nothing, `ResolveToken` records each token and returns `123456`; `Apply.ApplySecretsReporting("c: \"\"  # tswap: t:totp\n", fake, null)` | content `c: "123456"  # tswap: t:totp\n`; the recorded tokens are exactly `["t:totp"]` |
 
 Break it once (each in the commit message):
-- `ValueKinds.With` (`ValueKinds.cs:109`): return `result` always. `Reindex_Twice_…` must fail.
+- `ValueKinds.With` (`ValueKinds.cs:109`): return `result` always. `Reindex_Twice_…` must fail. This mutation works
+  only because `vault reindex` decides "current" with `ReferenceEquals(ValueKindsFromValues(state), state.Extensions)`
+  (`RecordVaultStore.cs:1445`, a T60 file). If T60 has landed first and changed that check, pick a mutation that
+  makes the reindex rewrite an unchanged TOTP record under the new code, and name it in the commit message.
 - `PrepareV3` (`RecordVaultStore.cs:2092`): `Extensions = record.Extensions` always. `Reindex_AFormatTwoTotpRecord_…`
   must fail. (A test-time edit of a T60 file; revert it.)
 - drop `|:totp` from `ToCommentProcessor.cs:16`, then from `SecretMatcher.cs:327`, then from `RunCommand.cs:512`: the
@@ -248,9 +252,9 @@ throws `TotpSeedException` with `Reason == RExport`, and `TotpCodes.Classify(val
 | 12 | `"otpauth://totp/X?secret=" + Sha1Seed + "&issuer=otpauth-migration:x"` |
 
 New rows in `TotpParseTests.Classify`: `Link` → `OtpAuthUnusable`; `otpauth-migration//offline` (no colon),
-`otpauth-migration%3A//offline?data=x`, `otpauth_migration:x`, `"otpauth\rmigration:x"`, `"otpauth-mıgration:x"`
+`otpauth-migration%3A//offline?data=x`, `otpauth_migration:x`, `"otpauth\rmigration:x"`, `"otpauth-m\u0131gration:x"`
 → `None`. New rows in `BrokerTotpTests.IsOtpAuth_OnBytes_AgreesWithTheStringForm`: `Link`, `"xx OTPAUTH-MIGRATION:"`
-→ true; `"otpauth-migration"`, `"otpauth\rmigration:x"`, `"otpauth-mıgration:x"` → false. (The existing
+→ true; `"otpauth-migration"`, `"otpauth\rmigration:x"`, `"otpauth-m\u0131gration:x"` → false. (The existing
 `otpauth-backup-codes` → false rows stay as they are.)
 
 New file `TswapTests/Totp/ExportLinkTests.cs`, class `ExportLinkTests`, with `RunTotpTests`' fixture copied
@@ -279,15 +283,18 @@ Break it once:
 **Docs** (each a sentence or a few words; the files are T60/T61's, see the ownership table):
 - `docs/commands.md:629`, after the first sentence: "So is a value that contains `otpauth-migration:` (an
   authenticator's export link, such as Google Authenticator's "Transfer accounts" QR code, which holds the seeds of
-  several accounts): it is always refused without sudo, and its payload is never read. Store each account's
-  `otpauth://totp/` URI on its own."
-- `docs/security-model.md:385`: "a value holding `otpauth:` or `otpauth-migration:` (an export link, always
-  refused) is an otpauth record".
+  several accounts): it is refused wherever tswap gives a value or a code (`run`, `apply`, `totp`, the broker),
+  with or without sudo; only `sudo tswap get` and `sudo tswap export` show it, and its payload is never read. Store
+  each account's `otpauth://totp/` URI on its own."
+- `docs/security-model.md:385`: "a value holding `otpauth:` or `otpauth-migration:` (an export link, refused
+  wherever a value or a code is given; only `sudo tswap get` and `export` show it) is an otpauth record".
 - `docs/BROKER.md:947`: "(a value holding `otpauth:` or `otpauth-migration:`, #374, #436)".
 
 Release note: "A value holding an authenticator export link (`otpauth-migration:`, Google Authenticator's transfer
-QR code) is now refused wherever tswap gives a value without sudo, and `names` marks it ` [OTPAUTH: unusable]`; store
-each account's otpauth URI on its own." Not in scope: a sudo-only import that splits a link into one record per
+QR code) is now refused wherever tswap gives a value or a code (`run`, `apply`, `totp`, the broker); only `sudo tswap
+get` and `export` show it. `run`, `totp` and `rotate` refuse it at once; `names` marks it ` [OTPAUTH: unusable]` from
+the record's next write or `sudo tswap vault reindex`. An older tswap on another machine still hands it out, so update
+every machine. Store each account's otpauth URI on its own." Not in scope: a sudo-only import that splits a link into one record per
 account (the issue's "optionally, later"; it would need a protobuf reader).
 
 ## Task 4 (#434): `redact` and `run` take a lone CR as a line break; the T63 review Minors
@@ -319,7 +326,9 @@ today's folded view, which matches a CRLF value printed through a PTY as `\r\r\n
   Every other character maps to itself. A hit over view indices `[s, s + L)` has the raw span
   `[rawStart[s], rawEnd[s + L − 1])`, as for the existing views. The class summary's last sentence becomes: "Brief T65
   (#434): `WriteBreaks` builds the views with every break written as `\n`, `\r\n` or `\r`, for the fingerprint
-  matchers; `tocomment` keeps the two views above."
+  matchers; `tocomment` keeps the two views above." `WithLineBreaks`' summary (`:81-85`) drops "not for the views
+  above" and says: "`WriteBreaks` builds the same text with span maps, for the fingerprint matchers; this form is for
+  checks that compare whole spellings (the field check)."
 
 **The three new views** (a view's hits are added only under its condition, which is when it can differ from the
 views already scanned):
@@ -336,7 +345,12 @@ views already scanned):
   `:499`) passes `true`; `SelectMultiLine` (tocomment, `:338`) passes `false`, so `tocomment` is unchanged (out of
   scope, below).
 - `AddViewHits`' filter (`:84`) becomes: skip a hit when its raw span is empty or when the raw text over its span
-  equals the view text of the hit (ordinal); that one is the raw view's hit again. For the folded and unfolded views
+  equals the view text of the hit (ordinal); that one is the raw view's hit again.
+- **The view order is load-bearing**: raw, folded, unfolded, then `\n`, `\r\n`, `\r`. `Entries` keeps the first span
+  per raw start (`SecretMatcher.cs:465-471`), so an earlier view's span wins. Put that in a comment above the view
+  list in `ViewHits`, naming the case: for `abc def-gh\r` in `x: abc def-gh\n` the unfolded view gives `[3, 13)` and
+  the `\r` view `[3, 14)`; the unfolded span wins and the line feed stays (`LineEndingRedactTests` row 8,
+  `x: [REDACTED: s]\n`, unchanged). For the folded and unfolded views
   this keeps exactly today's hits: their hit text differs from the raw text exactly when it holds a folded `\n` or an
   inserted `\r`, which is exactly when the lengths differ. The new views need the text test, because a lone `\r`
   written as `\n` (or a `\n` as `\r`) keeps the length.
@@ -348,6 +362,17 @@ views already scanned):
   each through a `ScanBreaks(text, lineBreak, b, found)` built as `ScanUnfolded` is (pooled arrays of `2n`,
   `WriteBreaks`, prefix hashes and whitespace counts over the view, `ScanFree(…, carried: 0, rawStart, rawEnd, …)`,
   the view array returned with `clearArray: true`).
+- **One hit per raw start and candidate, the earliest view's** (as `Entries` does for `redact`). Each found hit
+  carries its view's index internally: 0 raw, 1 folded, 2 unfolded, 3 `\n`, 4 `\r\n`, 5 `\r` (the order `Scan`
+  scans them, the same as `ViewHits`); `ScanState.Hits` keeps the index with each hit, so a carried hit keeps its
+  own. Before today's sort (`:310-320`; the whitespace-run hits of `TryFoldedWhitespaceRun` count as folded, 1), of hits with equal `Start`, `Name`, `IsPrevious` and `Kind`, keep only the
+  one with the lowest view index (the first found on a tie); then sort and drop equal spans as today. Two such hits
+  are the same entry found over the same value text, so either covers every character of the value; they differ only
+  in which break characters the span takes. Without this, `Scan_LineEndings_ExactlyOneHit`'s row
+  `{ "abc def-gh\r", "x: abc def-gh\n", 3, 10 }` (`FingerprintScannerTests.cs:221`) gets a second hit `(3, 11)` from
+  the `\r` view and its `Assert.Single` fails; with it, the unfolded `(3, 10)` is the one hit, the assertion stays as
+  it is, and `run` keeps the line feed exactly as `redact` does (`x: [REDACTED: s]\n`). A comment above the
+  deduplication says the view order is load-bearing, naming that row.
 - **A trailing `\r` is decided by the next window.** In the carry (`:246-268`), let `held` be
   `state.Text.Length − 1` when `state.Text` ends with `\r`, else `state.Text.Length`. Then `carried` is
   `held − state.Pending` (0 when that is negative; the continuation check compares those `carried` characters), and
@@ -355,7 +380,8 @@ views already scanned):
   that `\r` is then tried again, and a view hit ending there comes only from the new window's own views. Without this,
   a window ending in the `\r` of a `\r\n` carries a hit in which that `\r` stood for a whole break (the `\n` view of
   `abc\r` matches `abc\n`), which a fresh scan of the next window, seeing `abc\r\n`, doesn't report: the carried
-  state would no longer give a fresh scan's hits.
+  state would no longer give a fresh scan's hits. `ScanState`'s summary (`:195-202`) says the next window "continues
+  it up to `held` (the last window without a trailing `\r`)" instead of "starts with the held end of the last one".
 - **The window rule stays exact.** `MaxRawLength`, the caps, `PendingFromCore` and `FingerprintStreamMatcher`'s
   `MaxMatchLength` don't change, because every new hit obeys the bounds they already assume. Take a free entry of
   length `L` with `W` whitespace characters (CR, LF, space, tab), so `ScanFree`'s count filter admits only view windows
@@ -401,7 +427,8 @@ form with every line break as a lone `\r`; a spelling with only lone `\r` breaks
 `Redact_MasksAValue_PrintedWithALoneCr(int row)` (new file `TswapTests/LoneCrRedactionTests.cs`, class
 `LoneCrRedactionTests`, a `SecretsDb` as `RedactEngineTests.Db` builds it, stored as `s`, through
 `Redact.RedactContent`) and `Scanner_FindsAValue_PrintedWithALoneCr(int row)` (in `FingerprintScannerTests`, beside the
-carried-state tests: a scanner built from `s`'s set with its helpers; the hits of one `Scan`):
+carried-state tests: a scanner built from `s`'s set with its helpers; one `Scan`, then `Assert.Single` on its hits,
+or `Assert.Empty` for row 7):
 
 | # | Stored | Printed | `redact` gives | Scanner hit |
 |---|---|---|---|---|
@@ -435,9 +462,17 @@ Facts:
   rewritten as one of the three at random (`rng.Next(3)`) before chunking.
 - `Variants_HoldTheLoneCrForm` (`LoneCrRedactionTests`): `Redaction.Variants(V2("\n"))` contains `V2("\r")` and its
   base64; `Redaction.Variants(V2("\r"))` contains `V2("\n")`, `V2("\r\n")` and their base64; both lists are distinct.
-- `Variants_OfAValueWithoutALoneCr_StartWithTodaysForms`: for `V2("\n")` and `V2("\r\n")`, the forms before the `\r`
-  form are, in order, the value, its CRLF form, its LF form and its PTY form, each followed by its encodings (as
-  `Redaction.cs:45-53` lists them).
+- `Variants_OfAValueWithoutALoneCr_KeepTodaysForms`: the distinct forms, in today's order, then the `\r` form. With
+  `Enc(f) = [f, b64, b64.TrimEnd('='), b64url, b64url.TrimEnd('=')]` (`b64` the base64 of `f`'s UTF-8, `b64url` it
+  with `+/` as `-_`, as `Redaction.cs:50-52` builds them), the expected list is the concatenation below with
+  duplicates dropped (ordinal, first kept), as `Redaction.cs:54` does:
+  - `V2("\n")`: `Enc(V2("\n"))`, `Enc(V2("\r\n"))`, `Enc(V2("\r"))` (its LF form is itself, and its PTY form is its
+    CRLF form);
+  - `V2("\r\n")`: `Enc(V2("\r\n"))`, `Enc(V2("\n"))`, `Enc("line-one-secret\r\r\nline-two-secret")` (the PTY form),
+    `Enc(V2("\r"))` (its CRLF form is itself).
+  The `\r` form carries its encodings too, as every form does. Duplicates come from the encodings: the 33-character
+  PTY form's base64 has no padding, so its trimmed copy is dropped, and a base64 without `+` or `/` equals its
+  base64url.
 
 **Command tests** (new file `TswapTests/RunLoneCrRedactionTests.cs`, with `RunVaultRedactionTests`' fixture copied):
 - `Run_AnotherVaultValue_PrintedWithLoneCrs_Masked`: `token` = `token-value-1`, `other` = `V2("\n")` (ingested);
@@ -448,10 +483,18 @@ Facts:
   `"a " + V2("\r") + "\r\n b " + V2("\r\n") + "\r c\n"`; for chunk sizes 1 to 64, the carrying matcher's output equals
   `a [REDACTED: s] b [REDACTED: s] c\n` (each occurrence's raw span takes its final break: the `\r\n` after the first,
   the lone `\r` after the second).
+- `Matcher_AValueEndingInACr_PrintedWithLf_KeepsTheLineFeed` (`FingerprintStreamMatcherTests`, its `Record`, `Vault`
+  and `Pieces` helpers): `s` = `abc def-gh\r`; text `x: abc def-gh\n`; for every cut from 0 to the text's length,
+  `string.Concat(Pieces(matcher, [text[..cut], text[cut..]]))` is `x: [REDACTED: s]\n`. This pins `run`'s output for
+  the `Scan_LineEndings_ExactlyOneHit` row.
+- `PendingFrom_IsSound_MixedBreaks` (`FingerprintScannerTests`, beside `PendingFrom_IsSound`): its loop (seed 2026,
+  150 rounds, `RandomVault`) over a `PlantedText` copy that rewrites each line break of every planted form and filler
+  piece (`\r\n`, a lone `\r`, `\n`) as one of the three at random before appending it, so the planted spans stay
+  right; for every planted `[start, end)` and every cut inside it, `scanner.PendingFrom(text.AsSpan(0, cut)) <= start`.
 
 Break it once:
 1. drop the three new views from `ViewHits`: `Redact_…` rows 1-6 and 8 must fail;
-2. put back the length-only filter in `AddViewHits`: `Redact_…` rows 1, 3 and 6 must fail (their view keeps the
+2. put back the length-only filter in `AddViewHits`: `Redact_…` rows 1, 3, 6 and 8 must fail (their view keeps the
    length);
 3. drop the three new views from `FingerprintScanner.Scan`: `Scanner_…` rows 1-6 and 8,
    `Run_AnotherVaultValue_…` and the chunked test must fail;
@@ -460,10 +503,17 @@ Break it once:
 5. drop the `\r` form from `Redaction.Variants`: `Variants_HoldTheLoneCrForm` must fail
    (`Run_ItsOwnValue_…` still passes, since the vault's fingerprints mask it too; say so);
 6. write the warnings twice in `ToCommentCommand` (call `WriteWarnings` a second time at `:94`): the
-   `ToCommentContinuationCommandTests` additions must fail.
+   `ToCommentContinuationCommandTests` additions must fail;
+7. drop the scanner's per-start deduplication: `Scan_LineEndings_ExactlyOneHit`'s `abc def-gh\r` row and
+   `Matcher_AValueEndingInACr_PrintedWithLf_KeepsTheLineFeed` must fail;
+8. in `PendingFromCore`, count a `\r` of a `\r\n` as whitespace too (drop the pair test at `:384`) or hold one
+   character less (`n - (_capFree - 1)` to `n - (_capFree - 2)`): `PendingFrom_IsSound_MixedBreaks` must fail for at
+   least one of the two; name which.
 
-After the task, run `TSWAP_PERF=1 ./runtests.sh --perf` once on this commit and once on its parent and put both
-throughput lines in the report (measured, not asserted; the `\r` view adds one scan per window with a line break when
+After the task, run
+`TSWAP_PERF=1 dotnet test TswapTests -c Release --filter Category=Perf --logger "console;verbosity=detailed"` (the
+test's own Release command) once on this commit and once on the commit before Task 4's (the tasks may land in any
+order), and put both throughput lines in the report (measured, not asserted; the `\r` view adds one scan per window with a line break when
 the vault has multi-line values).
 
 **Docs** (small; `commands.md` and `security-model.md` are T60/T61's):
@@ -471,7 +521,8 @@ the vault has multi-line values).
   file (`\r\n`, `\n` or, since 0.3.3, a lone `\r`, in any mix); a value whose own breaks are mixed is
   found in its own spelling only."
 - `docs/security-model.md:298`: "the `\r\n`, `\n`, lone-`\r` and PTY-printed forms of a multi-line value";
-  `:302`: "through a pipe (line breaks as stored, or each written as `\n`, `\r\n` or a lone `\r`, in any mix)".
+  `:302`: "through a pipe (line breaks as stored, or all written as `\n`, `\r\n` or a lone `\r`; a value whose own
+  breaks are all one kind is found whatever the output's mix)".
 
 Release note: "`redact` and `run` now also mask a multi-line value printed with lone CR line breaks (old Mac tools,
 `\r`-redrawn output), or stored with them and printed with LF or CRLF."
@@ -485,11 +536,23 @@ Release note: "`redact` and `run` now also mask a multi-line value printed with 
   spellings; a value made only of whitespace (`TryFoldedWhitespaceRun`, `docs/security-model.md`'s limit, unchanged).
 - #435.7 (after T60), #435.4 (record only), #434 comment 5 (no profile), the `*.rsp` scan (already refused).
 - A sudo-only import of an export link; seeds in a bare base64 payload or a QR image.
-- Any code change in a T60, T61 or T64 file; the broker's refusal text (`OtpAuthUri.BrokerRefusal`, unchanged).
+- Any code change in a T60, T61 or T64 file; the broker's refusal text (`OtpAuthUri.BrokerRefusal` says "(an
+  otpauth:// URI)" for an export link too; it is pinned by `BrokerTotpTests`' `Refusal` constant, so it stays).
 
 In your report, give the release-note lines above (one per issue; "none" for #440 and #435), the two perf lines, and
 the proposed issues (#435.7, `tocomment` and a lone `\r`).
 
 ## Amendment history
 
-(none yet)
+- **Round 1 (MiMo r1 ready; GLM r1 not ready, 2 Important, 10 Minor; controller rulings).**
+  - I-1: the scanner keeps one hit per raw start and candidate, the earliest view's, as `Entries` does for `redact`, so
+    `Scan_LineEndings_ExactlyOneHit` keeps its assertion and `run` keeps the line feed like `redact`. The view order is
+    documented as load-bearing in both, pinned by a new `FingerprintStreamMatcherTests` test, with break-it-once 7.
+  - I-2: the `Variants` test expects the distinct forms in today's order, with GLM's lists (the `\r` form with its
+    encodings; the unpadded base64 is the 33-character PTY form's).
+  - Minors: M-1 (row 8 in break-it-once 2), M-2 (`security-model.md:302` wording), M-3 (`WithLineBreaks` and
+    `ScanState` summaries), M-4 (release note: the mark after a write or reindex, update every machine), M-5 (the
+    docs sentence only; `BrokerRefusal` stays, pinned), M-6 (`PendingFrom_IsSound_MixedBreaks`, break-it-once 8), M-7
+    (the Release perf command, against the commit before Task 4), M-8 (the fake's `ThrowIfUnreadable`, the `using
+    static`, `Assert.Single`, `MsysTargetTests`), M-9 (the `ReferenceEquals` dependency noted in Task 2), M-10
+    ("case ignored").
