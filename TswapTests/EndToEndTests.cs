@@ -1324,22 +1324,21 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         }
 
         /// <summary>
-        /// Reads until the terminal is in .NET's key-read mode (ICANON off: tswap is inside <c>Console.ReadKey</c>, after
-        /// its type-ahead discard, #293). Keys typed before that could be discarded, or, before the read has switched ISIG
-        /// off, turned into a SIGINT by the line discipline, as for a person typing Ctrl-C before the prompt's read starts.
+        /// Reads until tswap is inside a key read: ICANON and ISIG both off (<c>TerminalLocalFlags.InKeyRead</c>). After the
+        /// first read ICANON stays off, so only ISIG, which the read turns off after its type-ahead discard (#293), shows
+        /// that a later read has started. A key typed before that is discarded, or, with ISIG on, a Ctrl-C becomes a
+        /// SIGINT (#413).
         /// </summary>
         public void WaitForKeyRead(int seconds = 60)
         {
             var deadline = DateTime.UtcNow.AddSeconds(seconds);
-            while (LocalFlags() is var flags && (flags & Icanon) != 0)
+            while (LocalFlags() is var flags && !TerminalLocalFlags.InKeyRead(flags, OperatingSystem.IsMacOS()))
             {
                 Assert.True(!process.HasExited && DateTime.UtcNow < deadline,
                     $"tswap never entered a key read (c_lflag 0x{flags:x}); the terminal showed:\n{Output}");
                 Pump(50);
             }
         }
-
-        private static ulong Icanon => OperatingSystem.IsMacOS() ? 0x100UL : 0x2UL;
 
         /// <summary>The terminal's c_lflag (Linux: 32 bits at byte 12; macOS: 64 bits at byte 24).</summary>
         private ulong LocalFlags()
