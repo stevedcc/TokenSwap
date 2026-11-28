@@ -147,6 +147,7 @@ public sealed class TotpCommandTests : IDisposable
 
         Assert.True(exit == 0, err);
         Assert.Matches("^[0-9]{6}\n$", outText);
+        Assert.Equal("073950\n", outText);
         Assert.Contains("Valid for 1 more second (a new code every second).", Lines(err));
     }
 

@@ -41,6 +41,22 @@ public class FingerprintStreamMatcherTests
             yield return text.Substring(i, Math.Min(size, text.Length - i));
     }
 
+    /// <summary>
+    /// Brief T65 (#434): a value ending in <c>\r</c>, printed with <c>\n</c>, is masked up to the line break and the
+    /// line feed kept, as <c>redact</c> does (<c>LineEndingRedactTests</c>): the unfolded view's hit wins over the
+    /// <c>\r</c> view's longer one at the same start, however the text is cut.
+    /// </summary>
+    [Fact]
+    public void Matcher_AValueEndingInACr_PrintedWithLf_KeepsTheLineFeed()
+    {
+        using var keys = NewKeys();
+        var matcher = FingerprintStreamMatcher.For(Vault(Record("s", RecordType.Value, Set("abc def-gh\r", keys))), keys);
+        const string text = "x: abc def-gh\n";
+
+        for (var cut = 0; cut <= text.Length; cut++)
+            Assert.Equal("x: [REDACTED: s]\n", string.Concat(Pieces(matcher, [text[..cut], text[cut..]])));
+    }
+
     [Fact]
     public void Matcher_OtherSecret_AcrossChunks_Masked()
     {

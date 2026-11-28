@@ -38,7 +38,7 @@ public static class Apply
     /// <summary>
     /// <see cref="ApplySecrets"/>, also reporting what it substituted (issue #251: <c>run</c>'s
     /// <c>{{@file}}</c> token redacts every form it wrote): one row per secret used, in the order of
-    /// first use, with its marker name (<c>name</c> or <c>name:previous</c>), its raw value and every
+    /// first use, with its marker name (<c>name</c>, <c>name:previous</c> or <c>name:totp</c>), its raw value and every
     /// distinct string written into the file for it (the value escaped for its quotes).
     /// </summary>
     public static (string Content, IReadOnlyList<(string Name, string Raw, IReadOnlyList<string> WrittenForms)> Applied)

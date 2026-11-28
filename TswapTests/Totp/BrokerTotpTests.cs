@@ -57,6 +57,11 @@ public sealed class BrokerTotpTests : IDisposable
         Assert.Equal("plain-value", Encoding.UTF8.GetString(keys.ReadKey("plain")));
     }
 
+    /// <summary>Brief T65 (#436): an authenticator export link is refused as every otpauth record is.</summary>
+    [UnixFact("the broker is Unix-only (Unix sockets and kernel peer credentials)")]
+    public void Broker_RefusesAnExportLink() =>
+        Route_Template_AndSshKey_RefuseAnOtpauthRecord_AndStillServeAPlainOne(ExportLinkTests.Link);
+
     [Theory]
     [InlineData("otpauth:", true)]
     [InlineData("xx OTPAUTH:yy", true)]
@@ -65,6 +70,11 @@ public sealed class BrokerTotpTests : IDisposable
     [InlineData("otpauth", false)]
     [InlineData("otpauth;", false)]
     [InlineData("", false)]
+    [InlineData(ExportLinkTests.Link, true)]
+    [InlineData("xx OTPAUTH-MIGRATION:", true)]
+    [InlineData("otpauth-migration", false)]
+    [InlineData("otpauth\rmigration:x", false)]
+    [InlineData("otpauth-m\u0131gration:x", false)]
     public void IsOtpAuth_OnBytes_AgreesWithTheStringForm(string value, bool expected)
     {
         Assert.Equal(expected, TswapCore.Totp.OtpAuthUri.IsOtpAuth(value));

@@ -5,15 +5,15 @@ using TswapCore.Keyring;
 namespace TswapCore.Fields;
 
 /// <summary>
-/// Issue #311, spec guard rail 1: no secret in a field. A field value is scanned with the
-/// fingerprint matcher (<see cref="FingerprintIndex"/>), so no stored value is decrypted: the
-/// stored index comes from <see cref="VaultView.BuildIndex"/> (every retained version of every live
-/// secret, burned ones included; a tombstone has none, so a deleted secret's value is not checked).
-/// Values are normalised (<see cref="FieldRules.NormaliseValue"/>) here, before every scan, so a
-/// caller can't scan a spelling that differs from the one stored; the value as given is scanned too
-/// when it differs, since secret values are stored unnormalised. Each is also scanned with its line breaks
-/// written as LF, CRLF and CR (brief T63, #412), so a multi-line value is found whatever its breaks. No message here names the secret that
-/// matched; <see cref="Holders"/> lists them for <c>field adopt</c> alone, which runs under sudo (brief T56).
+/// Issue #311, spec guard rail 1: no secret in a field. A field value is scanned with the fingerprint matcher (<see
+/// cref="FingerprintIndex"/>), so no stored value is decrypted: the stored index comes from <see
+/// cref="VaultView.BuildIndex"/> (every retained version of every live secret, burned ones included; a tombstone has
+/// none, so a deleted secret's value is not checked). Values are normalised (<see cref="FieldRules.NormaliseValue"/>)
+/// here, before every scan, so a caller can't scan a spelling that differs from the one stored; the value as given is
+/// scanned too when it differs, since secret values are stored unnormalised. Each is also scanned with its line breaks
+/// written as LF, CRLF and CR (brief T63, #412), so a multi-line value is found whatever its breaks. No message here
+/// names the secret that matched; <see cref="Holders"/> lists them for <c>field adopt</c> alone, which runs under sudo
+/// (brief T56).
 /// </summary>
 public static class FieldSecretCheck
 {

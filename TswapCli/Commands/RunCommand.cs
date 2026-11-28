@@ -531,8 +531,8 @@ public sealed partial class RunCommand : ICliCommand
 
     /// <summary>
     /// Brief T43 (#348): a token PowerShell passed on as a script block, <c>-encodedCommand &lt;Base64&gt;</c>: the
-    /// decoded body (<c>{name}</c>, <c>{name:previous}</c> or <c>{@path}</c>) and the argument before the pair when it
-    /// ends with <c>=</c> (PowerShell splits <c>--password={{db-pw}}</c> there), else null.
+    /// decoded body (<c>{name}</c>, <c>{name:previous}</c>, <c>{name:totp}</c> or <c>{@path}</c>) and the argument
+    /// before the pair when it ends with <c>=</c> (PowerShell splits <c>--password={{db-pw}}</c> there), else null.
     /// </summary>
     internal readonly record struct EncodedToken(string Braced, string? Prefix);
 

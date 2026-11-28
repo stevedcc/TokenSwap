@@ -2,8 +2,10 @@ using System.Text;
 using TswapCore;
 using TswapCore.Fingerprints;
 using TswapCore.Keyring;
+using TswapCore.Totp;
 using Xunit;
 using static TswapTests.RecordVaultTestSupport;
+using static TswapTests.Totp.OtpNetContractTests;
 
 namespace TswapTests;
 
@@ -185,7 +187,7 @@ public sealed class VaultReindexTests : IDisposable
     /// recomputation here has is not current: reindex recomputes it (a full load: the value is known). Write commands
     /// that decrypt no value (T16-S2b) keep the set as it is.
     /// </summary>
-    [Fact]
+    [IcuFact]
     public void Reindex_AVersionTwoSetWithoutItsFormEntries_IsRecomputed()
     {
         WriteMarker(_m);
@@ -204,6 +206,22 @@ public sealed class VaultReindexTests : IDisposable
         Assert.Equal(new ReindexResult(Rewritten: 1, AlreadyCurrent: 1, Tombstones: 0), result);
         Assert.Equal(Fingerprints(_key, Encoding.UTF8.GetBytes("caf\u00e9-value")), ReadRecord(_m, _key, "c").Fingerprints);
         Assert.Equal(asciiBefore, File.ReadAllBytes(RecordFile(_m, _key, "a")));
+    }
+
+    /// <summary>Brief T65 (#435.6): reindexing a format 2 TOTP record writes its <c>ValueKinds</c> entry.</summary>
+    [Fact]
+    public void Reindex_AFormatTwoTotpRecord_IsMarked()
+    {
+        _m.Ok(Sha1Uri, "ingest", "t");
+        Assert.Equal((byte?)2, SecretRecordCodec.FormatVersionOf(File.ReadAllBytes(RecordFile(_m, _key, "t"))));
+        Assert.Null(ValueKinds.Entries(ReadRecord(_m, _key, "t").Extensions));
+
+        var (exit, _, err) = _m.Run("", "vault", "reindex");
+
+        Assert.True(exit == 0, err);
+        Assert.Equal((byte?)3, SecretRecordCodec.FormatVersionOf(File.ReadAllBytes(RecordFile(_m, _key, "t"))));
+        var record = ReadRecord(_m, _key, "t");
+        Assert.Equal([new ValueKinds.Entry(record.Version, 1)], ValueKinds.Entries(record.Extensions));
     }
 
     /// <summary>A version 2 set without its NFC and NFD entries, as a machine without ICU writes it.</summary>

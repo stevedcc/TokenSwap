@@ -1601,7 +1601,8 @@ public sealed class RecordVaultStore : IFileVaultStore
 
     /// <summary>
     /// The tombstone a delete writes over the live record <paramref name="state"/> (burns kept as
-    /// history; issue #311: no <c>Fields</c> extension, every other extension kept).
+    /// history; no <c>Fields</c> extension, issue #311, and no <c>ValueKinds</c> one, brief T58; every other
+    /// extension kept).
     /// </summary>
     internal static SecretRecord Tombstone(SecretRecord state, Stamp version) => RecordMerge.Normalize(state with
     {

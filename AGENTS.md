@@ -253,7 +253,7 @@ Pattern `{{secret-name}}` in commands is replaced with actual values only in the
 
 ### Files with secrets: `run` with `{{@file}}`
 
-`tswap run helm upgrade --install app ./chart -f {{@values.yaml}}`: the token `{{@path}}` (a path, resolved against the current directory) names a file with `# tswap: <secret-name>` markers. `run` fills it in memory (`Apply.ApplySecrets` semantics), writes the copy into a private `0700` folder (`FilledFiles`: `$XDG_RUNTIME_DIR` when it is the user's own, else the temp folder; Windows: a current-user-only ACL), replaces the token with the copy's path, redacts every written form (plain, quoted, base64, base64url, and a multi-line value's `\r\n`, `\n` and PTY-printed forms), and zeroes and deletes the copy when the child exits (also on SIGINT/SIGTERM/SIGHUP; a sweep at the next file-token `run` removes folders a SIGKILL left). Before writing anything, it refuses a command in which any word is a printer, encoder, copier, shell or interpreter (the check also runs on what `{{name}}` tokens expand to, and that refusal names the token). It also refuses to run as root. `sudo tswap apply <file>` is the human-only form that prints the filled file to stdout; agents never use it, and nothing suggests `<(tswap apply …)`. Limits: docs/security-model.md ("Files with secrets").
+`tswap run helm upgrade --install app ./chart -f {{@values.yaml}}`: the token `{{@path}}` (a path, resolved against the current directory) names a file with `# tswap: <secret-name>` markers. `run` fills it in memory (`Apply.ApplySecrets` semantics), writes the copy into a private `0700` folder (`FilledFiles`: `$XDG_RUNTIME_DIR` when it is the user's own, else the temp folder; Windows: a current-user-only ACL), replaces the token with the copy's path, redacts every written form (plain, quoted, base64, base64url, and a multi-line value's `\r\n`, `\n`, lone-`\r` and PTY-printed forms), and zeroes and deletes the copy when the child exits (also on SIGINT/SIGTERM/SIGHUP; a sweep at the next file-token `run` removes folders a SIGKILL left). Before writing anything, it refuses a command in which any word is a printer, encoder, copier, shell or interpreter (the check also runs on what `{{name}}` tokens expand to, and that refusal names the token). It also refuses to run as root. `sudo tswap apply <file>` is the human-only form that prints the filled file to stdout; agents never use it, and nothing suggests `<(tswap apply …)`. Limits: docs/security-model.md ("Files with secrets").
 
 ### Storage
 
@@ -283,12 +283,12 @@ live in `RecordMerge`. `migrate --to-records` converts a classic vault; `vault m
 another copy. Every vault-folder file goes through `DirectoryOwnerMatcher`.
 Read commands decrypt only what they use (T16 Stage 2, #220): `redact`, `tocomment`, `check`, `names`,
 `list` and `burned` read metadata only (`LoadMetadata`; `redact` and `tocomment` match by fingerprint
-through `SecretMatcher`), and `get` and `apply` decrypt only the records they name (`VaultView`,
-`RecordVaultStore.OpenSecret`).
+through `SecretMatcher`), and `get`, `apply` and `totp` decrypt only the records they name (`VaultView`,
+`RecordVaultStore.OpenSecret`; `totp` only the current value's section).
 Write commands decrypt only what they use too (T16 Stage 2b): on format 3 records `create`,
-`ingest`, `rotate`, `burn`, `delete`, `add` and `import` decrypt no value and `restore` only the
-previous value it puts back (`VaultWriter`, `RecordVaultStore.OpenForWrite`), except where the
-written record itself can only be decided or merged by its value: `add` compares that record's
+`ingest`, `burn`, `delete`, `add` and `import` decrypt no value, `rotate` only the current value, once, to refuse a
+TOTP seed (brief T58), and `restore` only the previous value it puts back (`VaultWriter`,
+`RecordVaultStore.OpenForWrite`), except where the written record itself can only be decided or merged by its value: `add` compares that record's
 current value when its stored fingerprints are of another variant-set version or missing, a
 retained version without fingerprints is fingerprinted from its own value, and a record whose
 conflicted copies only plaintext can merge, like a format 2 record, is decrypted whole. Only

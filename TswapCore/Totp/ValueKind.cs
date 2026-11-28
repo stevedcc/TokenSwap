@@ -12,6 +12,9 @@ public enum ValueKind : byte
     /// <summary>An otpauth record that parses as a usable TOTP URI.</summary>
     Totp = 1,
 
-    /// <summary>An otpauth record (the value contains <c>otpauth:</c>) that isn't a clean, usable TOTP URI.</summary>
+    /// <summary>
+    /// An otpauth record (the value contains <c>otpauth:</c> or <c>otpauth-migration:</c>, brief T65, #436) that isn't
+    /// a clean, usable TOTP URI.
+    /// </summary>
     OtpAuthUnusable = 2,
 }

@@ -243,6 +243,25 @@ public sealed class ValueKindsTests : IDisposable
         Assert.Equal(" [TOTP]", NamesTail("t"));
     }
 
+    /// <summary>Brief T65 (#435.6): a second reindex finds every record current and rewrites none.</summary>
+    [Fact]
+    public void Reindex_Twice_TheSecondRewritesNothing()
+    {
+        _m.Ok(Sha1Uri, "ingest", "t");
+        _m.Ok(Password, "ingest", "p1");
+        _m.Ok("other-password-2", "ingest", "p2");
+        Unmark("t");
+        Reindex();
+        var before = _m.RecordFiles.ToDictionary(f => f, f => File.ReadAllBytes(Path.Combine(_m.RecordsDir, f)));
+
+        var output = Reindex();
+
+        Assert.Contains("✓ Reindexed: 0 record(s) rewritten", output);
+        Assert.Equal(before.Keys.Order(StringComparer.Ordinal), _m.RecordFiles.Order(StringComparer.Ordinal));
+        Assert.All(before, f => Assert.Equal(f.Value, File.ReadAllBytes(Path.Combine(_m.RecordsDir, f.Key))));
+        Assert.Equal(" [TOTP]", NamesTail("t"));
+    }
+
     [Fact]
     public void EntrylessPrevious_StaysEntryless_AfterARotation_ReindexFillsIt()
     {

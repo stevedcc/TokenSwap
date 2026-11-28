@@ -202,7 +202,39 @@ public partial class TotpParseTests
     [InlineData("﻿" + Sha1, ValueKind.OtpAuthUnusable)]
     [InlineData("certum-totp: " + Sha1, ValueKind.OtpAuthUnusable)]
     [InlineData("user: alice\n" + Sha1, ValueKind.OtpAuthUnusable)]
+    [InlineData(ExportLinkTests.Link, ValueKind.OtpAuthUnusable)]
+    [InlineData("otpauth-migration//offline", ValueKind.None)]
+    [InlineData("otpauth-migration%3A//offline?data=x", ValueKind.None)]
+    [InlineData("otpauth_migration:x", ValueKind.None)]
+    [InlineData("otpauth\rmigration:x", ValueKind.None)]
+    [InlineData("otpauth-m\u0131gration:x", ValueKind.None)]
     public void Classify(string value, ValueKind expected) => Assert.Equal(expected, TotpCodes.Classify(value));
+
+    /// <summary>Brief T65 (#436): every value holding <c>otpauth-migration:</c> (an authenticator export link).</summary>
+    public static TheoryData<string> ExportLinks() => new()
+    {
+        ExportLinkTests.Link,
+        ExportLinkTests.Link.ToUpperInvariant(),
+        "  " + ExportLinkTests.Link + "\n",
+        "export: " + ExportLinkTests.Link,
+        ExportLinkTests.Link + "\n" + ExportLinkTests.Link,
+        Sha1 + "\n" + ExportLinkTests.Link,
+        ExportLinkTests.Link + "\n" + Sha1,
+        ExportLinkTests.Link + "&batch_index=1",
+        "otpauth-migration://offline?data=%2B%2F%3D",
+        "otpauth-migration://online",
+        "otpauth-migration:",
+        "otpauth://totp/X?secret=" + Sha1Seed + "&issuer=otpauth-migration:x",
+    };
+
+    [Theory]
+    [MemberData(nameof(ExportLinks))]
+    public void ExportLink_IsRefused_WithItsOwnReason(string value)
+    {
+        var ex = Assert.Throws<TotpSeedException>(() => TotpSeed.FromUri(value));
+        Assert.Equal(TotpSeed.RExport, ex.Reason);
+        Assert.Equal(ValueKind.OtpAuthUnusable, TotpCodes.Classify(value));
+    }
 
     [GeneratedRegex(@"\b(ComputeTotp|RemainingSeconds|WindowStart)\s*\(\s*\)")]
     private static partial Regex ClockReadingCall();

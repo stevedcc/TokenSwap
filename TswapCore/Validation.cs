@@ -329,9 +329,10 @@ public static class Validation
     }
 
     /// <summary>
-    /// Brief T47: a token <c>run</c> substituted into argv: a secret token (<c>name</c> or <c>name:previous</c>) or,
-    /// with <paramref name="IsFile"/>, a <c>{{@path}}</c> token (<paramref name="Name"/> is the path as typed); the
-    /// argv index it went into, and the text it was replaced with (the value, or the filled copy's path).
+    /// Brief T47: a token <c>run</c> substituted into argv: a secret token (<c>name</c>, <c>name:previous</c> or
+    /// <c>name:totp</c>) or, with <paramref name="IsFile"/>, a <c>{{@path}}</c> token (<paramref name="Name"/> is the
+    /// path as typed); the argv index it went into, and the text it was replaced with (the value, or the filled copy's
+    /// path).
     /// </summary>
     public readonly record struct SubstitutedToken(string Name, int ArgIndex, string Value, bool IsFile = false);
 
@@ -545,6 +546,8 @@ public static class Validation
           "chroot", "caffeinate", "uv", "uvx", "poetry", "pipenv", "pdm", "hatch", "conda", "pixi",
           "npx", "pnpx", "bunx", "npm", "pnpm", "yarn", "bundle", "docker", "podman", "nerdctl",
           "kubectl", "oc", "lxc", "incus", "flatpak", "snap", "machinectl", "toolbox", "distrobox", "wsl",
+          // Brief T65 (#448): WSL's second entry point, checked by CheckWsl as wsl is.
+          "wslg",
           // Brief T64 Task 2a: so the shared walk (ProgramPositions) reaches runuser's command. GetBlockedInvocation
           // checks ShellAsUser first, so runuser keeps its -c refusal.
           "runuser" };
@@ -823,15 +826,15 @@ public static class Validation
     /// Brief T64 (#411): the refusal of a bash that may be WSL's launcher, or null. WSL's bash.exe (System32's, or the WSL
     /// app's bash.exe alias) runs its whole command line as /bin/bash -c "/bin/bash &lt;command line&gt;" (microsoft/WSL
     /// 65719878ad3c, WslClient.cpp BashMain), so a substituted value is parsed again. It looks at program positions only,
-    /// the ones CheckWrapper checks (run's program, a wrapper's or runner's command), and, in wsl's exec mode, at wsl's
-    /// command, which runs inside the distribution, where a bash.exe is the launcher again through interop.
+    /// the ones CheckWrapper checks (run's program, a wrapper's or runner's command), and, in the exec mode of wsl or
+    /// wslg (brief T65, #448), at its command, which runs inside the distribution, where a bash.exe is the launcher again through interop.
     /// </summary>
     /// <remarks>
     /// On Windows a word naming bash is allowed only when it resolves (<see cref="MsysTarget.Resolve"/>, the raw word) to
     /// a file <see cref="MsysTarget.IsMsys2"/> accepts, and behind a wrapper or runner only as an absolute path. Off
     /// Windows, and for the words of a container tool or of wsl's exec command, any word naming bash.exe is refused.
     /// A word with quote characters, white space at either end, a trailing <c>.</c>, <c>\</c> or <c>/</c>, or an NTFS
-    /// stream after a bash or wsl name is refused outright.
+    /// stream after a bash, wsl or wslg name is refused outright.
     /// </remarks>
     public static BlockedInvocation? BashLauncherRefusal(IReadOnlyList<string> argv, bool windows, MsysTarget.Probe? probe) =>
         argv.Count == 0 ? null : BashLauncherWalk(argv, 0, argv.Count, windows, probe).Verdict;
@@ -849,18 +852,27 @@ public static class Validation
     private static readonly BlockedInvocation BashLauncherRefusalOffWindows = new("bash.exe", BashLauncherReason);
     private static readonly BlockedInvocation PaddedWslRefusal = new("wsl", PaddedWslReason);
 
+    private const string PaddedWslgReason =
+        @"'wslg' written with quote characters, surrounding white space, or a trailing dot, '\' or '/' can't be checked: run reads it as another program, but Windows starts wslg.exe, which runs its command line through the Linux shell. Write it plainly: 'wslg --shell-type none ./deploy.sh {{secret}}'.";
+
+    private static readonly BlockedInvocation PaddedWslgRefusal = new("wslg", PaddedWslgReason);
+
+    /// <summary>Brief T65 (#448): the padded refusal of the wsl name <paramref name="name"/> (<c>wsl</c> or <c>wslg</c>).</summary>
+    private static BlockedInvocation PaddedWslRefusalFor(string name) => name == "wslg" ? PaddedWslgRefusal : PaddedWslRefusal;
+
     /// <summary>A walk's verdict; <paramref name="Ended"/> when a wsl word was reached, whose walk owns the rest.</summary>
     private readonly record struct BashWalk(BlockedInvocation? Verdict, bool Ended);
 
     private enum BashWord { Other, Bash, Wsl, Wrapper }
 
     /// <summary>
-    /// What a word at a program position names (bash on Windows, bash.exe off Windows, or wsl), and whether it is padded
+    /// What a word at a program position names (bash on Windows, bash.exe off Windows, or wsl or wslg), whether it is
+    /// padded, and <c>Known</c>, the set's spelling of a wrapper, a runner, or <c>wsl</c>/<c>wslg</c>
     /// (refused outright). The word is read with every <c>"</c> removed (cmd.exe's quote toggling), white space trimmed at
     /// both ends and trailing <c>.</c>, <c>\</c> and <c>/</c> trimmed; a file-name part holding <c>:</c> is cut at its
     /// first <c>:</c> (an NTFS stream), and a head naming bash or wsl is padded too.
     /// </summary>
-    private static (BashWord Kind, bool Padded, string? Wrapper) NameBashWord(string word, bool windows)
+    private static (BashWord Kind, bool Padded, string? Known) NameBashWord(string word, bool windows)
     {
         // Fail closed: white space, '.', '\' and '/' trimmed from the end until none is left (bash. \ names bash too).
         var n = word.Replace("\"", "", StringComparison.Ordinal).TrimStart();
@@ -877,17 +889,19 @@ public static class Validation
         if (colon >= 0)
         {
             var head = n[..colon];
-            var (headKind, headWrapper) = Names(head);
+            var (headKind, headKnown) = Names(head);
             if (headKind != BashWord.Other)
-                return (headKind, true, headWrapper);
+                return (headKind, true, headKnown);
         }
-        var (kind, wrapper) = Names(n);
-        return (kind, padded, wrapper);
+        var (kind, known) = Names(n);
+        return (kind, padded, known);
 
         (BashWord, string?) Names(string name)
         {
-            if (ProgramName(name).Equals("wsl", StringComparison.OrdinalIgnoreCase))
-                return (BashWord.Wsl, null);
+            // Brief T65 (#448): wslg too, before the wrapper lookup (it is in Wrappers).
+            if (ProgramName(name) is var p && (p.Equals("wsl", StringComparison.OrdinalIgnoreCase)
+                    || p.Equals("wslg", StringComparison.OrdinalIgnoreCase)))
+                return (BashWord.Wsl, p.Equals("wsl", StringComparison.OrdinalIgnoreCase) ? "wsl" : "wslg");
             if (windows ? ProgramName(name).Equals("bash", StringComparison.OrdinalIgnoreCase)
                     : WindowsFileName(name).Equals("bash.exe", StringComparison.OrdinalIgnoreCase))
                 return (BashWord.Bash, null);
@@ -930,16 +944,19 @@ public static class Validation
             ? null : BashLauncherWindowsRefusal;
     }
 
-    /// <summary>Rule 4: a wsl word at <paramref name="k"/>, its command checked by the off-Windows rule in exec mode.</summary>
-    private static BlockedInvocation? WslRule(IReadOnlyList<string> argv, int k, int end)
+    /// <summary>
+    /// Rule 4: a wsl or wslg word (<paramref name="name"/>, the set's spelling) at <paramref name="k"/>, its command
+    /// checked by the off-Windows rule in exec mode.
+    /// </summary>
+    private static BlockedInvocation? WslRule(IReadOnlyList<string> argv, int k, int end, string name)
     {
         var args = argv.Skip(k + 1).Take(end - k - 1).ToList();
-        var walk = WalkWsl("wsl", args);
+        var walk = WalkWsl(name, args);
         if (walk.Ended || !walk.Exec || walk.Command >= args.Count)
             return null;
         var inner = args.Skip(walk.Command).ToList();
         return BashLauncherWalk(inner, 0, inner.Count, windows: false, probe: null).Verdict is { } refusal
-            ? refusal with { Reason = $"'wsl' runs '{refusal.Program}': {refusal.Reason}" }
+            ? refusal with { Reason = $"'{name}' runs '{refusal.Program}': {refusal.Reason}" }
             : null;
     }
 
@@ -952,9 +969,9 @@ public static class Validation
     {
         for (var w = from; w < end; w++)
         {
-            var (kind, padded, _) = NameBashWord(argv[w], windows);
+            var (kind, padded, known) = NameBashWord(argv[w], windows);
             if (kind == BashWord.Wsl)
-                return new(padded ? PaddedWslRefusal : WslRule(argv, w, end), Ended: true);
+                return new(padded ? PaddedWslRefusalFor(known!) : WslRule(argv, w, end, known!), Ended: true);
             if (kind == BashWord.Bash && BashRule(argv[w], padded, runProgram: false, windows, probe) is { } refusal)
                 return new(refusal, Ended: false);
         }
@@ -975,11 +992,11 @@ public static class Validation
         var i = start;
         while (i < end)
         {
-            var (kind, padded, wrapper) = NameBashWord(argv[i], windows);
+            var (kind, padded, known) = NameBashWord(argv[i], windows);
             if (kind == BashWord.Wrapper && padded)
-                return new(PaddedWrapperRefusal(wrapper!), Ended: false);
+                return new(PaddedWrapperRefusal(known!), Ended: false);
             if (kind == BashWord.Wsl)
-                return new(padded ? PaddedWslRefusal : WslRule(argv, i, end), Ended: true);
+                return new(padded ? PaddedWslRefusalFor(known!) : WslRule(argv, i, end, known!), Ended: true);
             if (kind == BashWord.Bash)
                 return new(BashRule(argv[i], padded, runProgram: i == 0, windows, probe), Ended: false);
 
@@ -1077,6 +1094,8 @@ public static class Validation
         // Review fix F19: wsl's -e/--exec take no value of their own: the word after them is the command. Brief T51:
         // every run option of wsl.exe that takes the next word (WslValued).
         ["wsl"] = ["-d", "--distribution", "--distribution-id", "-u", "--user", "--cd", "--shell-type", "--parent-console"],
+        // Brief T65 (#448): wslg.exe's options that take the next word (WslgValued, and --shell-type).
+        ["wslg"] = ["-d", "--distribution", "-u", "--user", "--cd", "--shell-type"],
     };
 
     // Wrappers whose first positional argument is not the command (timeout DURATION cmd,
@@ -1110,8 +1129,9 @@ public static class Validation
         if (program.Equals("command", StringComparison.OrdinalIgnoreCase) && args.Any(a => a is "-v" or "-V"))
             return null; // command -v only looks the name up
 
-        // Brief T51 Task 4 (#405): wsl by wsl.exe's own walk, terminal (A6): nothing below runs for wsl.
-        if (program.Equals("wsl", StringComparison.OrdinalIgnoreCase))
+        // Brief T51 Task 4 (#405): wsl by wsl.exe's own walk, terminal (A6): nothing below runs for wsl. Brief T65
+        // (#448): wslg by wslg.exe's walk, the same way.
+        if (program.Equals("wsl", StringComparison.OrdinalIgnoreCase) || program.Equals("wslg", StringComparison.OrdinalIgnoreCase))
             return CheckWsl(program, args);
 
         // sudo -s/-i run a shell (with any command through its -c), npx -c and flock -c run shell
@@ -1198,6 +1218,14 @@ public static class Validation
     private static readonly HashSet<string> WslValued = new(StringComparer.Ordinal)
         { "-d", "--distribution", "--distribution-id", "-u", "--user", "--cd", "--parent-console" };
 
+    // Brief T65 (#448): wslg.exe (microsoft/WSL at f753835d5464, src/windows/common/WslClient.cpp WslgMain :1376-1475,
+    // its loop :1387-1441; ParseArgument in src/windows/common/helpers.cpp :664-684): the options that take the next
+    // word as their value. --shell-type takes login, standard or none (ParseShellOptionArg :88-107), -- ends the
+    // options, and any other word starting with '-' is WSL_E_INVALID_USAGE (:1435): wslg has no -e/--exec, --system,
+    // management options, --debug-shell or --install.
+    private static readonly HashSet<string> WslgValued = new(StringComparer.Ordinal)
+        { "-d", "--distribution", "-u", "--user", "--cd" };
+
     // Its management options: wsl runs the action and returns, starting no Linux command.
     private static readonly HashSet<string> WslManagement = new(StringComparer.Ordinal)
     {
@@ -1216,6 +1244,27 @@ public static class Validation
         "'wsl': an option this check doesn't know (wsl.exe matches its options exactly), so it can't tell what wsl runs. " +
         "Give the command after -e: 'wsl -e ./deploy.sh {{secret}}'. " + WayOut;
 
+    private const string WslgShellModeReason =
+        "'wslg' without --shell-type none runs its command line through the Linux shell (the user's login shell by " +
+        "default), which parses a substituted value again and can transform and print secrets past redaction. Give the " +
+        "command after --shell-type none: 'wslg --shell-type none ./deploy.sh {{secret}}'. " + WayOut;
+
+    private const string WslgUnknownReason =
+        "'wslg': an option or a value this check doesn't know (wslg.exe takes only -d, --distribution, -u, --user, --cd, " +
+        "--shell-type (login, standard or none) and --, matched exactly, and has no -e), so it can't tell what wslg runs. " +
+        "Give the command after --shell-type none: 'wslg --shell-type none ./deploy.sh {{secret}}'. " + WayOut;
+
+    // Brief T65 (#448): wsl.exe and wslg.exe read a valued option's value only up to the first space or tab and take
+    // what follows as their command line (ParseArgument), so run can't tell which words they run.
+    private static string WslQuotedValueReason(string name) =>
+        $"'{name}': an option's value is empty or holds white space or a double quote, which run's command line quotes, " +
+        $"but {name}.exe reads an option's value up to the first space or tab and keeps the quotes, so it can't be told " +
+        $"where {name}'s command begins (it would take the rest as its command line). Give the value without them (cd in " +
+        "a script instead of --cd). " + WayOut;
+
+    /// <summary>The words RedactingPty's Windows command line quotes: empty, or holding white space or a <c>"</c>.</summary>
+    private static bool IsQuotedWord(string word) => word.Length == 0 || word.Any(c => c == '"' || char.IsWhiteSpace(c));
+
     /// <summary>
     /// Brief T51 Task 4 (#405): <c>wsl</c> by wsl.exe's own walk, its words compared exactly and case-sensitively as
     /// wsl.exe compares them. Valued run options skip their value; <c>--shell-type</c> <c>none</c> selects exec mode
@@ -1224,18 +1273,25 @@ public static class Validation
     /// <c>--debug-shell</c> and <c>--install</c> start a shell; any other <c>-</c> word is an error in wsl.exe and
     /// unknown here (fail closed); any other word (a legacy <c>~</c> or GUID included) begins the command. In shell
     /// mode wsl.exe runs a command line as <c>$SHELL -c &lt;commandline&gt;</c> and an empty one as a login shell; in
-    /// exec mode it runs the command directly, which is checked as what it runs.
+    /// exec mode it runs the command directly, which is checked as what it runs. Brief T65 (#448): <c>wslg</c> by
+    /// wslg.exe's walk (<c>WslgMain</c>, f753835d5464): <c>WslgValued</c>, <c>--shell-type</c> and <c>--</c>, any other
+    /// <c>-</c> word unknown (it has no <c>-e</c>). For both, a valued option's value that is empty or holds white space
+    /// or a <c>"</c> is refused: wsl.exe reads its options' values only up to a space or tab and keeps quotes
+    /// (<c>ParseArgument</c>), taking what follows as its command line, so it can't be told which words it runs.
     /// </summary>
     private static BlockedInvocation? CheckWsl(string program, List<string> args)
     {
+        var wslg = program.Equals("wslg", StringComparison.OrdinalIgnoreCase);
         var walk = WalkWsl(program, args);
         if (walk.Ended)
             return walk.Verdict;
         var (exec, command) = (walk.Exec, walk.Command);
+        // Shell mode with no command: a shell reading stdin (today's wslg.exe refuses an empty command itself; an older
+        // build can't be read, so it is refused here too). Exec mode with none: an error, nothing runs.
         if (command >= args.Count)
-            return exec ? null : NoCommandShell(program); // exec mode with no command: E_INVALIDARG, nothing runs
+            return exec ? null : NoCommandShell(program);
         if (!exec)
-            return new(program, WslShellModeReason);
+            return new(program, wslg ? WslgShellModeReason : WslShellModeReason);
         var inner = GetBlockedInvocation(WithImageProgram(args.Skip(command).ToList()));
         return inner is null ? null : inner with { Reason = $"'{program}' runs '{inner.Program}': {inner.Reason}" };
     }
@@ -1250,13 +1306,21 @@ public static class Validation
 
     private static WslWalk WalkWsl(string program, List<string> args)
     {
+        // Brief T65 (#448): wslg.exe's grammar is WslgMain's; wsl's branches stay as they are.
+        var wslg = program.Equals("wslg", StringComparison.OrdinalIgnoreCase);
+        var valued = wslg ? WslgValued : WslValued;
+        var unknown = new BlockedInvocation(program, wslg ? WslgUnknownReason : WslUnknownReason);
         var exec = false;
         var command = args.Count;
         for (var i = 0; i < args.Count; i++)
         {
             var word = args[i];
-            if (WslValued.Contains(word))
+            if (valued.Contains(word))
             {
+                // Brief T65 (#448), fail closed: a value run's command line quotes is read by wsl.exe only up to its
+                // first space or tab, and what follows is taken as the command line, so the walk can't follow it.
+                if (i + 1 < args.Count && IsQuotedWord(args[i + 1]))
+                    return new(true, new(program, WslQuotedValueReason(wslg ? "wslg" : "wsl")), false, 0);
                 i++;
                 continue;
             }
@@ -1268,28 +1332,28 @@ public static class Validation
                 else if (mode is "login" or "standard")
                     exec = false;
                 else
-                    return new(true, new(program, WslUnknownReason), false, 0);
+                    return new(true, unknown, false, 0);
                 continue;
             }
-            if (word == "--system")
+            if (!wslg && word == "--system")
                 continue;
             if (word == "--")
             {
                 command = i + 1;
                 break;
             }
-            if (word is "-e" or "--exec")
+            if (!wslg && word is "-e" or "--exec")
             {
                 exec = true;
                 command = i + 1;
                 break;
             }
-            if (WslManagement.Contains(word))
+            if (!wslg && WslManagement.Contains(word))
                 return new(true, null, false, 0);
-            if (word is "--debug-shell" or "--install")
+            if (!wslg && word is "--debug-shell" or "--install")
                 return new(true, NoCommandShell(program), false, 0);
             if (word.StartsWith('-'))
-                return new(true, new(program, WslUnknownReason), false, 0);
+                return new(true, unknown, false, 0);
             command = i;
             break;
         }

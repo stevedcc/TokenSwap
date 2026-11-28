@@ -527,5 +527,5 @@ socket's templates, or make the template run in or read a folder it can write.
 - Put code-running options in the template's own literals: `find ... -exec`, `git -c alias.x=!...`,
   `git -c core.sshCommand=...`, `tar --checkpoint-action=exec=...`, `rsync -e ...`. The inline-code
   check (#105) looks at the shape of `argv`, not at every tool's options. It is `run`'s check, so it
-  also refuses `wsl` without `-e` (wsl.exe runs that command line through the Linux shell): write
-  `wsl -e ./deploy.sh {arg}`.
+  also refuses `wsl` without `-e` and `wslg` without `--shell-type none` (both run that command line
+  through the Linux shell): write `wsl -e ./deploy.sh {arg}`.

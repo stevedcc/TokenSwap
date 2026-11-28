@@ -10,7 +10,8 @@ namespace TswapTests.Build;
 /// <c>TrimmerSingleWarn</c> false unconditionally (a package's warnings listed per member, not one IL2104) and
 /// <c>IlcTreatWarningsAsErrors</c> true for Release only (the Debug publish has one known IL2026 in Yubico.YubiKey). No
 /// project file and no workflow may undo either or silence the warnings another way. File reads only
-/// (<see cref="MarkdownLinks.AllTracked"/>); each forbidden form has a positive row proving the scan finds it.
+/// (<see cref="MarkdownLinks.AllTracked"/>); each forbidden form has a positive row proving the scan finds it. A
+/// response file (<c>.rsp</c>) can't carry a setting: <c>DependencyPinningTests</c> refuses any in the repository.
 /// </summary>
 public partial class AotWarningTests
 {

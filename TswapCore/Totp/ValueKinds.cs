@@ -19,6 +19,9 @@ public static class ValueKinds
     /// <summary>The extension type.</summary>
     public const ushort Type = 0x0101;
 
+    // A new format byte needs a `KeyringFormat.RecordFormatVersion` bump, so that builds that can't read it refuse the
+    // folder: `Decode` gives null for an unknown format, and a write or a reindex would then replace the extension with
+    // this build's entries.
     private const byte Format = 1;
     private const int EntrySize = SecretRecordCodec.StampSize + 1;
 

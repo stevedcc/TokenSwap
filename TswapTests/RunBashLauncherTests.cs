@@ -239,4 +239,53 @@ public sealed class RunBashLauncherTests : IDisposable
         Assert.DoesNotContain("bash.exe", stderr);
         Assert.DoesNotContain(Value, stdout + stderr);
     }
+
+    // ── Brief T65 (#448): wslg, and a wsl option value wsl.exe would cut at a space ─────────────────
+
+    [Fact]
+    public void Wslg_IsRefusedBeforeUnlock()
+    {
+        Secrets(("pw", Value));
+
+        var (exit, stdout, stderr) = Run(OSPlatform.Windows, WslProbe(), "wslg", "./capture.sh", "{{pw}}");
+
+        AssertRefusedBeforeUnlock(exit, stdout, stderr,
+            WslgWalkTests.WslgShell.Replace(Validation.WayOutFor(false), Validation.WayOutFor(true)), windows: true);
+    }
+
+    [Fact]
+    public void QuotedWslg_IsRefusedBeforeUnlock()
+    {
+        Secrets(("pw", Value));
+
+        var (exit, stdout, stderr) = Run(OSPlatform.Windows, WslProbe(), "\"wslg.exe\"", "./deploy.sh", "{{pw}}");
+
+        AssertRefusedBeforeUnlock(exit, stdout, stderr, WslgWalkTests.PaddedWslg, windows: true);
+    }
+
+    [Fact]
+    public void WslgExecMode_StartsWithTheArgvAsGiven()
+    {
+        Secrets(("pw", Value));
+
+        var (exit, _, err) = Run(OSPlatform.Windows, WslProbe(), "wslg", "--shell-type", "none", "./capture.sh", "{{pw}}");
+
+        Assert.True(exit == 0, err);
+        Assert.Equal(1, _pty.Starts);
+        Assert.Equal(["wslg", "--shell-type", "none", "./capture.sh", Value], _pty.Argv!);
+    }
+
+    [Fact]
+    public void ADistroNameWithASpace_IsRefusedAfterSubstitution_NamingTheToken()
+    {
+        Secrets(("d", "My Distro"), ("pw", Value));
+
+        var (exit, stdout, stderr) = Run(OSPlatform.Windows, WslProbe(), "wsl", "-d", "{{d}}", "-e", "./capture.sh", "{{pw}}");
+
+        Assert.Equal(1, exit);
+        Assert.Equal(0, _pty.Starts);
+        Assert.Contains("After substitution, the value of {{d}} makes this a command 'run' refuses", stderr);
+        Assert.DoesNotContain("My Distro", stdout + stderr);
+        Assert.DoesNotContain(Value, stdout + stderr);
+    }
 }
