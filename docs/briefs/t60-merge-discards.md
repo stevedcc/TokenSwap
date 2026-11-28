@@ -40,6 +40,11 @@ refused, `burn` and field writes included, before any file is touched (I-1; the 
 gone); `S` in two steps; the flag's three sites; `Encode` sorts nothing and rejects disorder, strict UTF-8; two spaces
 before the `conflicts` status; R17 and the export count pinned or recorded as rulings.
 
+**Brief round 5 (MiMo r4):** `vault reindex`, `SaveSecrets` and `WriteSnapshot` follow the newer-format rule too (I-1);
+`With` returns a newer-format list unchanged; the cap rows pinned to a record created by this release; `ForcesFormatThree`
+false for a newer format; the R8 warning's raise sites; `LineageEdit` and its two records as separate `internal` records; `SecretInfo.cs` and `Secret` out
+of the ownership list; R1's wording; citations.
+
 **Base.** Main at 686f1fe (T58, cd1a5e7, and T62, #439, merged), already merged into `brief/t60`; the implementer
 merges `origin/main` into `brief/t60` again before starting (a merge, never a rebase). This brief builds on T58's record
 extension `0x0101` (`ValueKinds`), `CommandValues` and its token grammar. Every line number below is checked at
@@ -50,17 +55,17 @@ report only when the member or its behaviour changed.
 Read AGENTS.md and CLAUDE.md first ("The record store", "Privilege Boundary", "Token Substitution"). Then:
 - the design's Part 1 (§1.1-§1.10) and §1.4a in full; its Tests section, "T60 (#312)";
 - `TswapCore/Keyring/RecordMerge.cs` (all), `RecordWrites.cs` (all), `RecordMetadata.cs`, `SecretRecord.cs`;
-  `SecretRecordCodec.cs:55-92` (the format 3 layout), `:593-651` (`SealValue`, `OpenSealed`), `:808-908` (`ParseMetadata`),
+  `SecretRecordCodec.cs:58-92` (the format 3 layout), `:593-651` (`SealValue`, `OpenSealed`), `:808-908` (`ParseMetadata`),
   `:1008-1021` (`WriteStamp`, `ReadStamp`);
 - `TswapCore/RecordVaultStore.cs`: `OpenSecret` (`:586-654`), `OpenFromMetadata` (`:731-810`), `CommitWrites`
   (`:828-917`), `CarriesEdits` (`:923`), `WithMissingSets` (`:965-1003`), `OpenValueSection` (`:1053-1080`), `ToSecret`
   (`:1105-1125`), `CopyNote` (`:1198-1201`), `FoldConflictCopies` (`:1217-1269`), `Reindex`/`IsCurrent` (`:1401-1455`),
-  `NextRecord` (`:1533-1584`), `Tombstone` (`:1606-1610`), `WriteSnapshot` (`:1618`), `LoadMetadata` (`:1675-1820`),
+  `NextRecord` (`:1533-1586`), `Tombstone` (`:1606-1610`), `WriteSnapshot` (`:1618`), `LoadMetadata` (`:1675-1820`),
   `MergeRecords` (`:1903`), `WriteAll` (`:1989-2054`), `PrepareV3` (`:2064-2094`);
 - `TswapCore/SecretEntry.cs`, `PendingWrite.cs`, `SecretInfo.cs`, `VaultView.cs`, `VaultWriter.cs`, `ISecretLookup.cs`,
   `Models.cs:236-336` (`SecretsDb`), `Validation.cs:1-60` and `:160-180`, `Apply.cs:1-110`, `Check.cs:150-175`,
   `SecretMatcher.cs:280-420`, `Fingerprints/FingerprintIndex.cs:40-75`, `Totp/CommandValues.cs`, `Totp/ValueKinds.cs`;
-- `TswapCli/CommandContext.cs:50-70` and `:349-367`, `Commands/FieldCommand.cs:240-320` (`field adopt`), `TswapCli/FingerprintStreamMatcher.cs:55-71`,
+- `TswapCli/CommandContext.cs:50-70` and `:349-367`, `Commands/FieldCommand.cs:240-320` (`field adopt`), `TswapCli/FingerprintStreamMatcher.cs:64-72`,
   `TswapCli/FieldWhoSource.cs`, `Commands/RunCommand.cs:140-200`, `NamesCommand.cs`, `RestoreCommand.cs`,
   `DeleteCommand.cs`, `ExportCommand.cs`, `CliJson.cs`, `CommandRegistry.cs`;
 - the tests `RecordMergeTests`, `RecordMergeV3Tests`, `RecordWritesTests` (both parity tests, `:367`, `:525`),
@@ -123,7 +128,7 @@ No test, message or log prints a value, seed or URI. `SpellingTests` scans `.cs`
 `TswapCore/Keyring/ValueLineage.cs`, `TswapCore/Keyring/ConflictDisplay.cs`, `TswapCli/Commands/ConflictsCommand.cs`,
 `TswapCli/ConflictWarnings.cs`, the new test classes. Edited: `RecordMerge.cs`, `RecordWrites.cs`, `SecretRecord.cs`
 (one property), `SecretRecordCodec.cs` (two helpers extracted, Task 1), `RecordVaultStore.cs`, `SecretEntry.cs`,
-`PendingWrite.cs`, `VaultWriter.cs`, `VaultView.cs`, `SecretInfo.cs`, `Models.cs` (`Secret`, `SecretsDb`), `ISecretLookup.cs`
+`PendingWrite.cs`, `VaultWriter.cs`, `VaultView.cs`, `Models.cs` (`SecretsDb` only: `DiscardedSuffix` and the `:discarded` refusals), `ISecretLookup.cs`
 (its contract comment, Task 5), `Validation.cs`, `Apply.cs`, `Check.cs`, `ToCommentProcessor.cs`, `SecretMatcher.cs`, `Totp/CommandValues.cs`,
 `Fields/FieldSet.cs` (registry comment), `Prompt.cs`; in `TswapCli`: `CommandContext.cs`, `FieldWhoSource.cs` (make
 `ValidateBy` internal), `FingerprintStreamMatcher.cs`, `CliJson.cs`, `CommandRegistry.cs`, `Commands/FieldCommand.cs`
@@ -149,7 +154,9 @@ gives the common base, not A's value (`VaultView.ResolveToken`, `VaultView.cs:18
 These are decided here; each is marked where it is used.
 - **R1, unsealed entries.** A full load can set aside a format 2 copy's value, which has no value section yet
   (format 2 keeps no sections, `WriteAll` `:2030-2036`). In memory its entry has `sectionLength` 0 and its plaintext is
-  held by reference in `SecretRecord.UnsealedDiscards` (no copy; the decoded inputs that own it are zeroed as today).
+  held by reference in `SecretRecord.UnsealedDiscards`: the same array as the owning decoded input's value, never a
+  copy, so it is zeroed once, with that input, at `SecretEntry.Dispose` (`SecretEntry.cs:140-145`), after the write has
+  sealed it; nothing else zeroes it.
   A merge input's empty-section entry takes its plaintext from that input's `UnsealedDiscards`, so a merged result
   merged again with its inputs is unchanged (`RecordMergeTests.MergeBothWays`, `RecordMergeTests.cs:28-37`).
   `WriteAll` seals it before encoding. A file whose entry has `sectionLength` 0 can't be merged (no plaintext anywhere):
@@ -313,9 +320,12 @@ Equality of lineages is by `ValueLineageCodec.Encode` bytes (records holding lis
   decode → throws (fail closed: a reader that can't see the list can't tell whether a value is missing);
 - `public static IReadOnlyList<RecordExtension> With(IReadOnlyList<RecordExtension> extensions, ValueLineage? lineage)`:
   the `0x0103` replaced in place (at the end when there was none), removed for null or `IsNone` (R7), every other
-  extension kept in place and bytes; returns the same list when nothing changes (as `ValueKinds.With`, `ValueKinds.cs:91-110`);
+  extension kept in place and bytes; returns the same list when nothing changes (as `ValueKinds.With`, `ValueKinds.cs:91-110`).
+  **On a list whose `0x0103` is a newer format, it returns the list unchanged, whatever `lineage` is** (so
+  `With(ext, Read(ext).Lineage)` can never delete a newer build's bytes);
 - `public static bool ForcesFormatThree(IReadOnlyList<RecordExtension> extensions)`: a format 1 lineage with entries or
-  retired stamps (§1.4 rule 4; superseded alone doesn't force it).
+  retired stamps (§1.4 rule 4; superseded alone doesn't force it); false for a newer format byte (it can't read it; such
+  a record was read from a format 3 file, so the folder's `WritesV3` already writes format 3).
 
 Layout, little-endian, stamps as `SecretRecordCodec.WriteStamp` (`:1008-1014`, 28 bytes):
 
@@ -358,6 +368,8 @@ Tests, `TswapTests/ValueLineageCodecTests.cs`:
 | format byte 2 with any bytes after it | `Read` gives `(null, true)`; nothing decoded |
 | two `0x0103` extensions | `Read` throws |
 | `With` on a list holding `0x0100`, `0x0101`, `0x7777`; with `IsNone` | the others in place and byte-identical; `IsNone` removes `0x0103` |
+| `With` on a list whose `0x0103` has format byte 2, given null, `IsNone` and a format 1 lineage | the same list instance, byte-identical |
+| `ForcesFormatThree` of a format byte 2 `0x0103` | false |
 | `ForcesFormatThree`: superseded only; one retired; one entry | false; true; true |
 
 Break-it-once: accept a non-ascending superseded list (the ordering row fails).
@@ -464,9 +476,9 @@ the format 2 rows full path only), in every input order, asserting equal encoded
 | A and B create the same name | one entry |
 | a format 2 loser (full path): its plaintext against a format 3 copy holding it as previous; against an entry with another section | in `UnsealedDiscards`, section empty; merged (plaintexts equal); conflict (R2) |
 | an entry with `sectionLength` 0 read from a file | `RecordConflictException` (R1) |
-| A rotates 65 times from `x`; a merge with H, frozen at `x` | no entry: A's `S` is `{x, v1 … v63}`, exactly 64 stamps, so `x` is still knowingly superseded (§1.4a: "its `S` still holds `x`") |
-| A rotates 66 times from `x`; a merge with H at `x` | entry `x`: the cap pushed `x` out of A's `S` (the anti-goals' accepted false warning, a copy more than 64 value changes stale) |
-| MiMo's r6 construction (A 65 rotations from `x`, B 64 more after syncing A, H frozen at `x`): all at once; ((A, H), B) | all at once entry `x`; ((A, H), B) no entry (pinned, §1.4a) |
+| A's record created by this release (`create x`, so `ExactFrom` = `Stamp.Zero`), then 65 rotations from `x`; a merge with H, frozen at `x` | no entry: A's `S` is `{x, v1 … v63}`, exactly 64 stamps, so `x` is still knowingly superseded (§1.4a: "its `S` still holds `x`") |
+| the same record (created by this release, `ExactFrom` = `Stamp.Zero`) after 66 rotations from `x`; a merge with H at `x` | entry `x`: the cap pushed `x` out of A's `S` (the anti-goals' accepted false warning, a copy more than 64 value changes stale) |
+| MiMo's r6 construction (A's record created by this release, `ExactFrom` = `Stamp.Zero`; 65 rotations from `x`, B 64 more after syncing A, H frozen at `x`): all at once; ((A, H), B) | all at once entry `x`; ((A, H), B) no entry (pinned, §1.4a) |
 | under the cap: A 30 rotations from `x`, B 30 more after syncing A, H at `x`: all at once and every pairwise order | no entry in any order (`x` in `S` at every step) |
 | 65 retirements on one record; a stale copy holding the first retired stamp as an acknowledged entry | the entry back; `Forgotten` ≥ its stamp |
 | those 65 retirements merged pairwise in every order and all at once | equal `Forgotten` |
@@ -539,6 +551,12 @@ before any file is touched (so `RemoveRedundantCopies`, which gets only `(path, 
   every folded copy is then redundant and removed as today.
 - `MergeRecords` (`vault merge`) applies the same check to every record it would write, from `LoadedRecord.NewerLineages`
   (both folders' inputs), and refuses the whole merge before its first write, naming the record in R8's text.
+- `Reindex` (`:1401`), `SaveSecrets` (`:1472`) and `WriteSnapshot` (`:1618`) follow the same rule (MiMo r4 I-1): a record
+  whose `LoadedRecord.NewerLineages` the written list wouldn't carry byte for byte is refused with R8's text before
+  `WriteRecords`, nothing written. `Reindex` and `SaveSecrets` check it per record they would write; `WriteSnapshot`
+  writes only into an empty records folder (`:1621-1622`), so it has no such input, and its check is the same code
+  (a no-op there). With `With`'s newer-format rule (Task 1), `PrepareDiscarded` and `PrepareV3` leave such bytes as
+  they are, so a record whose chosen list is the newer one is rewritten with them unchanged.
 - The refusals happen in the staging loop (before `WriteAll`), so nothing is written and every file stays as it was.
 
 **Both write paths, in step:**
@@ -556,7 +574,9 @@ before any file is touched (so `RemoveRedundantCopies`, which gets only `(path, 
   replaced, everything else kept, live or tombstone; null when the bytes don't change.
 - `PendingWrite.cs`: `ValueWrite` gains `Stamp? RestoredDiscarded = null`; new
   `internal sealed record LineageWrite(string Name, SecretEntry Entry, LineageEdit Edit) : PendingWrite(Name, Entry);`
-  with `internal abstract record LineageEdit; sealed record AckEdit(IReadOnlyList<Stamp> Entries, string? By); sealed record ClearEdit(IReadOnlyList<Stamp> Entries);`.
+  and three separate `internal` records beside it in `PendingWrite.cs`: `internal abstract record LineageEdit;`,
+  `internal sealed record AckEdit(IReadOnlyList<Stamp> Entries, string? By) : LineageEdit;` and
+  `internal sealed record ClearEdit(IReadOnlyList<Stamp> Entries) : LineageEdit;`.
   `CommitWrites` (`:828`) dispatches it on both branches (the ack stamp is `NextStamp()`).
 - The cap (§1.4 "Bounds"), in `WriteAll` (`:1989`), so every write path has it: `CommitWrites`, `MergeRecords` (`vault
   merge`, `:1903` → `WriteRecords` → `WriteAll`, T61 I-3) and `Reindex`. `RecordWrite` gains
@@ -572,7 +592,7 @@ before any file is touched (so `RemoveRedundantCopies`, which gets only `(path, 
   **A value write over a tombstone (a new life) is always format 3** (C-1, design round 12 amendment 1):
   `CommitWrites` sets `ForceV3` on a `ValueWrite` whose entry is a tombstone (both branches), so the new life's `Fields`
   keeps its `Since` and R14 holds. `CarriesEdits` (`:923`) stays as it is. Once a folder holds one format 3 file,
-  `WritesV3` (`:155`, through `ProbeFormatThree`, `:1012-1037`) makes every later write format 3 anyway (I-10). On the plaintext branch, before `PrepareV3`, a new
+  `WritesV3` (`:155`, through `ProbeFormatThree`, `:1012-1045`) makes every later write format 3 anyway (I-10). On the plaintext branch, before `PrepareV3`, a new
   `private SecretRecord PrepareDiscarded(SecretRecord record, byte[] vaultKey, FingerprintKeys keys, EntrySets sets)`
   (`internal enum EntrySets { Keep, FillMissing, Recompute }`; `RecordWrite` gains `EntrySets Sets = EntrySets.Keep`):
   - every write seals each unsealed entry from `UnsealedDiscards` (`SecretRecordCodec.SealValue(recordId,
@@ -640,6 +660,9 @@ absent, with entries and retirements, over every operation including `EditLineag
 | the newer-format `0x0103` in the **main file**, a format 1 conflicted copy with the larger write stamp: `burn`; `field set` | both refused with R8's text, nothing written, both files byte-identical (MiMo r3 I-1) |
 | the newer-format `0x0103` in the file with the larger write stamp (it is the chosen list), a format 1 copy beside it: `burn` | written, the newer bytes kept byte for byte, the copy removed |
 | `vault merge` of a folder whose copy of a record carries a newer-format `0x0103` with the smaller write stamp | refused with R8's text naming the record, nothing written |
+| `vault reindex` on a record whose main file carries a newer-format `0x0103`, alone; and with a format 1 conflicted copy with the larger write stamp | alone: rewritten (or current) with the `0x0103` bytes identical; with the copy: refused with R8's text, nothing written, both files byte-identical |
+| `SaveSecrets` (a full load, then save) over the same two arrangements | the same two outcomes |
+| `WriteSnapshot` (`migrate --to-records`) from a classic vault | no `0x0103` from another build can exist; the records written as Task 3 says (pinned so the shared check runs) |
 | delete | entries gone, their stamps in `Retired`, current and previous in `Superseded` |
 | `burn`, `field set` on a record with entries | entries byte-identical, sets missing stay missing |
 | a value write on a record with a set-less entry (metadata path) | the set filled from its section, one `ValueDecrypted` call for it |
@@ -660,7 +683,8 @@ absent, with entries and retirements, over every operation including `EditLineag
 Break-it-once: drop the format 3 forcing (the `--clear` in format 2 row loses `Retired`); drop the new-life
 `ForceV3` (the value-write-over-a-tombstone row is format 2 and C-1's step-table row hands out `c`); pass `FillMissing`
 for every write (the `burn` row opens the entry's section); move the cap back into `CommitWrites` (the `vault merge`
-cap row writes); decide R8 from the merged list (the smaller-write-stamp `rotate` row writes); let `burn` skip the
+cap row writes); decide R8 from the merged list (the smaller-write-stamp `rotate` row writes); let `vault reindex` rebuild the lineage of a
+newer-format record (the reindex row's newer bytes are gone); let `burn` skip the
 newer-bytes check (the main-file `burn` row writes and the newer lineage is gone); re-issue the previous value's
 burn on `restore --discarded` (the burned-entry row fails); start the new life's lineage without the tombstone's
 `Retired` (the delete-then-create row brings `a` back); let a value write update a newer-format lineage (the R8 rotate
@@ -718,7 +742,11 @@ after the merge on the two paths that print it before (`:1244`, `:1772`) and is 
 version became a new entry; it gains the name: `Note: record <file> ('<name>') has a …` (the rest unchanged). A fold of a
 copy whose current value was retired raises nothing (design §1.8, M-4).
 
-R8's warning, once per record per command: `Warning: record <file> carries value lineage written by a newer tswap; this one keeps it as it is but can't keep or show values a merge sets aside for that secret. Upgrade tswap.`
+R8's warning, once per record per command (a per-store `HashSet<string>` of file names), raised where the newer input is
+seen: on the full path by `FoldConflictCopies`/`OpenFull` from `NewerLineages`; on a single-record open (`run`, `get`,
+`rotate` and every other command through `OpenSecret`/`OpenForWrite`) by `OpenFromMetadata` from `NewerLineages`; on the
+metadata path by `LoadMetadata`, which also fills `NewerLineageFiles`. (`ConflictDisplay.Of` returns `[]` for such a
+record, so `ForSecret` and `Summary` can't raise it.) The text: `Warning: record <file> carries value lineage written by a newer tswap; this one keeps it as it is but can't keep or show values a merge sets aside for that secret. Upgrade tswap.`
 
 **`names`**: ` [CONFLICT]` after the date and T58's mark, before ` [BURNED]` (`NamesCommand.cs:113-121`), for a secret
 with an entry that `Warns`; `NameEntry` gains `bool? Conflict = null` (`CliJson.cs:13`), set to `true` only then.
@@ -726,7 +754,7 @@ with an entry that `Warns`; `NameEntry` gains `bool? Conflict = null` (`CliJson.
 
 **Masking** (design §1.10 "Masking"): every entry's set joins the index under the name `<name>:discarded` with
 `IsPrevious` false, tombstones included: `VaultView.BuildIndex` (`VaultView.cs:129-142`) and
-`FingerprintStreamMatcher.For` (`FingerprintStreamMatcher.cs:64-71`). The label is then `[REDACTED: x:discarded]`.
+`FingerprintStreamMatcher.For` (`FingerprintStreamMatcher.cs:64-72`). The label is then `[REDACTED: x:discarded]`.
 `tocomment` writes **no** `:discarded` marker (I-5: an entry is meant to be short-lived and a person may drop it, so a
 file must not come to depend on it): `VaultView.BuildIndex` gains `bool withDiscarded = true`,
 `FingerprintRedaction.Matcher` gains the same parameter and passes it on, and `ToCommentCommand` passes `false`
@@ -827,7 +855,7 @@ the index name with no change); `RunCommand.BracedNameRegex` (`:512`), the encod
 
 **`--stamp S`** (shared, `ValueLineage.cs`: `public static IReadOnlyList<DiscardedValue> Select(ValueLineage, string name, string? stamp)`):
 `<ms>.<logical>@<8 hex>` or `@<32 hex>`, hex in either case: the whole text must match
-`^[0-9]+\.[0-9]+@([0-9a-fA-F]{8}|[0-9a-fA-F]{32})$` (so no sign, which `Hlc.TryParse` would allow, `Hlc.cs:66`), then
+`^[0-9]+\.[0-9]+@([0-9a-fA-F]{8}|[0-9a-fA-F]{32})$` (so no sign, which `Hlc.TryParse` would allow, `Hlc.cs:67`), then
 the HLC part goes through `Hlc.TryParse` (`Hlc.cs:61-70`). It must
 match exactly one entry. Texts (the stamp shown through `Validation.Printable`):
 - not a stamp: `'--stamp S' is not a stamp: give it as 'tswap conflicts x' prints it (<ms>.<logical>@<8 hex digits>) or in full (@<32 hex digits>).`
