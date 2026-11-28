@@ -37,6 +37,7 @@ public sealed class TotpSeed : IDisposable
     internal const string R11 = "digits must be 6 or 8";
     internal const string R12 = "period must be a whole number of seconds from 1 to 300";
     internal const string R14 = "the secret parameter contains a space (a URI's secret is Base32 without spaces)";
+    internal const string RExport = "the value is an authenticator export link (otpauth-migration:), which holds the seeds of several accounts; store each account's otpauth://totp/ URI on its own";
     internal const string B1 = "the seed isn't Base32 (letters A-Z, digits 2-7, '=' padding)";
     internal const string B2 = "the seed's length isn't a Base32 length";
     internal const string B3 = "the seed's '=' padding is wrong";
@@ -90,6 +91,9 @@ public sealed class TotpSeed : IDisposable
     public static TotpSeed FromUri(string value)
     {
         var text = value.Trim();
+        // Brief T65 (#436): an export link holds the seeds of several accounts; refused first, whatever else the value
+        // holds (so never R0, never a code), and its payload is never read.
+        if (OtpAuthUri.IsExportLink(text)) throw new TotpSeedException(RExport);
         if (!text.StartsWith("otpauth:", StringComparison.OrdinalIgnoreCase)) throw new TotpSeedException(R0);
         // Code review round 1 (controller ruling, fail closed): the value is the one URI and nothing else. A control
         // character (a line break, a tab) or a second otpauth: means more text, such as a replacement URI or notes, so

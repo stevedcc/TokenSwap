@@ -626,7 +626,12 @@ that take a secret only as an argument); the broker's vault user needs that grou
 Since 0.3.3 tswap hands out a TOTP secret's current code, never its seed, wherever it gives a value without sudo
 (#374).
 
-**Recognition.** A value that contains `otpauth:` anywhere (case ignored) is an otpauth record. Recognition is
+**Recognition.** A value that contains `otpauth:` anywhere (case ignored) is an otpauth record. So is a value that
+contains `otpauth-migration:` (an authenticator's export link, such as Google Authenticator's "Transfer accounts" QR
+code, which holds the seeds of several accounts): it is refused wherever tswap gives a value or a code (`run`, `apply`,
+`totp`, the broker), with or without sudo; only `sudo tswap get` and `sudo tswap export` show it, and its payload is
+never read. Store each account's `otpauth://totp/` URI on its own. An `otpauth://totp/` URI whose label or issuer
+holds `otpauth-migration:` is refused too (percent-encode it). Recognition is
 generous and the parse strict: an otpauth record that isn't a clean, usable `otpauth://totp/` URI is refused wherever
 a code or a value would be given without sudo, and is never passed on as itself. That includes a value that only
 mentions a URI among other text (a labelled paste, a note), and a URI followed by more: after trimming white space at

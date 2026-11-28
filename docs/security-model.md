@@ -382,8 +382,9 @@ Limits:
 
 ### TOTP secrets
 
-Since 0.3.3 (#374) a value holding `otpauth:` is an otpauth record, and every path that gives a value without sudo
-gives its current code instead, or refuses ([commands.md, TOTP secrets](commands.md#totp-secrets)):
+Since 0.3.3 (#374) a value holding `otpauth:` or `otpauth-migration:` (an export link, refused wherever a value or a
+code is given; only `sudo tswap get` and `export` show it) is an otpauth record, and every path that gives a value
+without sudo gives its current code instead, or refuses ([commands.md, TOTP secrets](commands.md#totp-secrets)):
 
 - A code is a live credential, valid for one period (30 seconds by default): whoever sees it can use it until then.
   Seeing one needs no burn; seeing the URI or the seed does.
