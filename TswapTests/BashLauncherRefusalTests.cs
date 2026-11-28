@@ -22,6 +22,12 @@ public class BashLauncherRefusalTests
 
     private const string WslRuns = "'wsl' runs 'bash.exe': ";
 
+    // Code review round 1 (I1): a padded word naming a wrapper or runner.
+    internal static string PaddedWrapperReason(string wrapper) =>
+        $"'{wrapper}' written with quote characters, surrounding white space, a trailing dot or a stream suffix can't be checked: " +
+        $"run reads it as another program, but Windows starts {wrapper}, and the command it runs (a bash that may be WSL's launcher, " +
+        "which parses its command line again) is then not checked. Write the name plainly.";
+
     private static MsysTarget.Probe? ProbeFor(string probe) => probe switch
     {
         "WSL" => MsysTargetTests.FakeProbe([@"C:\Windows\System32\bash.exe"]),
@@ -136,6 +142,17 @@ public class BashLauncherRefusalTests
         Add(["poetry", "-C", "/x", "run", "bash", "./x.sh", "{{x}}"], true, "WSL", "bash");
         Add(["npm", "--prefix", "/x", "exec", "bash.exe", "./x.sh", "{{x}}"], true, "WSL", "bash");
         Add(["uv", "--x", "y", "pip", "install", "bash"], true, "WSL", "bash"); // declared over-refusal
+        // Padded wrapper and runner words (code review round 1 I1): refused outright, at any program position.
+        Add(["\"uv\"", "run", "bash.exe", "./x.sh", "{{x}}"], true, "WSL", "uv");
+        Add(["\"sudo\"", "bash.exe", "./x.sh", "{{x}}"], true, "WSL", "sudo");
+        Add(["\"npx\"", "bash", "./x.sh", "{{x}}"], true, "WSL", "npx");
+        Add(["sudo.", "bash", "./x.sh", "{{x}}"], true, "Git", "sudo");
+        Add([" timeout", "5", "tool", "{{x}}"], true, "Git", "timeout");
+        Add(["docker:x", "run", "img", "tool", "{{x}}"], true, "Git", "docker");
+        Add(["sudo", "\"uv\"", "run", "tool", "{{x}}"], true, "Git", "uv");
+        Add(["\"sudo\"", "bash.exe", "./x.sh", "{{x}}"], false, "null", "sudo");
+        Add(["uv", "run", "./x", "{{x}}"], true, "WSL", null);
+        Add(["sudo", "tool", "{{x}}"], true, "WSL", null);
         // Padded wsl (round 5 I2).
         Add(["\"wsl.exe\"", "./deploy.sh", "{{x}}"], true, "WSL", "wsl");
         Add(["\"w\"sl", "-e", "./deploy.sh", "{{x}}"], true, "WSL", "wsl");
@@ -214,7 +231,8 @@ public class BashLauncherRefusalTests
         {
             "bash" => WindowsReason,
             "bash.exe" => OffWindowsReason,
-            _ => PaddedWslReason,
+            "wsl" => PaddedWslReason,
+            _ => PaddedWrapperReason(program),
         };
         Assert.Equal(string.Concat(Enumerable.Repeat(WslRuns, walks)) + reason, refusal.Reason);
     }

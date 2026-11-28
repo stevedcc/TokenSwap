@@ -846,7 +846,7 @@ public static class Validation
     /// <summary>A walk's verdict; <paramref name="Ended"/> when a wsl word was reached, whose walk owns the rest.</summary>
     private readonly record struct BashWalk(BlockedInvocation? Verdict, bool Ended);
 
-    private enum BashWord { Other, Bash, Wsl }
+    private enum BashWord { Other, Bash, Wsl, Wrapper }
 
     /// <summary>
     /// What a word at a program position names (bash on Windows, bash.exe off Windows, or wsl), and whether it is padded
@@ -854,7 +854,7 @@ public static class Validation
     /// both ends and trailing <c>.</c>, <c>\</c> and <c>/</c> trimmed; a file-name part holding <c>:</c> is cut at its
     /// first <c>:</c> (an NTFS stream), and a head naming bash or wsl is padded too.
     /// </summary>
-    private static (BashWord Kind, bool Padded) NameBashWord(string word, bool windows)
+    private static (BashWord Kind, bool Padded, string? Wrapper) NameBashWord(string word, bool windows)
     {
         // Fail closed: white space, '.', '\' and '/' trimmed from the end until none is left (bash. \ names bash too).
         var n = word.Replace("\"", "", StringComparison.Ordinal).TrimStart();
@@ -871,17 +871,37 @@ public static class Validation
         if (colon >= 0)
         {
             var head = n[..colon];
-            var headKind = Names(head);
+            var (headKind, headWrapper) = Names(head);
             if (headKind != BashWord.Other)
-                return (headKind, true);
+                return (headKind, true, headWrapper);
         }
-        return (Names(n), padded);
+        var (kind, wrapper) = Names(n);
+        return (kind, padded, wrapper);
 
-        BashWord Names(string name) =>
-            ProgramName(name).Equals("wsl", StringComparison.OrdinalIgnoreCase) ? BashWord.Wsl
-            : windows ? (ProgramName(name).Equals("bash", StringComparison.OrdinalIgnoreCase) ? BashWord.Bash : BashWord.Other)
-            : WindowsFileName(name).Equals("bash.exe", StringComparison.OrdinalIgnoreCase) ? BashWord.Bash : BashWord.Other;
+        (BashWord, string?) Names(string name)
+        {
+            if (ProgramName(name).Equals("wsl", StringComparison.OrdinalIgnoreCase))
+                return (BashWord.Wsl, null);
+            if (windows ? ProgramName(name).Equals("bash", StringComparison.OrdinalIgnoreCase)
+                    : WindowsFileName(name).Equals("bash.exe", StringComparison.OrdinalIgnoreCase))
+                return (BashWord.Bash, null);
+            // Code review round 1 (I1): the set's own spelling, never the word's.
+            if (Wrappers.TryGetValue(ProgramName(name), out var known) || SubcommandTools.TryGetValue(ProgramName(name), out known))
+                return (BashWord.Wrapper, known);
+            return (BashWord.Other, null);
+        }
     }
+
+    /// <summary>
+    /// Brief T64 code review round 1 (I1): a word naming a wrapper or runner (<see cref="Wrappers"/>,
+    /// <see cref="SubcommandTools"/>) with quote characters, white space at either end, a trailing <c>.</c>, <c>\</c> or
+    /// <c>/</c>, or a stream suffix: the other guards read it as another program and walk no further, but Windows starts
+    /// the wrapper, whose command then goes unchecked. <paramref name="wrapper"/> is the set's spelling.
+    /// </summary>
+    private static BlockedInvocation PaddedWrapperRefusal(string wrapper) => new(wrapper,
+        $"'{wrapper}' written with quote characters, surrounding white space, a trailing dot or a stream suffix can't be checked: " +
+        $"run reads it as another program, but Windows starts {wrapper}, and the command it runs (a bash that may be WSL's launcher, " +
+        "which parses its command line again) is then not checked. Write the name plainly.");
 
     // C:\..., c:/..., \\server\..., \\?\C:\... ; not \Program Files\... (rooted on the current drive), .\bash or sub\bash.exe.
     private static bool IsAbsoluteWindowsPath(string word) =>
@@ -926,7 +946,7 @@ public static class Validation
     {
         for (var w = from; w < end; w++)
         {
-            var (kind, padded) = NameBashWord(argv[w], windows);
+            var (kind, padded, _) = NameBashWord(argv[w], windows);
             if (kind == BashWord.Wsl)
                 return new(padded ? PaddedWslRefusal : WslRule(argv, w, end), Ended: true);
             if (kind == BashWord.Bash && BashRule(argv[w], padded, runProgram: false, windows, probe) is { } refusal)
@@ -949,7 +969,9 @@ public static class Validation
         var i = start;
         while (i < end)
         {
-            var (kind, padded) = NameBashWord(argv[i], windows);
+            var (kind, padded, wrapper) = NameBashWord(argv[i], windows);
+            if (kind == BashWord.Wrapper && padded)
+                return new(PaddedWrapperRefusal(wrapper!), Ended: false);
             if (kind == BashWord.Wsl)
                 return new(padded ? PaddedWslRefusal : WslRule(argv, i, end), Ended: true);
             if (kind == BashWord.Bash)
