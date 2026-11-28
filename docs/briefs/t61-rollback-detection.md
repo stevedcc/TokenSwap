@@ -91,7 +91,7 @@ config folder, `MigrateToRecordsTests.cs:107-116` and `SecureEnclaveTouchChoiceT
   (`Acknowledge` and `ClearDiscarded` stage a `LineageWrite`, `RestoreDiscarded` a `ValueWrite`), and its
   `{{x:discarded}}` resolution with `ISecretLookup.IsBurnedToken` in `VaultView.cs`.
 - T60's entry-cap refusal and its cap, `ValueLineageCodec.MaxEntries` (64) entries or `MaxEntryBytes` (65 536) encoded
-  entry bytes, checked in `WriteAll` before the first write (T60 brief at 0e2cdc2, Task 3), so `CommitWrites`,
+  entry bytes, checked in `WriteAll` before the first write (T60 brief at e4f415b, Task 3), so `CommitWrites`,
   `MergeRecords` (`vault merge`) and `Reindex` are all capped; each `RecordWrite` carries `CapExemption Cap`
   (`internal enum CapExemption { None, EntryCount, All }`: `All` for a `ClearEdit` and `restore --discarded`,
   `EntryCount` for a `BurnWrite`, `None` for `MergeRecords` and `Reindex`). There is no predicate method: compare
@@ -128,8 +128,8 @@ If T60 as merged names any of these differently, use T60's names; if one is miss
   written), only a format 1 file that fails is **Damaged**; rows for an unknown member at `Format` 2, `5000000000`, a
   repeated `Records` key, `null` members and a bad `Vault`; reasons named (M-2).
 - **I-2:** T60's names at 0e2cdc2: the cap in `WriteAll` with `CapExemption` (`vault merge` and `vault reindex`
-  capped), and `ValueLineageCodec.Read`, `SecretEntry.LineageNewerFormat`, `LoadedRecord.LineageNewerFormat`,
-  `VaultMetadata.NewerLineageFiles`; the stops kept.
+  capped), and `ValueLineageCodec.Read`, `SecretEntry.NewerLineages`, `LoadedRecord.NewerLineages` (T60 at e4f415b;
+  non-empty means a newer-format lineage), `VaultMetadata.NewerLineageFiles`; the stops kept.
 - **I-3:** the two `SudoTableDrive` drivers sanctioned and named; no assertion changes. The `CopyVaultTo` sanction is
   withdrawn (M-8: nothing needs it since R-7).
 - **M-3:** the cap parenthetical goes after the quoted command. **M-7:** the own-slot rows name the desktop and pin the
@@ -539,10 +539,12 @@ raise gets the merged state (for `Write` and the pair) and the record's `Persist
 `Missing` gets no raise; an R4 finding doesn't stop it. **An R3 record raises nothing**, not even from the copies that
 authenticated before its merge failed (`FoldConflictCopies`' `RecordConflictException` branch, `:1257-1266`; the
 metadata path's `:786-797`; an `UnreadableRecordException` from an open). **A record with a newer-format lineage**
-(round 3, I-8), told by T60's names (brief at 0e2cdc2, "Interfaces T61 relies on"):
-`ValueLineageCodec.Read(extensions).NewerFormat` for one record's extension list; `SecretEntry.LineageNewerFormat`
-(any input of an opened entry's merge) on the open and write paths; `LoadedRecord.LineageNewerFormat` (set by
-`FoldConflictCopies`) on the full load; `VaultMetadata.NewerLineageFiles` (hashed file names) on `LoadMetadata`.
+(round 3, I-8), told by T60's names (brief at e4f415b, "Interfaces T61 relies on"):
+`ValueLineageCodec.Read(extensions).NewerFormat` for one record's extension list; `SecretEntry.NewerLineages`
+(`IReadOnlyList<byte[]>`, the `0x0103` data of each newer-format input of an opened entry's merge) on the open and write
+paths; `LoadedRecord.NewerLineages` (the same, set by `FoldConflictCopies`) on the full load;
+`VaultMetadata.NewerLineageFiles` (hashed file names) on `LoadMetadata`. "The record has a newer-format lineage" means
+`NewerLineages` is non-empty (or the file is in `NewerLineageFiles`).
 `SeenRecord` and `PersistedLineage` carry `bool LineageUnknown`; `Check` then skips R4 (no `EntriesGone`, `BurnsGone`
 or `RetiredBack`), and `Raise` and `Accept` leave `Discarded` and `Retired` as they are (R1, R2 and the pair work as
 usual). The store warns once per command per record: `Warning: record <file> ('<name>') carries value lineage written
@@ -683,7 +685,7 @@ the unreadable refusal and before `CommitWrites`, for the ordinally first name, 
 - when the record is also at T60's entry cap, before `Nothing was written.`: `Because it also holds as many set-aside
   values as a record can store, repair it in this order: 'sudo tswap vault accept-rollback <name>', then 'sudo tswap
   conflicts --clear <name>', then 'sudo tswap vault merge <a newer copy>' if one exists.` The same sentence is
-  appended to T60's cap refusal in `WriteAll` (T60 brief at 0e2cdc2, Task 3: `MergeRecords` passes `CapExemption.None`,
+  appended to T60's cap refusal in `WriteAll` (T60 brief at e4f415b, Task 3: `MergeRecords` passes `CapExemption.None`,
   so `vault merge` is capped) when it fires on an `Older` record. If T60 as merged doesn't cap `MergeRecords`' writes,
   stop and report: the 64-entry row below can't be built without it.
 
