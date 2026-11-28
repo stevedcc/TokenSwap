@@ -51,14 +51,20 @@ departures with their reasons (M-1, M-2); `sameAs` in R18 (M-3); `Merge`'s null 
 several secrets (M-5); `delete` at the entry cap needs no exemption, R20, with its rows (M-6); `SecretMatcher.BaseName`
 strips `:discarded` (M-7); `--stamp` matches parsed values (M-8); the `Need`, `Restore` and `MergeBothWays` citations (M-9).
 
+**Brief round 7 (MiMo r6):** `RunCommand.cs`'s f2e3a5a offset (+4 above about `:256`, +6 below) and the encoded-token
+citation; the fingerprint set read `:847-876`; `LoadMetadata` `:1675-1846`; `FingerprintRedaction.cs` in the ownership
+list and `Older032.cs` among the new files; `BurnedAdvice` returns `string?`; `Select` with no stamp; and, from MiMo's
+observation, R21: a `{{name:discarded}}` line in `Prompt.cs`. (MiMo's `RecordWrites.cs:103-108` is not cited in this
+brief; no change.)
+
 **Base.** Main at 686f1fe (T58, cd1a5e7, and T62, #439, merged), already merged into `brief/t60`; the implementer
 merges `origin/main` into `brief/t60` again before starting (a merge, never a rebase). This brief builds on T58's record
 extension `0x0101` (`ValueKinds`), `CommandValues` and its token grammar. Every line number below is checked at
 686f1fe. Main has since moved to 66c3620 (T63: `SecretMatcher.cs`, `ToCommentCommand.cs`, `FieldSecretCheck.cs`,
 `BrokerRedactor.cs`); the `SecretMatcher` lines below are given at 66c3620. Main is now at f2e3a5a (T64 merged after
 T63). T64 moved lines this brief names in two files, both known-moved under the rule below: `TswapCli/Commands/RunCommand.cs`
-(a `BashLauncherRefusal` check inserted above the token loop, so every line from `:140` on is 4 later; the f2e3a5a
-lines are given beside the 686f1fe ones) and `docs/security-model.md` (the `:186` non-goal cell rewritten in place; no
+(a `BashLauncherRefusal` check inserted above the token loop, so lines from `:140` are 4 later up to about `:256` and
+6 later below it, where T64 added two more; the f2e3a5a numbers given beside each line are authoritative) and `docs/security-model.md` (the `:186` non-goal cell rewritten in place; no
 line moved, so `:209` holds at f2e3a5a). If a later main moves a place this brief names, follow the member it names and say so in the commit; stop and
 report only when the member or its behaviour changed.
 
@@ -70,7 +76,7 @@ Read AGENTS.md and CLAUDE.md first ("The record store", "Privilege Boundary", "T
 - `TswapCore/RecordVaultStore.cs`: `OpenSecret` (`:586-654`), `OpenFromMetadata` (`:731-810`), `CommitWrites`
   (`:828-917`), `CarriesEdits` (`:923`), `WithMissingSets` (`:965-1003`), `OpenValueSection` (`:1053-1080`), `ToSecret`
   (`:1105-1125`), `CopyNote` (`:1198-1201`), `FoldConflictCopies` (`:1217-1269`), `Reindex`/`IsCurrent` (`:1401-1455`),
-  `NextRecord` (`:1533-1586`), `Tombstone` (`:1606-1610`), `WriteSnapshot` (`:1618`), `LoadMetadata` (`:1675-1820`),
+  `NextRecord` (`:1533-1586`), `Tombstone` (`:1606-1610`), `WriteSnapshot` (`:1618`), `LoadMetadata` (`:1675-1846`),
   `MergeRecords` (`:1903`), `WriteAll` (`:1989-2054`), `PrepareV3` (`:2064-2094`);
 - `TswapCore/SecretEntry.cs`, `PendingWrite.cs`, `SecretInfo.cs`, `VaultView.cs`, `VaultWriter.cs`, `ISecretLookup.cs`,
   `Models.cs:236-336` (`SecretsDb`), `Validation.cs:1-60` and `:160-180`, `Apply.cs:1-110`, `Check.cs:150-175`,
@@ -136,14 +142,14 @@ No test, message or log prints a value, seed or URI. `SpellingTests` scans `.cs`
 
 **File ownership** (design "Briefs"; T61 follows on the same files, so keep to this list). New:
 `TswapCore/Keyring/ValueLineage.cs`, `TswapCore/Keyring/ConflictDisplay.cs`, `TswapCli/Commands/ConflictsCommand.cs`,
-`TswapCli/ConflictWarnings.cs`, the new test classes. Edited: `RecordMerge.cs`, `RecordWrites.cs`, `SecretRecord.cs`
+`TswapCli/ConflictWarnings.cs`, `TswapTests/Older032.cs` (the helpers, Interfaces), the new test classes. Edited: `RecordMerge.cs`, `RecordWrites.cs`, `SecretRecord.cs`
 (one property), `SecretRecordCodec.cs` (two helpers extracted, Task 1), `RecordVaultStore.cs`, `SecretEntry.cs`,
 `PendingWrite.cs`, `VaultWriter.cs`, `VaultView.cs`, `Models.cs` (`SecretsDb` only: `DiscardedSuffix` and the `:discarded` refusals), `ISecretLookup.cs`
 (its contract comment, Task 5), `Validation.cs`, `Apply.cs`, `Check.cs`, `ToCommentProcessor.cs`, `SecretMatcher.cs`, `Totp/CommandValues.cs`,
 `Fields/FieldSet.cs` (registry comment), `Prompt.cs`; in `TswapCli`: `CommandContext.cs`, `FieldWhoSource.cs` (make
 `ValidateBy` internal), `FingerprintStreamMatcher.cs`, `CliJson.cs`, `CommandRegistry.cs`, `Commands/FieldCommand.cs`
-(the adopt refusal, Task 5), `ElevatedCommand.cs` (`Quoted`, R16), and the commands that warn (Task 4) or change
-(Task 5); `TswapTests/Older032.cs` (the helpers, Interfaces); docs in Task 6. `RecordMetadata.cs` is in the design's T60
+(the adopt refusal, Task 5), `ElevatedCommand.cs` (`Quoted`, R16), `Commands/FingerprintRedaction.cs` (`Matcher` gains
+`withDiscarded`, Task 4), and the commands that warn (Task 4) or change (Task 5); docs in Task 6. `RecordMetadata.cs` is in the design's T60
 list but needs no change here (the lineage is an extension); an edit is allowed if one turns out to be needed.
 `Models.cs` is in the design's T61 list too; T60 edits `Secret` and `SecretsDb` there first (the briefs are serialised). Don't touch `TswapCore/Vault/VaultUnlocker.cs`, `KeyringUnion.cs` or
 `VaultCommand.cs` (T61's).
@@ -161,9 +167,9 @@ gives the common base, not A's value (`VaultView.ResolveToken`, `VaultView.cs:18
 
 ## Rulings where the design was silent or the code disagreed
 
-These are decided here; each is marked where it is used. Two of them depart from the design's body, which is
-otherwise authoritative: **R17** (§1.8's command table) and **R19** (§1.5's entry count). The implementer's report
-names both, and the controller carries them into the design's next round.
+These are decided here; each is marked where it is used. Three of them depart from the design's body, which is
+otherwise authoritative: **R17** (§1.8's command table), **R19** (§1.5's entry count) and **R21** (the design's
+prompt line, which has no `:discarded` token). The implementer's report names all three, and the controller carries them into the design's next round.
 - **R1, unsealed entries.** A full load can set aside a format 2 copy's value, which has no value section yet
   (format 2 keeps no sections, `WriteAll` `:2030-2036`). In memory its entry has `sectionLength` 0 and its plaintext is
   held by reference in `SecretRecord.UnsealedDiscards`: the same array as the owning decoded input's value, never a
@@ -257,6 +263,10 @@ names both, and the controller carries them into the design's next round.
   store more): `delete` keeps `CapExemption.None`. No exemption is needed because a delete stores an empty list: its
   current and previous values join `Superseded` and every entry it saw is dropped into `Retired` (design §1.5's table,
   Task 3's delete row), so the tombstone it writes holds no entries and the cap check can never bind it.
+- **R21, the prompt's `{{name:discarded}}` line** (design departure, MiMo r6 observation: the design adds only the
+  `conflicts` bullet to `Prompt.cs`, while `conflicts`' hint lines tell the reader to use `{{x:discarded}}`): Task 6
+  adds one line to the `run` bullet, beside the `:previous` and `:totp` lines (`Prompt.cs:29-38` at f2e3a5a), so an
+  agent reading the hint knows the token and that it is the user's call. Text in Task 6.
 
 ## Interfaces T61 relies on
 
@@ -376,7 +386,7 @@ fingerprint kinds checked as `ParseMetadata` checks them (`SecretRecordCodec.cs:
 read and write of `ParseMetadata`/`EncodeV3` into `internal static int WriteFingerprintSet(Span<byte>, int, FingerprintSet)`
 and `internal static (FingerprintSet Set, int Offset) ReadFingerprintSet(byte[], int)` in `SecretRecordCodec` and call
 them from both places (no behaviour change; the existing codec tests cover it). `ReadFingerprintSet` throws the codec's
-"Malformed record: …" texts (through `Need`, `SecretRecordCodec.cs:989`; the fingerprint set read it moves is `:849-866`); `ValueLineageCodec.Decode` catches them
+"Malformed record: …" texts (through `Need`, `SecretRecordCodec.cs:989`; the fingerprint set read it moves is `:847-876`); `ValueLineageCodec.Decode` catches them
 and throws `Malformed value lineage: a fingerprint set (<inner message>)`.
 
 Add `0x0103` to the registry comment (`FieldSet.cs:8-11`): "values a merge set aside and the lineage that decides them (#312)".
@@ -831,7 +841,9 @@ Break-it-once: drop the writer's-machine rule (the "open on A" row fails); compu
 (`:156-160`: a `:discarded` marker is `Ok`/`Burned` by `IsBurnedToken` of the token, `Missing` when the secret is,
 entries not checked); `ToCommentProcessor.ExistingMarker` (`:16`); `SecretMatcher.ConsumedMarker` (`:327` at 66c3620) and `BaseName`
 (`:404-405` at 66c3620: strip `:discarded` too, and its doc comment, `:403`, says "without `:previous` or `:discarded`"; T63's `TokensIn`, `:289-290`, and the hit tokens at `:431` and `:455` build `x:discarded` from
-the index name with no change); `RunCommand.BracedNameRegex` (`:512`; `:518` at f2e3a5a), the encoded-token decoding and the `--env` text (`:446`; `:452` at f2e3a5a). Texts:
+the index name with no change); `RunCommand.BracedNameRegex` (`:512`; `:518` at f2e3a5a) and the `--env` text (`:446`, the `exactly` const; `:452` at
+f2e3a5a); the encoded-token decoding (`EncodedToken`, `DecodeScriptBlock`, `:526-585`; `:532-591` at f2e3a5a) needs no
+change beyond `BracedNameRegex`. Texts:
 - `Unknown token '{{x:bogus}}': the suffixes are ':previous' (the value the last rotation replaced), ':totp' (the current code of a TOTP seed) and ':discarded' (a value a merge set aside).`
 - `'…' is not a valid token: a token is {{NAME}}, {{NAME:previous}}, {{NAME:totp}} or {{NAME:discarded}}, and fields aren't substituted into commands.`
 - `'…' is not a valid marker: a marker is # tswap: NAME, # tswap: NAME:previous, # tswap: NAME:totp or # tswap: NAME:discarded, and fields aren't substituted into commands.`
@@ -852,7 +864,7 @@ the index name with no change); `RunCommand.BracedNameRegex` (`:512`; `:518` at 
 - **Burned advice** (T58's code review added it after a0836c2): `run` ends its burned warning with
   `values.GaveCode(token) ? values.BurnedSeedAdvice(token) : "rotate it after use"` (`RunCommand.cs:154-156`; `:158-160` at f2e3a5a), `apply`
   with `Apply.BurnedAdvice` (`Apply.cs:172-173`). Both act on the current value and are wrong for a discarded one. New
-  `public string BurnedAdvice(string token)` on `CommandValues`: for a `:discarded` token, code or not,
+  `public string? BurnedAdvice(string token)` on `CommandValues`: for a `:discarded` token, code or not,
   `it is a value a merge set aside: once nothing uses it, the user drops it with 'sudo <prefix> conflicts --clear x'` (R16);
   otherwise `BurnedSeedAdvice(token)` when `GaveCode(token)`, else null. `run` uses it, falling back to
   `"rotate it after use"`; `Apply.BurnedAdvice` checks it first (when `db` is a `CommandValues`), falling back as today.
@@ -882,7 +894,8 @@ the index name with no change); `RunCommand.BracedNameRegex` (`:512`; `:518` at 
 `<ms>.<logical>@<8 hex>` or `@<32 hex>`, hex in either case: the whole text must match
 `^[0-9]+\.[0-9]+@([0-9a-fA-F]{8}|[0-9a-fA-F]{32})$` (so no sign, which `Hlc.TryParse` would allow, `Hlc.cs:67`), then
 the HLC part goes through `Hlc.TryParse` (`Hlc.cs:61-70`). It must
-match exactly one entry. Matching is on the parsed values, never the text: the stamp's (ms, logical) against each
+match exactly one entry. With `stamp` null, `Select` returns every entry and the callers narrow it (`Acknowledge` to
+those that `Warns`, `ClearDiscarded` keeps every one). Matching is on the parsed values, never the text: the stamp's (ms, logical) against each
 entry's version, and its hex digits, read as bytes, as a prefix (8 digits) or the whole (32) of the entry's origin; so
 `001.2@…` and `1.2@…` name the same entry, and hex case doesn't matter. Texts (the stamp shown through `Validation.Printable`):
 - not a stamp: `'--stamp S' is not a stamp: give it as 'tswap conflicts x' prints it (<ms>.<logical>@<8 hex digits>) or in full (@<32 hex digits>).`
@@ -1063,6 +1076,13 @@ entry).
 - **`TswapCore/Prompt.cs`** (ASCII, `Prompt_IsAsciiOnly`): in "Commands you SHOULD use", after `burned`:
   `` `%CMD% conflicts [name]` - Lists values a merge set aside (no values shown). On a merge warning, tell the user what it says and that `%CMD% conflicts` has the details; never acknowledge, clear or restore one unless the user asks. ``
   The `names` bullet: `[CONFLICT]` marks them.
+  In the `run` bullet, after its TOTP lines (ending `` seed is for the user only (`sudo %CMD% get <name>`) ``, `:39`
+  at f2e3a5a), one more continuation line (R21):
+  `` A value a merge set aside (listed by `%CMD% conflicts`) is used once with `{{name:discarded}}` (or `# tswap: name:discarded` in a file); use it only when the user asks for it, and leave putting it back to the user (`sudo %CMD% restore <name> --discarded`). ``
+  Test: a `PromptTests` row asserts that line (prefix `tswap`), next to `Prompt_IsAsciiOnly`. No test pins the prompt's
+  hash (`PromptTests` checks `GetHash` is deterministic, prefix-dependent and lowercase hex only), so nothing else
+  changes; `tswap prompt-hash` prints a new hash with this release, as for any prompt change, and a line for the release notes
+  lines say installed prompts should be refreshed (`tswap prompt`).
 - **AGENTS.md**: `conflicts [name] [--json]` and `conflicts --ack <name>` in the No-sudo list (`AGENTS.md:115`);
   `conflicts --clear <name>` and `restore <name> --discarded` in Requires sudo (`:123`); one sentence in "Token
   Substitution" for `{{name:discarded}}`.
