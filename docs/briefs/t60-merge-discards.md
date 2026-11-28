@@ -35,6 +35,11 @@ a break-it-once that can fail (I-8); the `--clear` rotation sentence (I-9); form
 the entry cap in `WriteAll`, so `vault merge` and `vault reindex` are capped too (T61 I-3); the newer-format flags in
 Interfaces (T61 I-8); the test-input change dropped; R17 (the warning's command list) and R18 (the brief's own texts).
 
+**Brief round 4 (MiMo r3):** a write whose merged list would not carry an input's newer-format `0x0103` bytes is
+refused, `burn` and field writes included, before any file is touched (I-1; the round 3 "keep the copy" mechanism is
+gone); `S` in two steps; the flag's three sites; `Encode` sorts nothing and rejects disorder, strict UTF-8; two spaces
+before the `conflicts` status; R17 and the export count pinned or recorded as rulings.
+
 **Base.** Main at 686f1fe (T58, cd1a5e7, and T62, #439, merged), already merged into `brief/t60`; the implementer
 merges `origin/main` into `brief/t60` again before starting (a merge, never a rebase). This brief builds on T58's record
 extension `0x0101` (`ValueKinds`), `CommandValues` and its token grammar. Every line number below is checked at
@@ -177,7 +182,8 @@ These are decided here; each is marked where it is used.
 - **R9, JSON nulls.** `CliJsonContext` omits nulls (`CliJson.cs:34`); the design's `conflicts --json` shows `null`s. The
   conflicts records mark those properties `[property: JsonIgnore(Condition = JsonIgnoreCondition.Never)]` so the shape
   is stable.
-- **R10, `conflicts` text.** The status goes at the end of each `discarded` line (one secret can hold entries in
+- **R10, `conflicts` text.** The status goes at the end of each `discarded` line, after two spaces (as the design's
+  §1.9 block prints it) (one secret can hold entries in
   different states); the header line is the name, plus ` (deleted)` for a tombstone.
 - **R11, the cap text** leaves out "(on a rolled-back record, accept it first)": that command is T61's, which adds it.
 - **R12, which warning form.** "was replaced by" when no retained version lies between the entry and the current
@@ -218,7 +224,9 @@ These are decided here; each is marked where it is used.
 - **R18, texts this brief adds** (the design gives none): `BurnedAdvice`'s `conflicts --clear` tail,
   `DiscardedRefusalText`, ` (replaced knowingly by a later value)`, the `--stamp` "not a stamp" text, the tombstone
   ` (the secret is back)` variant of `restore --discarded`, the `--ack`/`--clear` "none" texts, the `--by` byte text,
-  the "more than 255" conflict, the newer-format copy note (Task 3) and the export warning's `x (deleted)` naming.
+  the "more than 255" conflict and the export warning's `x (deleted)` naming.
+- **R19, the export count** (design §1.5 departure, MiMo r3 M-1): `Secret` and `ToSecret` gain no entry count; `export`
+  counts from metadata, tombstones included (Task 5), since `ToSecret` can't see tombstones.
 
 ## Interfaces T61 relies on
 
@@ -228,12 +236,14 @@ T61 cites these by name; keep the names and signatures. Besides the public types
 (T61 I-8), exactly:
 - `public static LineageRead ValueLineageCodec.Read(IReadOnlyList<RecordExtension> extensions)` with
   `public readonly record struct LineageRead(ValueLineage? Lineage, bool NewerFormat)` (one record's extension list);
-- `internal bool SecretEntry.LineageNewerFormat { get; }`: any input of the entry's merge (main file, folded copies) has
-  `NewerFormat`;
-- `LoadedRecord` (`RecordVaultStore.cs:485`) gains `bool LineageNewerFormat` with the same meaning, set by
-  `FoldConflictCopies`;
+- `internal IReadOnlyList<byte[]> SecretEntry.NewerLineages { get; }` and `internal bool SecretEntry.LineageNewerFormat
+  => NewerLineages.Count > 0`: the `0x0103` data of every input of the entry's merge (main file, folded copies) whose
+  `Read` gives `NewerFormat`. Set by `OpenFromMetadata` (`:731`, from its `MergeAllMetadata` inputs) and by `OpenFull`
+  (`:702`, from `FoldConflictCopies`' result);
+- `LoadedRecord` (`RecordVaultStore.cs:485`) gains `IReadOnlyList<byte[]> NewerLineages` (empty by default) with the same
+  meaning, set by `FoldConflictCopies` (`:1217`) from its inputs; `MergeRecords` adds the other folder's state's;
 - `VaultMetadata` gains `public IReadOnlySet<string> NewerLineageFiles { get; init; } = new HashSet<string>()`: the hashed
-  file names of records whose metadata-path merge had a `NewerFormat` input (`LoadMetadata`);
+  file names of records whose metadata-path merge had a `NewerFormat` input, set by `LoadMetadata` (`:1675`);
 
 and the entry cap in `WriteAll` (Task 3), which `vault merge` goes through (T61 I-3). Task 2 adds the test helpers for
 what tswap 0.3.2 does to a record, in `TswapTests/Older032.cs`:
@@ -289,7 +299,10 @@ Equality of lineages is by `ValueLineageCodec.Encode` bytes (records holding lis
 - `public static byte[] Encode(ValueLineage lineage)`; `public static ValueLineage Decode(byte[] data)` (throws
   `TswapException("Malformed value lineage: <what>")`); a candidate entry starts with no acknowledgements. `Encode`
   throws `ArgumentException` past the layout's bounds (more than 255 entries, 64 superseded or retired stamps, 8
-  acknowledgements, a 255-byte label or a 65,534-byte reason); it doesn't apply the 64-entry or 64 KiB write caps (Task 3
+  acknowledgements, a 255-byte label or a 65,534-byte reason) and for any list (superseded, retired, entries, each
+  entry's acknowledgements) that isn't strictly ascending (it never sorts: the builders in Tasks 2 and 3 produce
+  sorted lists, so disorder is a bug); labels and reasons are encoded with a throwing UTF-8 encoder
+  (`new UTF8Encoding(false, throwOnInvalidBytes: true)`), so a lone surrogate is an `ArgumentException`, never a U+FFFD; it doesn't apply the 64-entry or 64 KiB write caps (Task 3
   does), and it encodes an empty (unsealed, R1) section as `sectionLength` 0, so equality by bytes works before
   `WriteAll` seals it. A merge whose result would hold more than 255 entries throws
   `RecordConflictException("more than 255 values a merge set aside")` (it takes 256 concurrent rotations of one secret;
@@ -369,7 +382,8 @@ internal static class ValueLineageMerge
 
 The rule is the design's §1.1 and §1.4, exactly, with `W` the copy whose `Version` is `winnerVersion`:
 - `R` = `W`'s current and previous versions (none for a tombstone).
-- `S` = every copy's `Superseded` and every copy's previous version, minus `R`, the 64 largest kept.
+- `S`, in two steps and in this order: first the union of every copy's `Superseded` and every copy's previous version,
+  minus `R`; then the 64 largest of what is left (subtract, then cap: the 65-rotation row depends on it).
 - `T` = the union of every copy's `Retired`, the 64 largest kept; `forgotten` = the largest of every copy's `Forgotten`
   and every stamp the cap pushed out of `T`. A merge writes only explicit marks into `T`.
 - `B` = `min(stated, known)`: `stated` = `W.ExactFrom` when `W` has a format 1 lineage **and** `W.AsOf == W.Version`
@@ -513,16 +527,19 @@ Every write carries `Retired` and `Forgotten` unchanged unless it is a person's 
 (`--clear`, `restore --discarded`, `delete`); only the cap removes from it. `Superseded` and `Retired` keep their 64
 largest; a write that pushes a stamp out of `Retired` raises `Forgotten` exactly as a merge does.
 
-**A newer-format lineage** (R8, I-7): decided from **every input** of the record's merge, not the merged list, because
-the whole-list rule can choose a format 1 list over a newer copy with a smaller write stamp. `SecretEntry.LineageNewerFormat`
-(Interfaces) is set when the main file or any folded copy has `NewerFormat`. `CommitWrites` refuses a `ValueWrite`,
-`DeleteWrite` or `LineageWrite` on such an entry, with R8's text, before any write. `BurnWrite` and `FieldsWrite` go on
-and keep the chosen list's `0x0103` bytes as they are (`ValueLineageCodec.With` is not called for them). Nothing new is
-persisted: the newer data lives in its own file, so `WriteAll` doesn't remove a folded copy whose `0x0103` is a newer
-format (it skips it in `RemoveRedundantCopies`, `RecordVaultStore.cs:2044-2045`) and prints, once per record,
-`Note: record <file> keeps its conflicted copy <copy>: it carries value lineage written by a newer tswap.` (R18). The
-next load reads that copy again and sets the flag again. `MergeRecords` (`vault merge`) keeps a local conflicted copy
-the same way; the other folder's state is left as it is there.
+**A newer-format lineage** (R8, round 3 I-7, round 4 I-1): decided from **every input** of the record's merge, not the
+merged list, because the whole-list rule can choose a format 1 list over a newer-format `0x0103` with a smaller write
+stamp, wherever that one is (the main file or a conflicted copy, either side as the sync tool left it). Fail closed,
+before any file is touched (so `RemoveRedundantCopies`, which gets only `(path, bytes)`, needs no flag):
+- `CommitWrites` refuses a `ValueWrite`, `DeleteWrite` or `LineageWrite` on an entry with `LineageNewerFormat`
+  (Interfaces), with R8's text.
+- It refuses a `BurnWrite` or `FieldsWrite` on such an entry, with the same text, when the list it would write doesn't
+  carry each of the entry's `NewerLineages` byte for byte (a `0x0103` extension whose `Data` equals it). When it does
+  (the newer list is the chosen one), they go on and keep those bytes (`ValueLineageCodec.With` is not called for them);
+  every folded copy is then redundant and removed as today.
+- `MergeRecords` (`vault merge`) applies the same check to every record it would write, from `LoadedRecord.NewerLineages`
+  (both folders' inputs), and refuses the whole merge before its first write, naming the record in R8's text.
+- The refusals happen in the staging loop (before `WriteAll`), so nothing is written and every file stays as it was.
 
 **Both write paths, in step:**
 - `RecordWrites.NewVersion`/`Next` and `RecordVaultStore.NextRecord` gain `Stamp? restoredDiscarded = null`. With it, the
@@ -619,7 +636,10 @@ absent, with entries and retirements, over every operation including `EditLineag
 | a value write on that record; `vault reindex` | the set filled, one decryption of that entry each |
 | a value write on a record whose set-less entry's section won't open | written; the entry kept without a set; the warning once; still not fully fingerprinted; `--clear` then works |
 | `vault merge` whose merged record would hold 65 entries; `vault reindex` of a record holding 65 | both refused with the cap text before any write, nothing written |
-| a newer build's copy (newer-format `0x0103`) with the smaller write stamp, folded beside this build's: `rotate`; `burn` | `rotate` refused with R8's text; `burn` written, the newer copy kept on disk with the note, the next load sets the flag again |
+| a newer build's copy (newer-format `0x0103`) with the smaller write stamp, folded beside this build's: `rotate`; `burn` | both refused with R8's text, nothing written, both files byte-identical |
+| the newer-format `0x0103` in the **main file**, a format 1 conflicted copy with the larger write stamp: `burn`; `field set` | both refused with R8's text, nothing written, both files byte-identical (MiMo r3 I-1) |
+| the newer-format `0x0103` in the file with the larger write stamp (it is the chosen list), a format 1 copy beside it: `burn` | written, the newer bytes kept byte for byte, the copy removed |
+| `vault merge` of a folder whose copy of a record carries a newer-format `0x0103` with the smaller write stamp | refused with R8's text naming the record, nothing written |
 | delete | entries gone, their stamps in `Retired`, current and previous in `Superseded` |
 | `burn`, `field set` on a record with entries | entries byte-identical, sets missing stay missing |
 | a value write on a record with a set-less entry (metadata path) | the set filled from its section, one `ValueDecrypted` call for it |
@@ -640,7 +660,8 @@ absent, with entries and retirements, over every operation including `EditLineag
 Break-it-once: drop the format 3 forcing (the `--clear` in format 2 row loses `Retired`); drop the new-life
 `ForceV3` (the value-write-over-a-tombstone row is format 2 and C-1's step-table row hands out `c`); pass `FillMissing`
 for every write (the `burn` row opens the entry's section); move the cap back into `CommitWrites` (the `vault merge`
-cap row writes); decide R8 from the merged list (the smaller-write-stamp `rotate` row writes); re-issue the previous value's
+cap row writes); decide R8 from the merged list (the smaller-write-stamp `rotate` row writes); let `burn` skip the
+newer-bytes check (the main-file `burn` row writes and the newer lineage is gone); re-issue the previous value's
 burn on `restore --discarded` (the burned-entry row fails); start the new life's lineage without the tombstone's
 `Retired` (the delete-then-create row brings `a` back); let a value write update a newer-format lineage (the R8 rotate
 row writes); apply the entry cap to `burn` (the burn-at-65 row is refused).
@@ -821,7 +842,7 @@ false, `Description` `List values a merge set aside, without the values; --ack q
   ```
   sync-conflict-test
     current    2026-11-14T16:20:20Z  machine c7cad1d5
-    discarded  2026-11-14T16:20:16Z  machine 5d918462 (this machine)  stamp 1794673216219.0@5d918462 (open)
+    discarded  2026-11-14T16:20:16Z  machine 5d918462 (this machine)  stamp 1794673216219.0@5d918462  (open)
   ```
   Status: `(open)`, `(open on this machine; acknowledged on machine c7cad1d5 at <time>)`,
   `(acknowledged <time>, machine c7cad1d5, by owner)` (`, by …` only with a label; the newest acknowledgement),
@@ -909,7 +930,7 @@ harness and value recorder; `FleetMachine.Time` fixed; T58's SHA1 URI at 1111111
 | a burned entry in `conflicts` and `--json`; `{{x:discarded}}` of it | ` [BURNED <time>: <reason>]`, `"burn"`; `run`'s burned warning naming `x:discarded` |
 | a discarded burn pushed out of the record's burn list by 16 later burns | the entry keeps its burn; the warning still given |
 | `export` with an open entry; that export imported | the warning names the secret; no entry decrypted (`ValueDecrypted`); imports without it |
-| `delete` of a record with an entry | the delete line |
+| `delete` of a record with an entry | the delete line printed, and no per-secret conflict warning on stderr (R17) |
 | `sudo get x` | the current value, unchanged |
 | T58's `Rotate_DecryptsOnlyTheCurrentValue` scenario on a record with entries | still one value decrypted |
 | `vault merge` and a full load of a record with entries | no entry decrypted |
@@ -923,7 +944,7 @@ harness and value recorder; `FleetMachine.Time` fixed; T58's SHA1 URI at 1111111
 | the same with one earlier-life and one current-life entry, `{{x:discarded}}` | the "2 values" text |
 | a record re-created by v0.3.0 (no `Fields` extension) holding an entry from before the delete | treated as current-life (documented) |
 | `sudo field adopt n f --from s` where `s` holds an entry | refused with the adopt text, nothing written, `s` still there |
-| `conflicts` text of a secret with one open and one acknowledged entry | each status at the end of its line; the header the name only |
+| `conflicts` text of a secret with one open and one acknowledged entry | each status at the end of its line after two spaces, each whole line asserted exactly; the header the name only |
 | `conflicts` of a secret with only silent entries; `--json` | listed with their reasons; `0 open conflicts.`; `"open": 0`, each entry `"open": false` |
 
 Break-it-once: strip `:discarded` before the inner lookup (the `= from-a` row gets `from-b`); let `{{x:discarded}}`
