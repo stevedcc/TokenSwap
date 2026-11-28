@@ -18,13 +18,13 @@ public class BashLauncherRefusalTests
         @"'bash.exe' is a Windows program: under WSL it is System32's bash.exe, WSL's launcher, reached through Windows interop, which runs its whole command line through the Linux shell (/bin/bash -c), so a substituted value is parsed again and can transform and print secrets past redaction. Run the Linux shell instead: 'run bash ./deploy.sh {{secret}}'.";
 
     internal const string PaddedWslReason =
-        @"'wsl' written with quote characters, surrounding white space or a trailing dot can't be checked: run reads it as another program, but Windows starts wsl.exe, which runs its command line through the Linux shell. Write it plainly: 'wsl -e ./deploy.sh {{secret}}'.";
+        @"'wsl' written with quote characters, surrounding white space, or a trailing dot, '\' or '/' can't be checked: run reads it as another program, but Windows starts wsl.exe, which runs its command line through the Linux shell. Write it plainly: 'wsl -e ./deploy.sh {{secret}}'.";
 
     private const string WslRuns = "'wsl' runs 'bash.exe': ";
 
     // Code review round 1 (I1): a padded word naming a wrapper or runner.
     internal static string PaddedWrapperReason(string wrapper) =>
-        $"'{wrapper}' written with quote characters, surrounding white space, a trailing dot or a stream suffix can't be checked: " +
+        $"'{wrapper}' written with quote characters, surrounding white space, a trailing dot, '\\' or '/', or a stream suffix can't be checked: " +
         $"run reads it as another program, but Windows starts {wrapper}, and the command it runs (a bash that may be WSL's launcher, " +
         "which parses its command line again) is then not checked. Write the name plainly.";
 
@@ -114,12 +114,17 @@ public class BashLauncherRefusalTests
         Add(["timeout", "5", @"C:\Windows\System32\bash.exe", "./x.sh", "{{x}}"], true, "WSL", "bash");
         Add(["bwrap", "--tmpfs", "/x", "bash", "./x.sh", "{{x}}"], true, "WSL", "bash");
         Add(["runuser", "-u", "x", "bash", "./x.sh", "{{x}}"], true, "Git", "bash");
-        // Code review round 1 C1: taskset's attached CPU list is the mask, so the next word is the command.
+        // Code review rounds 1 and 2 (C1, C-F1): an option word taskset wouldn't accept as written (-c0-3, --cpu-list=0-3)
+        // hides where its command is, so every later word is checked; with clean options (-c, -ca: no value) the first
+        // positional is the mask and the next word the command.
         Add(["taskset", "-c0-3", "bash.exe", "./x.sh", "{{x}}"], true, "WSL", "bash");
         Add(["taskset", "--cpu-list=0-3", "bash.exe", "./x.sh", "{{x}}"], true, "WSL", "bash");
         Add(["taskset", "-c0-3", "bash.exe", "./x.sh", "{{x}}"], false, "null", "bash.exe");
         Add(["taskset", "--cpu-list=0-3", "bash.exe", "./x.sh", "{{x}}"], false, "null", "bash.exe");
         Add(["taskset", "-c", "0-3", "bash.exe", "./x.sh", "{{x}}"], false, "null", "bash.exe");
+        Add(["taskset", "-ca", "0-3", "bash.exe", "./x.sh", "{{x}}"], false, "null", "bash.exe");
+        Add(["taskset", "-ca", "0-3", "bash.exe", "./x.sh", "{{x}}"], true, "WSL", "bash");
+        Add(["taskset", "-c0-3", "./tool", "{{x}}"], true, "WSL", null);
         Add(["runuser", "-w", "PATH", "-u", "x", "bash", "./x.sh", "{{x}}"], true, "Git", "bash");
         Add(["command", "bash", "./x.sh", "{{x}}"], true, "WSL", "bash");
         Add(["command", "-v", "bash"], true, "WSL", null);
@@ -152,6 +157,8 @@ public class BashLauncherRefusalTests
         Add(["sudo", "\"uv\"", "run", "tool", "{{x}}"], true, "Git", "uv");
         Add(["\"sudo\"", "bash.exe", "./x.sh", "{{x}}"], false, "null", "sudo");
         Add(["uv", "run", "./x", "{{x}}"], true, "WSL", null);
+        Add(["uv/", "run", "tool", "{{x}}"], true, "Git", "uv");
+        Add(["find", ".", "-exec", "\"uv\"", "run", "bash", ";"], true, "WSL", "uv"); // inside find -exec (M-F4)
         Add(["sudo", "tool", "{{x}}"], true, "WSL", null);
         // Padded wsl (round 5 I2).
         Add(["\"wsl.exe\"", "./deploy.sh", "{{x}}"], true, "WSL", "wsl");
@@ -262,6 +269,14 @@ public class BashLauncherRefusalTests
         var refusal = Validation.BashLauncherRefusal(["\"wsl.exe\"", "./deploy.sh", "{{x}}"], windows: true, ProbeFor("WSL"));
 
         Assert.Equal(new Validation.BlockedInvocation("wsl", PaddedWslReason), refusal);
+    }
+
+    [Fact]
+    public void APaddedWrapperInsideWslsExecCommand_IsRefused()
+    {
+        var refusal = Validation.BashLauncherRefusal(["wsl", "-e", "\"uv\"", "run", "bash"], windows: true, ProbeFor("WSL"));
+
+        Assert.Equal(new Validation.BlockedInvocation("uv", "'wsl' runs 'uv': " + PaddedWrapperReason("uv")), refusal);
     }
 
     [Fact]

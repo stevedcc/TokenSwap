@@ -283,6 +283,13 @@ public static class Validation
             }
             if (!Wrappers.Contains(program) || SubcommandTools.Contains(program))
                 yield break;
+            if (TasksetOptionsUnclean(program, argv.Skip(i + 1)))
+            {
+                // Brief T64 review round 2 (C-F1): where its command is can't be told, so every later word is one.
+                for (var j = i + 1; j < argv.Count; j++)
+                    yield return j;
+                yield break;
+            }
             if (WrappedCommand(argv, i, argv.Count, program) is not { } next)
                 yield break;
             i = next;
@@ -297,8 +304,7 @@ public static class Validation
     private static int? WrappedCommand(IReadOnlyList<string> argv, int i, int end, string program)
     {
         WrapperValued.TryGetValue(program, out var valued);
-        // Brief T64 code review round 1 (C1): taskset's attached CPU list, as CheckWrapper reads it.
-        var skipLeading = WrapperLeadingPositional.Contains(program) && !TasksetListAttached(program, argv.Skip(i + 1).Take(end - i - 1));
+        var skipLeading = WrapperLeadingPositional.Contains(program);
         for (var j = i + 1; j < end; j++)
         {
             var arg = argv[j];
@@ -837,7 +843,7 @@ public static class Validation
         @"'bash.exe' is a Windows program: under WSL it is System32's bash.exe, WSL's launcher, reached through Windows interop, which runs its whole command line through the Linux shell (/bin/bash -c), so a substituted value is parsed again and can transform and print secrets past redaction. Run the Linux shell instead: 'run bash ./deploy.sh {{secret}}'.";
 
     private const string PaddedWslReason =
-        @"'wsl' written with quote characters, surrounding white space or a trailing dot can't be checked: run reads it as another program, but Windows starts wsl.exe, which runs its command line through the Linux shell. Write it plainly: 'wsl -e ./deploy.sh {{secret}}'.";
+        @"'wsl' written with quote characters, surrounding white space, or a trailing dot, '\' or '/' can't be checked: run reads it as another program, but Windows starts wsl.exe, which runs its command line through the Linux shell. Write it plainly: 'wsl -e ./deploy.sh {{secret}}'.";
 
     private static readonly BlockedInvocation BashLauncherWindowsRefusal = new("bash", BashLauncherWindowsReason);
     private static readonly BlockedInvocation BashLauncherRefusalOffWindows = new("bash.exe", BashLauncherReason);
@@ -899,7 +905,7 @@ public static class Validation
     /// the wrapper, whose command then goes unchecked. <paramref name="wrapper"/> is the set's spelling.
     /// </summary>
     private static BlockedInvocation PaddedWrapperRefusal(string wrapper) => new(wrapper,
-        $"'{wrapper}' written with quote characters, surrounding white space, a trailing dot or a stream suffix can't be checked: " +
+        $"'{wrapper}' written with quote characters, surrounding white space, a trailing dot, '\\' or '/', or a stream suffix can't be checked: " +
         $"run reads it as another program, but Windows starts {wrapper}, and the command it runs (a bash that may be WSL's launcher, " +
         "which parses its command line again) is then not checked. Write the name plainly.");
 
@@ -1009,6 +1015,10 @@ public static class Validation
                 return new(null, Ended: false);
             }
 
+            // Review round 2 (C-F1): taskset with an option it wouldn't accept: every later word.
+            if (TasksetOptionsUnclean(program, argv.Skip(i + 1).Take(end - i - 1)))
+                return BashScan(argv, i + 1, end, windows, probe);
+
             // Rule 2: behind a wrapper whose options this check doesn't know completely, every later word.
             if (!TrustedWrappers.Contains(program) && BashScan(argv, i + 1, end, windows, probe) is var scan
                 && (scan.Ended || scan.Verdict is not null))
@@ -1021,14 +1031,27 @@ public static class Validation
         return new(null, Ended: false);
     }
 
-    // taskset -c LIST (or -cLIST, --cpu-list=LIST): an attached list is the leading positional itself, so nothing more
-    // is skipped; a separate list is skipped as usual. Shared by CheckWrapper and WrappedCommand (brief T64 review C1).
-    // Only taskset's own options count, before its first other word or '--' (util-linux parses them with a leading '+'
-    // in its getopt string): a '-c...' word of the command never makes the mask the command (review C1, fail closed).
-    private static bool TasksetListAttached(string program, IEnumerable<string> args) =>
+    // taskset as util-linux parses it (e57914591653, schedutils/taskset.c): getopt_long(argc, argv, "+apchV", longopts,
+    // NULL) (:183), so its options end at its first other word or '--', and none takes a value; longopts (:167-173):
+    // all-tasks, pid, cpu-list, help, version. The first positional is the mask (a list with -c) and the next word the
+    // command (WrapperLeadingPositional).
+    private const string TasksetShortOptions = "apchV";
+
+    private static readonly HashSet<string> TasksetLongOptions = new(StringComparer.Ordinal)
+        { "--all-tasks", "--pid", "--cpu-list", "--help", "--version" };
+
+    /// <summary>
+    /// Brief T64 code review round 2 (C-F1): whether <paramref name="program"/> is taskset with an option word, before its
+    /// first other word or <c>--</c>, that it wouldn't accept as written (<c>-c0-3</c>, <c>--cpu-list=0-3</c>, <c>-ca0</c>,
+    /// <c>-x</c>, an abbreviated long option). Then where its command is can't be told, so every guard takes every later
+    /// word as a program position (fail closed); real taskset rejects these spellings anyway.
+    /// </summary>
+    private static bool TasksetOptionsUnclean(string program, IEnumerable<string> args) =>
         program.Equals("taskset", StringComparison.OrdinalIgnoreCase)
-        && args.TakeWhile(a => a != "--" && a.StartsWith('-')).Any(a => (a.StartsWith("-c", StringComparison.Ordinal) && a.Length > 2 && !a.StartsWith("--", StringComparison.Ordinal))
-            || a.StartsWith("--cpu-list=", StringComparison.Ordinal));
+        && args.TakeWhile(a => a != "--" && a.Length > 1 && a.StartsWith('-'))
+            .Any(a => a.StartsWith("--", StringComparison.Ordinal)
+                ? !TasksetLongOptions.Contains(a)
+                : !a.Skip(1).All(TasksetShortOptions.Contains));
 
     // Wrapper options that take a separate value, so the value isn't taken for the command.
     private static readonly Dictionary<string, string[]> WrapperValued = new(StringComparer.OrdinalIgnoreCase)
@@ -1124,8 +1147,14 @@ public static class Validation
 
         WrapperValued.TryGetValue(program, out var valued);
         var skipLeading = WrapperLeadingPositional.Contains(program);
-        if (TasksetListAttached(program, args))
-            skipLeading = false;
+        // Brief T64 review round 2 (C-F1): taskset with an option it wouldn't accept: every later checked program.
+        if (TasksetOptionsUnclean(program, args))
+        {
+            for (var k = 0; k < args.Count; k++)
+                if (IsWrappedCheckedProgram(args[k]) && Wrapped(k) is { } found)
+                    return found;
+            return null;
+        }
         for (var i = 0; i < args.Count; i++)
         {
             var arg = args[i];

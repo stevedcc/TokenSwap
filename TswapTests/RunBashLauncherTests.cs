@@ -159,7 +159,7 @@ public sealed class RunBashLauncherTests : IDisposable
     }
 
     [Fact]
-    public void OffWindows_BashExeBehindTasksetWithAnAttachedCpuList_IsRefusedBeforeUnlock()
+    public void OffWindows_BashExeBehindTasksetWithAnUncleanOption_IsRefusedBeforeUnlock()
     {
         Secrets(("pw", Value));
 
