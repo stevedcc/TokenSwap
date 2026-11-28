@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Xunit;
 using static TswapTests.RecordVaultTestSupport;
 
@@ -56,5 +57,7 @@ public sealed class ToCommentContinuationCommandTests : IDisposable
             Assert.DoesNotContain(A, output);
             Assert.DoesNotContain(B, output);
         }
+        Assert.Single(Regex.Matches(dryErr, "Warning: line 2: "));
+        Assert.Single(Regex.Matches(stderr, "Warning: line 2: "));
     }
 }

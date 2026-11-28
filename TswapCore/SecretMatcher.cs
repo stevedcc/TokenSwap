@@ -36,7 +36,8 @@ public sealed class SecretMatcher(FingerprintIndex index, IReadOnlySet<string> b
     /// <summary>
     /// <c>redact</c>: every recognised value in <paramref name="content"/> replaced by its label, then every
     /// <c>\r\n</c> left in the output turned into <c>\n</c>. Brief T50a (#398): values are matched on the raw
-    /// content and on its line-ending views (<see cref="ViewHits"/>), so a value is found whatever its line
+    /// content and on its line-ending views (T50a), and with every line break written as <c>\n</c>,
+    /// <c>\r\n</c> or <c>\r</c> (brief T65, #434) (<see cref="ViewHits"/>), so a value is found whatever its line
     /// endings and the file's; the raw span is what is replaced.
     /// </summary>
     public string Redact(string content)
@@ -54,17 +55,34 @@ public sealed class SecretMatcher(FingerprintIndex index, IReadOnlySet<string> b
 
     /// <summary>
     /// Brief T50a (#398): the hits of <paramref name="text"/> in its raw form, its folded view and its unfolded
-    /// view (<see cref="LineEndingViews"/>), each with its raw span. A view's hit is kept only when it holds a
-    /// folded <c>\n</c> or an inserted <c>\r</c> (its raw length differs from its own; any other is the raw
-    /// view's hit again) and its raw span isn't empty.
+    /// view (<see cref="LineEndingViews"/>), each with its raw span; with <paramref name="anyLineBreak"/> (brief T65,
+    /// #434: <c>redact</c>, not <c>tocomment</c>) also in the views with every line break written as <c>\n</c>,
+    /// <c>\r\n</c> or <c>\r</c>, each scanned only when it can differ from the views before it. A view's hit is kept
+    /// only when its raw span isn't empty and the raw text over it differs from the hit's text (any other is the raw
+    /// view's hit again).
     /// </summary>
-    private List<ViewHit> ViewHits(string text)
+    private List<ViewHit> ViewHits(string text, bool anyLineBreak)
     {
+        // The view order is load-bearing: raw, folded, unfolded, then \n, \r\n, \r. Entries keeps the first span per
+        // raw start, so an earlier view's span wins. For abc def-gh\r in x: abc def-gh\n the unfolded view gives
+        // [3, 13) and the \r view [3, 14); the unfolded span wins and the line feed stays (LineEndingRedactTests,
+        // x: [REDACTED: s]\n). Each view costs a transient 2n characters and 4n ints per file (unpooled, like the two
+        // views above), freed when the call returns: fine for the config files redact reads.
         var hits = RawHits(text);
         if (LineEndingViews.HasCrLf(text))
             AddViewHits(text, text.Length, LineEndingViews.Fold, hits);
         if (LineEndingViews.HasBareLf(text))
             AddViewHits(text, 2 * text.Length, LineEndingViews.Unfold, hits);
+        if (anyLineBreak)
+        {
+            if (LineEndingViews.HasLoneCr(text))
+            {
+                AddViewHits(text, 2 * text.Length, static (t, v, s, e) => LineEndingViews.WriteBreaks(t, "\n", v, s, e), hits);
+                AddViewHits(text, 2 * text.Length, static (t, v, s, e) => LineEndingViews.WriteBreaks(t, "\r\n", v, s, e), hits);
+            }
+            if (text.Contains('\n'))
+                AddViewHits(text, 2 * text.Length, static (t, v, s, e) => LineEndingViews.WriteBreaks(t, "\r", v, s, e), hits);
+        }
         return hits;
     }
 
@@ -81,9 +99,15 @@ public sealed class SecretMatcher(FingerprintIndex index, IReadOnlySet<string> b
         {
             var start = rawStart[hit.Start];
             var end = rawEnd[hit.Start + hit.Length - 1];
-            if (end - start == hit.Length || end <= start)
+            if (end <= start)
                 continue;
-            hits.Add(new ViewHit(hit, viewText.Substring(hit.Start, hit.Length), start, end));
+            var hitText = viewText.Substring(hit.Start, hit.Length);
+            // Brief T65 (#434): the raw view's hit again when the raw text over the span is the hit's own text. For
+            // the folded and unfolded views that is when the lengths agree; a new view can keep the length (a lone
+            // \r written as \n), so the text decides.
+            if (text.AsSpan(start, end - start).SequenceEqual(hitText))
+                continue;
+            hits.Add(new ViewHit(hit, hitText, start, end));
         }
     }
 
@@ -335,7 +359,7 @@ public sealed class SecretMatcher(FingerprintIndex index, IReadOnlySet<string> b
     {
         if (!content.Contains('\n'))
             return [];
-        List<ViewHit> hits = [.. ViewHits(content).Where(h => content.AsSpan(h.RawStart, h.RawEnd - h.RawStart).Contains('\n'))];
+        List<ViewHit> hits = [.. ViewHits(content, anyLineBreak: false).Where(h => content.AsSpan(h.RawStart, h.RawEnd - h.RawStart).Contains('\n'))];
         if (hits.Count == 0)
             return [];
         SortedList<int, Span> taken = [];
@@ -496,7 +520,7 @@ public sealed class SecretMatcher(FingerprintIndex index, IReadOnlySet<string> b
     private SortedList<int, Span> Select(string text)
     {
         SortedList<int, Span> taken = [];
-        foreach (var (entry, spans) in Entries(text, ViewHits(text), wholeTokenShortValues: true))
+        foreach (var (entry, spans) in Entries(text, ViewHits(text, anyLineBreak: true), wholeTokenShortValues: true))
         {
             var replacement = RedactProcessor.Label(entry.Token, entry.Kind);
             var position = 0;

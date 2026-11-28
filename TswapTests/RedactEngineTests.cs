@@ -14,7 +14,11 @@ namespace TswapTests;
 /// multi-line values across lines (4). Two later engine-only differences in <c>tocomment</c> are not in
 /// the oracle either: brief T20 adopts a YAML literal block scalar whose content is one stored value's
 /// plain form, and brief T22 leaves a block-scalar content line holding an encoded form (base64,
-/// base64url, whitespace-stripped) of a value unchanged (<see cref="ToCommentBlockScalarTests"/>).
+/// base64url, whitespace-stripped) of a value unchanged (<see cref="ToCommentBlockScalarTests"/>). Brief T63 adds
+/// a third: <c>tocomment</c> comments out a continuation line holding a value, where the oracle removes it. The fixed
+/// seed produces no such line; if a seed or corpus change does, apply the owner-sanctioned T63 rule written in brief
+/// T63 (Task 1, "Oracle") to <c>PlaintextRedactOracle</c>: a continuation candidate that holds a value is commented out
+/// (or kept in block content), never removed.
 /// </summary>
 public class RedactEngineTests(Xunit.Abstractions.ITestOutputHelper output)
 {

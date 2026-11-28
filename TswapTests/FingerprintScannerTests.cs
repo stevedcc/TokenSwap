@@ -125,7 +125,8 @@ public class FingerprintScannerTests
     /// <summary>
     /// Property: on the raw text the scanner reports exactly FingerprintIndex's spans, each once, labelled
     /// by the first hit in tie order (name ordinal, current before previous, kind). Its only other hits
-    /// are folded or (brief T50a) unfolded ones: an extra hit's raw text, with every <c>\r</c> removed,
+    /// are folded, unfolded (brief T50a) or, brief T65, from the views with every break written as <c>\n</c>,
+    /// <c>\r\n</c> or <c>\r</c>: an extra hit's raw text, with every <c>\r</c> removed,
     /// equals a planted value with every <c>\r</c> removed, and holds a <c>\n</c>. Fails on any unsound
     /// pruning (a character missing from a class, a whitespace plain entry classed as whitespace-free).
     /// </summary>
@@ -280,6 +281,68 @@ public class FingerprintScannerTests
                 for (var cut = start + 1; cut < end; cut++)
                 {
                     var pending = scanner.PendingFrom(text.AsSpan(0, cut));
+                    Assert.True(pending <= start,
+                        $"round {round}: an occurrence at [{start}, {end}) cut at {cut} is held only from {pending}");
+                }
+            }
+        }
+    }
+
+    /// <summary>Brief T65 (#434): <paramref name="text"/> with each line break (<c>\r\n</c>, a lone <c>\r</c>, <c>\n</c>) written as one of the three at random.</summary>
+    private static string MixBreaks(Random rng, string text)
+    {
+        string[] breaks = ["\n", "\r\n", "\r"];
+        var sb = new StringBuilder(text.Length * 2);
+        for (var i = 0; i < text.Length; i++)
+        {
+            if (text[i] is '\r' or '\n')
+            {
+                if (text[i] == '\r' && i + 1 < text.Length && text[i + 1] == '\n')
+                    i++;
+                sb.Append(breaks[rng.Next(3)]);
+            }
+            else
+                sb.Append(text[i]);
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Brief T65 (#434): <see cref="PendingFrom_IsSound"/> with every planted form's and filler piece's line breaks
+    /// rewritten at random (the new views find such forms), and a value <c>long</c> (two lines of 127 characters,
+    /// <c>L</c> = 255, <c>W</c> = 1, so <c>L + W</c> = 256 reaches the free cap) also planted as its 256-character
+    /// CRLF form.
+    /// </summary>
+    [Fact]
+    public void PendingFrom_IsSound_MixedBreaks()
+    {
+        var rng = new Random(2026);
+        using var keys = NewKeys();
+        for (var round = 0; round < 150; round++)
+        {
+            var (sets, values) = RandomVault(rng, keys);
+            var longValue = RandomString(rng, 127, Word) + "\n" + RandomString(rng, 127, Word);
+            sets.Add(("long", false, Set(longValue, keys)));
+            values.Add(longValue);
+            var text = new StringBuilder();
+            List<(int Start, int End)> planted = [];
+            var forms = values.SelectMany(PrintedForms).Select(f => MixBreaks(rng, f))
+                .Append(longValue.Replace("\n", "\r\n")).OrderBy(_ => rng.Next()).ToList();
+            foreach (var form in forms)
+            {
+                text.Append(MixBreaks(rng, RandomString(rng, rng.Next(0, 6), Filler)));
+                planted.Add((text.Length, text.Length + form.Length));
+                text.Append(form);
+            }
+            text.Append(MixBreaks(rng, RandomString(rng, rng.Next(0, 6), Filler)));
+            var all = text.ToString();
+            var scanner = FingerprintScanner.Build(sets, keys);
+
+            foreach (var (start, end) in planted)
+            {
+                for (var cut = start + 1; cut < end; cut++)
+                {
+                    var pending = scanner.PendingFrom(all.AsSpan(0, cut));
                     Assert.True(pending <= start,
                         $"round {round}: an occurrence at [{start}, {end}) cut at {cut} is held only from {pending}");
                 }
@@ -607,6 +670,123 @@ public class FingerprintScannerTests
         }
 
         public int PendingFrom(ReadOnlySpan<char> window) => scanner.PendingFrom(window);
+    }
+
+    // ── lone CR line breaks (brief T65, #434) ─────────────────────────────────────────
+
+    /// <summary>The scanner hit of each <see cref="LoneCrRedactionTests.Rows"/> row (start, length), null for none.</summary>
+    private static readonly (int Start, int Length)?[] LoneCrHits = [(2, 31), (2, 31), (2, 31), (2, 32), (2, 52), (2, 51), null, (2, 32)];
+
+    public static TheoryData<int> LoneCrRows() => [.. Enumerable.Range(1, LoneCrHits.Length)];
+
+    [Theory, MemberData(nameof(LoneCrRows))]
+    public void Scanner_FindsAValue_PrintedWithALoneCr(int row)
+    {
+        using var keys = NewKeys();
+        var (stored, text, _) = LoneCrRedactionTests.Rows[row - 1];
+        var scanner = FingerprintScanner.Build([("s", false, Set(stored, keys))], keys);
+
+        var hits = Scan(scanner, text);
+
+        if (LoneCrHits[row - 1] is { } expected)
+            Assert.Equal(new FingerprintHit("s", false, VariantKind.Plain, expected.Start, expected.Length), Assert.Single(hits));
+        else
+            Assert.Empty(hits);
+    }
+
+    /// <summary>
+    /// Brief T65 (#434): a window that ends in a <c>\r</c> doesn't carry its hits over that <c>\r</c>: for every cut, the
+    /// next window scanned with the carried state gives a fresh scan's hits. At <c>c = 34</c> the window ends in the
+    /// <c>\r</c> of the final <c>\r\n</c>: its hit is <c>(2, 32)</c>, the next window's fresh hit takes the <c>\n</c> too.
+    /// </summary>
+    [Fact]
+    public void Scan_CarriedState_WindowEndingInACr_SameHitsAsFreshScan()
+    {
+        using var keys = NewKeys();
+        var scanner = FingerprintScanner.Build([("s", false, Set("line-one-secret\nline-two-secret\n", keys))], keys);
+        const string text = "x line-one-secret\rline-two-secret\r\n y";
+
+        for (var c = 1; c < text.Length; c++)
+        {
+            var state = new FingerprintScanner.ScanState();
+            List<FingerprintHit> first = [];
+            scanner.Scan(text[..c], first, state);
+            var pending = scanner.PendingFrom(text[..c], state);
+            var next = text[..c][pending..] + text[c..];
+            List<FingerprintHit> carried = [];
+            scanner.Scan(next, carried, state);
+
+            var fresh = Scan(scanner, next);
+            Assert.True(fresh.SequenceEqual(carried), $"cut {c}: carried [{string.Join(", ", carried)}], fresh [{string.Join(", ", fresh)}]");
+            if (c == 34)
+            {
+                Assert.Equal(new FingerprintHit("s", false, VariantKind.Plain, 2, 32), Assert.Single(first));
+                Assert.Equal(new FingerprintHit("s", false, VariantKind.Plain, 2 - pending, 33), Assert.Single(fresh));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Brief T65 (#434): <see cref="Scan_CarriedState_SameHitsAsFreshScan"/>'s loop with each line break of the planted
+    /// text written as <c>\r\n</c>, a lone <c>\r</c> or <c>\n</c> at random before chunking.
+    /// </summary>
+    [Fact]
+    public void Scan_CarriedState_MixedBreaks_SameHitsAsFreshScan()
+    {
+        var rng = new Random(5150);
+        using var keys = NewKeys();
+        for (var round = 0; round < 120; round++)
+        {
+            var (sets, values) = RandomVault(rng, keys);
+            var (planted, _) = PlantedText(rng, values);
+            var text = MixBreaks(rng, planted);
+            var scanner = FingerprintScanner.Build(sets, keys);
+            var state = new FingerprintScanner.ScanState();
+            var window = "";
+            for (var consumed = 0; consumed < text.Length || window.Length > 0;)
+            {
+                var size = rng.Next(1, 40);
+                window += text.Substring(consumed, Math.Min(size, text.Length - consumed));
+                consumed = Math.Min(text.Length, consumed + size);
+
+                List<FingerprintHit> carried = [];
+                scanner.Scan(window, carried, state);
+                var pending = scanner.PendingFrom(window, state);
+                Assert.Equal(Scan(scanner, window), carried);
+                Assert.Equal(scanner.PendingFrom(window), pending);
+
+                var hold = rng.Next(5) switch
+                {
+                    0 => rng.Next(0, window.Length + 1),
+                    1 => window.Length,
+                    _ => pending,
+                };
+                window = consumed >= text.Length ? "" : window[hold..];
+                if (rng.Next(30) == 0)
+                    window = RandomString(rng, rng.Next(0, 20), Filler);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Brief T65 (#434): <c>run</c>'s matcher, carrying state through the real redactor, masks a value printed with lone
+    /// <c>\r</c> breaks for every chunk size, each occurrence's span taking its final break.
+    /// </summary>
+    [Fact]
+    public void Run_ChunkedThroughTheMatcher_SameOutputForEveryChunkSize()
+    {
+        using var keys = NewKeys();
+        var set = Set(LoneCrRedactionTests.V2("\n") + "\n", keys);
+        var records = new List<TswapCore.Keyring.RecordMetadata>
+        {
+            new(RandomNumberGenerator.GetBytes(32), TswapCore.Keyring.Stamp.Zero, TswapCore.Keyring.RecordType.Value,
+                TswapCore.Keyring.Stamp.Zero, "s", 0, [], set, null, null, []),
+        };
+        var carrying = TswapCli.FingerprintStreamMatcher.For(new VaultMetadata(records, 0, 0, []), keys);
+        var text = "a " + LoneCrRedactionTests.V2("\r") + "\r\n b " + LoneCrRedactionTests.V2("\r\n") + "\r c\n";
+
+        for (var size = 1; size <= 64; size++)
+            Assert.True(Redact(carrying, text, size) == "a [REDACTED: s] b [REDACTED: s] c\n", $"chunk size {size}");
     }
 
     [Fact]

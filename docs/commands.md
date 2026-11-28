@@ -81,8 +81,8 @@ commands print a note naming the count and the reindex, which adds the newer var
 note appears for records holding non-ASCII values written before 0.3.3, and the reindex adds their
 other Unicode spellings (NFC and NFD); a record of an ASCII value needs nothing.
 
-`redact` masks a value with line breaks whatever the line endings of the value and of the file (`\r\n`
-or `\n`; a lone `\r` as a line ending is not handled).
+`redact` masks a value with line breaks whatever the line breaks of the value and of the file (`\r\n`, `\n` or,
+since 0.3.3, a lone `\r`, in any mix); a value whose own breaks are mixed is found in its own spelling only.
 
 `redact` also masks a value that looks like a credential it doesn't know (a keyword such as
 `password`, `token`, `secret` or `key`, then `:` or `=`, then 12 or more characters) as

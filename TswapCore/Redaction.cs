@@ -14,7 +14,8 @@ public static class Redaction
     /// unpadded; for a multi-line form also its <c>\r\n</c> form and its <c>\n</c> form (a tool that
     /// normalises line endings), the form as a PTY prints it (ONLCR turns each <c>\n</c> into
     /// <c>\r\n</c> and leaves a <c>\r</c> alone, so a value with <c>\r\n</c> shows <c>\r\r\n</c>), and
-    /// the base64 and base64url of each, padded and unpadded. Brief T54: all of that for
+    /// the base64 and base64url of each, padded and unpadded; and, brief T65, its form with every line break as a lone
+    /// <c>\r</c>; a spelling with only lone <c>\r</c> breaks gets the same list. Brief T54: all of that for
     /// <paramref name="writtenForm"/>, then for its NFC and its NFD spelling (each when it differs, and
     /// only when <paramref name="writtenForm"/> holds no lone surrogate, which can't be normalised).
     /// Distinct, in that order; an empty form has none (it would match everywhere).
@@ -35,11 +36,11 @@ public static class Redaction
         foreach (var spelling in spellings)
         {
             forms.Add(spelling);
-            if (spelling.Contains('\n'))
-            {
-                var lf = spelling.Replace("\r\n", "\n");
-                forms.AddRange([lf.Replace("\n", "\r\n"), lf, spelling.Replace("\n", "\r\n")]);
-            }
+            // Brief T65 (#434): a spelling with a \r (a lone one included) counts as multi-line too, and gets the form
+            // with every break as a lone \r. Without a lone \r the first four are the forms before T65, in that order.
+            if (spelling.AsSpan().IndexOfAny('\r', '\n') >= 0)
+                forms.AddRange([LineEndingViews.WithLineBreaks(spelling, "\r\n"), LineEndingViews.WithLineBreaks(spelling, "\n"),
+                    spelling.Replace("\n", "\r\n"), LineEndingViews.WithLineBreaks(spelling, "\r")]);
         }
 
         List<string> variants = [];
