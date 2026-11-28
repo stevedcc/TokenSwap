@@ -165,6 +165,9 @@ public class BashLauncherRefusalTests
         Add(["docker", "run", "img", "bash", "./x.sh", "{{x}}"], true, "WSL", null);
         Add(["kubectl", "exec", "pod", "--", "bash", "./x.sh", "{{x}}"], true, "WSL", null);
         Add(["docker", "run", "img", "bash.exe", "./x.sh", "{{x}}"], true, "WSL", "bash.exe");
+        // Code review round 1 M3: behind npx (rule 2) every later word is scanned by the Windows rule, a container
+        // tool's words included, so this is refused with the Windows reason (a declared over-refusal).
+        Add(["npx", "docker", "run", "img", "bash", "./x.sh", "{{x}}"], true, "WSL", "bash");
         // Not a wrapper or runner the guards know (residual), runner pass-through (residual), arguments.
         Add(["pipx", "run", "bash", "./x.sh", "{{x}}"], true, "WSL", null);
         Add(["dotnet", "tool", "run", "bash", "./x.sh", "{{x}}"], true, "WSL", null);
