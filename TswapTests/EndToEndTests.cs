@@ -1324,22 +1324,21 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         }
 
         /// <summary>
-        /// Reads until the terminal is in .NET's key-read mode (ICANON off: tswap is inside <c>Console.ReadKey</c>, after
-        /// its type-ahead discard, #293). Keys typed before that could be discarded, or, before the read has switched ISIG
-        /// off, turned into a SIGINT by the line discipline, as for a person typing Ctrl-C before the prompt's read starts.
+        /// Reads until tswap is inside a key read: ICANON and ISIG both off (<c>TerminalLocalFlags.InKeyRead</c>). After the
+        /// first read ICANON stays off, so only ISIG, which the read turns off after its type-ahead discard (#293), shows
+        /// that a later read has started. A key typed before that is discarded, or, with ISIG on, a Ctrl-C becomes a
+        /// SIGINT (#413).
         /// </summary>
         public void WaitForKeyRead(int seconds = 60)
         {
             var deadline = DateTime.UtcNow.AddSeconds(seconds);
-            while (LocalFlags() is var flags && (flags & Icanon) != 0)
+            while (LocalFlags() is var flags && !TerminalLocalFlags.InKeyRead(flags, OperatingSystem.IsMacOS()))
             {
                 Assert.True(!process.HasExited && DateTime.UtcNow < deadline,
                     $"tswap never entered a key read (c_lflag 0x{flags:x}); the terminal showed:\n{Output}");
                 Pump(50);
             }
         }
-
-        private static ulong Icanon => OperatingSystem.IsMacOS() ? 0x100UL : 0x2UL;
 
         /// <summary>The terminal's c_lflag (Linux: 32 bits at byte 12; macOS: 64 bits at byte 24).</summary>
         private ulong LocalFlags()
@@ -2203,6 +2202,52 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         }
 
         Assert.True(failures.Count == 0, $"{failures.Count} failure(s):\n" + string.Join("\n", failures));
+    }
+
+    /// <summary>
+    /// Brief T64 (#411): <c>run</c> refuses a bash that may be WSL's <c>bash.exe</c> launcher, which runs its whole command
+    /// line through <c>/bin/bash -c</c>. Leg 1: System32's <c>bash.exe</c> by its path, refused whether WSL is installed or
+    /// not (not found is refused too). Leg 2: a bare <c>bash</c>, the expected outcome computed as the product computes it,
+    /// over a probe of tswap's view of the machine (its folder, the work folder), not the test host's.
+    /// </summary>
+    [WindowsFact("WSL's bash.exe and CreateProcess's search order exist only on Windows")]
+    public void Run_WslBashLauncher_IsRefused_Windows()
+    {
+        var (work, _, _) = ScriptWork();
+        File.WriteAllText(Path.Combine(work.FullName, "capture.sh"), "printf '%s' \"$1\" > out.txt\n");
+        var outFile = Path.Combine(work.FullName, "out.txt");
+        var (initExit, _, initErr) = RunTswap("init", "--yubikey", "--no-recovery");
+        Assert.True(initExit == 0, $"init failed: {initErr}");
+        const string value = "v$(echo pwned)k7Qz";
+        var (ingestExit, _, ingestErr) = RunTswapWithStdin(value, "ingest", "v");
+        Assert.True(ingestExit == 0, $"ingest failed: {ingestErr}");
+
+        // Leg 1: System32's bash.exe by its path.
+        var (exit1, out1, err1) = RunTswapIn(work, "run", Path.Combine(Environment.SystemDirectory, "bash.exe"), "./capture.sh", "{{v}}");
+        Assert.Equal(1, exit1);
+        Assert.Contains(BashLauncherRefusalTests.WindowsReason, err1);
+        Assert.False(File.Exists(outFile), "System32's bash.exe ran the script");
+        Assert.DoesNotContain("k7Qz", out1 + err1);
+
+        // Leg 2: a bare bash, as tswap resolves it.
+        var probe = new MsysTarget.Probe(Path.GetDirectoryName(_binaryPath), work.FullName, Environment.SystemDirectory,
+            Environment.GetFolderPath(Environment.SpecialFolder.Windows), Environment.GetEnvironmentVariable, File.Exists);
+        var resolved = MsysTarget.Resolve("bash", probe);
+        var msys = resolved is not null && MsysTarget.IsMsys2(resolved, probe.FileExists);
+        _output.WriteLine($"T64 leg 2: bare bash resolves to {resolved ?? "(not found)"}: {(msys ? "MSYS2, runs" : "not MSYS2, refused")}");
+        var (exit2, out2, err2) = RunTswapIn(work, "run", "bash", "./capture.sh", "{{v}}");
+        if (!msys)
+        {
+            Assert.Equal(1, exit2);
+            Assert.Contains(BashLauncherRefusalTests.WindowsReason, err2);
+            Assert.False(File.Exists(outFile), "a bare bash that isn't MSYS2 ran the script");
+            Assert.DoesNotContain("k7Qz", out2 + err2);
+        }
+        else
+        {
+            Assert.True(exit2 == 0, $"run bash failed (exit {exit2}): {err2}");
+            Assert.Equal(value, File.ReadAllText(outFile, Encoding.UTF8));
+        }
     }
 
     /// <summary>
