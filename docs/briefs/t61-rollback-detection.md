@@ -122,6 +122,14 @@ config folder, `MigrateToRecordsTests.cs:107-116` and `SecureEnclaveTouchChoiceT
 
 If T60 as merged names any of these differently, use T60's names; if one is missing, stop and report.
 
+## Amendments (brief round 5: MiMo r4)
+
+- **Important:** the SeenStateTests row that listed `Format` 2 as Damaged is split: not JSON is Damaged, the format 1
+  failures are Damaged, `Format` 2 is Newer (the whole table checked: no other row contradicts the pre-pass).
+- M-3: the `KeyringSlotId`-null text and a row. M-4: rows 2 and 3 share the R1 accept line. M-5: a clamped stamp prints
+  `far future`; a row. M-6: an R2 record's dedup key, and `apply` on a damaged file. M-2 and M-7: no change (M-2 was
+  done in 2342555; M-7 goes to the design).
+
 ## Amendments (brief round 4: MiMo r3; controller rulings)
 
 - **I-1:** `Format` is read in a tolerant pre-pass before the strict parse: above 1 (as `long`) is **Newer** (never
@@ -471,7 +479,8 @@ Texts (stderr, each at most once per command and file):
   valid JSON`, `its Format is <n>, not 1`, `record <file>'s <field> is not a stamp`, `a key is not a record file
   name`, `it isn't a keyring this tswap reads (<codec message>)`, `it holds another vault's keyring`, `it names another
   vault (<16 hex>)`. Then a fresh
-  baseline: the damaged file is overwritten at the next save.
+  baseline: the damaged file is overwritten at the next save; `SaveRecords` gives `apply` empty floors for a damaged
+  file, so what it writes holds only this operation's raises (MiMo r4 M-6).
 - notice (R-7): `Notice: this machine starts tracking record versions for this vault now; a record that was rolled
   back before now can't be detected.`
 - a failed write: `Warning: <path> can't be written (<message>); rollback detection goes on from what was saved
@@ -490,7 +499,9 @@ Tests (`SeenStateTests`, files in a temp config folder; `MachineConfigVaultIdTes
 |---|---|
 | floors saved, read back | equal floors; file name `seen-records-<16 lower hex>.json`, keyring `seen-keyring-<16 lower hex>` (no upper-case letter) |
 | saved twice with equal floors | second save writes nothing (bytes unchanged; mtime too, where the file system's resolution allows) |
-| file not JSON / `Format` 2 / a stamp with upper-case hex / a stamp `-5.0@…` / a duplicate key / an unknown property / a key of 63 hex / a stamp in both `Discarded` and `Retired` | Damaged, the matching reason, empty floors |
+| file not JSON | Damaged, `it is not valid JSON`, empty floors |
+| at `Format` 1: a stamp with upper-case hex / a stamp `-5.0@…` / a duplicate key / an unknown property / a key of 63 hex / a stamp in both `Discarded` and `Retired` | Damaged, the matching reason, empty floors |
+| `Format` 2 | Newer: the "newer tswap" warning once; nothing checked; never written |
 | a floor with `Retired` only (no `Discarded`), saved and read back | equal; `Discarded` omitted from the bytes |
 | no file | Missing, no text |
 | `SaveRecords` whose `apply` is given what another writer put on disk between read and save | `apply` sees the disk's floors (the re-read) |
@@ -601,7 +612,8 @@ and `SeenState.Read` (through `internal SeenState? Seen`).
 
 ### The warnings (stderr; each record at most once per state seen)
 
-The store keeps the (file name, merged write stamp, finding) of each record it warned about; it warns again only when
+The store keeps the (file name, merged write stamp, finding) of each record it warned about (for an R2 record, which
+has no merged state, the key is (file name, finding); MiMo r4 M-6); it warns again only when
 that changes. File-level warnings (damaged, unreadable, newer, write failure, the notice) follow the same rule, keyed by
 (path, the warning): once per command in the CLI, again in the broker when that file's state changes (MiMo r3 M-5). In the CLI (one store per command) that is once per command; the broker's long-lived store
 (`BrokerSecrets.cs:66-128`) warns again when a record rolls back again, not only once per process (round 3, Claude
@@ -617,7 +629,10 @@ merge <a newer copy>', or keep this version with 'sudo tswap vault accept-rollba
 ```
 
 (One line; wrapped here.) `<state>`, the first that applies (machine = first 8 hex of the origin, as `Stamp.ToString`
-gives it, `Hlc.cs:136`; times `yyyy-MM-ddTHH:mm:ssZ` of `Hlc.ToDisplayDate(physical)`, `Hlc.cs:81-89`):
+gives it, `Hlc.cs:136`; times `yyyy-MM-ddTHH:mm:ssZ` of `Hlc.ToDisplayDate(physical)`, `Hlc.cs:81-89`; a stamp that
+`ToDisplayDate` clamps prints `far future`, as `names` does through `Hlc.Display` (`:94-95`), never a made-up date; a
+time at or below the epoch prints as the epoch, as there. This holds for every time in every text of this brief; MiMo
+r4 M-5):
 
 | Condition | `<state>` |
 |---|---|
@@ -749,6 +764,7 @@ Tests (`RollbackDetectionTests`: `FleetMachine` A, B, C sharing or copying one v
 | a read-only config folder (`UnixFact`), `names` | one write-failure warning; floors unchanged; exit 0 |
 | a machine whose clock is behind writes after seeing the record | no R1 anywhere |
 | a machine a year ahead writes; its copy is then lost | R1 with the future time, and the year-ahead warning |
+| a floor whose `Write` has a physical part at or beyond `Hlc.MaxDisplayableMs`; the record put back older | the R1 text says `saw on far future`, no made-up date |
 | an R4 warning, then a newer write of the record | `Write` and the pair still rise |
 | `accept-rollback x` on a record with an R4 warning | R4 silent |
 | a floor entry whose stamp is in the record's retired list | moved from `Discarded` to `Retired` at the next save |
@@ -849,6 +865,11 @@ non-detached store sets it (the seen copy it just compared; null when missing or
   - not in `Seen`: `This machine's slot <id8> is missing from the keyring in <vault folder>. The keyring file may have
     been replaced by an older copy; config.json is fine. Copy the current keyring from another machine or a backup into
     the vault folder.`
+  - with `Config.KeyringSlotId` null and no machine slot at all (MiMo r3 M-1), the "not in `Seen`" text with the
+    slot id left out (there is none to name): `This machine's machine slot is missing from the keyring in <vault
+    folder>. The keyring file may have been replaced by an
+    older copy; config.json is fine. Copy the current keyring from another machine or a backup into the vault folder.`
+    (MiMo r4 M-3);
   - in `Seen`: `This machine's slot <id8> is missing from the keyring in <vault folder>, though this machine saw it there
     before: the keyring file was replaced by an older copy. config.json is fine. Put the slot back with 'sudo tswap
     vault restore-slots'.`
@@ -928,6 +949,7 @@ does):
 | `seen-keyring` unreadable (the `Read` seam throws `IOException`) | the "can't be read now" warning; no keyring lines; the file's bytes unchanged |
 | the desktop (key A, a one-key YubiKey slot) loses its own slot, no `seen-keyring` (deleted first) | the "may have been replaced" text naming the keyring; it comes from the end-of-`Unlock` site (no slot opened, `KeyringSlotId` missing), not `OwnBackend` |
 | the desktop loses its own slot, with `seen-keyring` | the "though this machine saw it" text, from the end-of-`Unlock` site |
+| a TPM-only machine whose config has `KeyringSlotId` null and whose keyring holds no machine slot | `This machine's machine slot is missing from the keyring in <vault folder>. …`; no "Config is corrupted", no hint |
 | the desktop's own slot present with other bytes than `seen-keyring`'s | the "differs" unlock text with the `restore-slots`-on-each-other-machine sentence; `restore-slots` skips it and prints the same instruction |
 | `KeyringSlotId` null (a vault migrated from a plain XOR vault), its slot lost | the unwrap failure as today; `restore-slots --yes` puts it back |
 | a slot with the same id and other bytes (not own) | the "differs" warning; not added to `seen-keyring`; the other new slots added |
@@ -965,9 +987,10 @@ unflagged records it authenticated are raised as by any load. `AcceptedRollback(
 FloorCheck Check, RecordFloor Floor, SeenRecord? Current)`.
 
 Output (stdout), per target, exit 0:
-- R1: `✓ Accepted the current version of '<name>' (<why>).`, `<why>` by the Task 2 `<state>` row: `it was deleted when
-  this machine last saw it` / `this machine last saw a newer version, from machine <o> at <t>` / `it was burned when
-  this machine last saw it` / `this machine last saw a later change, made at <t> by machine <o>`.
+- R1: `✓ Accepted the current version of '<name>' (<why>).`, `<why>` by the Task 2 `<state>` row: row 1 (deleted)
+  `it was deleted when this machine last saw it`; rows 2 and 3 (an older value, an older delete) both `this machine last
+  saw a newer version, from machine <o> at <t>`; row 4 `it was burned when this machine last saw it`; row 5 `this
+  machine last saw a later change, made at <t> by machine <o>` (MiMo r4 M-4).
 - R2: `✓ Accepted that '<name>' is gone (record <64 hex>; this machine saw it on <t>).`, without a name `✓ Accepted
   that record <64 hex> is gone (this machine saw it on <t>).`
 - R4: `✓ Accepted that '<name>' no longer holds <n> value(s) a merge had set aside.` and `✓ Accepted that <n> value(s)
